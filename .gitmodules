@@ -1,0 +1,3 @@
+[submodule "third-party/geos"]
+	path = third-party/geos
+	url = https://github.com/libgeos/geos
