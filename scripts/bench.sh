@@ -16,6 +16,18 @@ PARQUET="${2:?ERROR: parquet file required as second argument}"
 PORT="${CH_PORT:-19000}"
 FUEL="SETTINGS webassembly_udf_max_fuel=100000000000"
 
+# Register bench-only functions (not in create.sql)
+"${CH}" client --port "${PORT}" -q "
+  CREATE OR REPLACE FUNCTION geos_bench_noop
+    LANGUAGE WASM FROM 'chgeos' ARGUMENTS (a String) RETURNS UInt8 ABI BUFFERED_V1 DETERMINISTIC;
+  CREATE OR REPLACE FUNCTION geos_bench_noop_rb
+    LANGUAGE WASM FROM 'chgeos' ARGUMENTS (a String) RETURNS UInt8 ABI BUFFERED_V1 DETERMINISTIC;
+  CREATE OR REPLACE FUNCTION geos_bench_wkb_parse
+    LANGUAGE WASM FROM 'chgeos' ARGUMENTS (a String) RETURNS UInt8 ABI BUFFERED_V1 DETERMINISTIC;
+  CREATE OR REPLACE FUNCTION geos_bench_envelope
+    LANGUAGE WASM FROM 'chgeos' ARGUMENTS (a String) RETURNS UInt8 ABI BUFFERED_V1 DETERMINISTIC;
+" 2>/dev/null || true
+
 run() {
     local label="$1"; local query="$2"
     printf "%-52s " "${label}"

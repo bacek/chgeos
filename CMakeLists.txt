@@ -30,7 +30,7 @@ option(BUILD_TESTING "..." ON)
 option(BUILD_EXAMPLES "..." OFF)
 add_subdirectory(third-party/msgpack23 msgpack23)
 
-add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/geom/wkb_envelope.cpp src/mem.cpp)
+add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/mem.cpp)
 
 if(NOT CMAKE_CROSSCOMPILING)
   enable_testing()
