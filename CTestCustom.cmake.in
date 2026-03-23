@@ -1,0 +1,1 @@
+set(CTEST_CUSTOM_TESTS_IGNORE msgpack23_tests_NOT_BUILT)
