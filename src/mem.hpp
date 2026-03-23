@@ -2,10 +2,10 @@
 #define CHGEOS_MEM_H
 
 #include "clickhouse.hpp"
-#include "io.hpp"
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <streambuf>
 
 namespace ch {
 
@@ -30,14 +30,23 @@ public:
     if (size && !data_) ch::panic("alloc failed");
   }
 
-  explicit raw_buffer(const ch::Vector& in) : raw_buffer(in.size()) {
-    memcpy(data_, in.data(), size_);
-  }
-
   ~raw_buffer() { ::free(data_); }
 
   raw_buffer(const raw_buffer&)            = delete;
   raw_buffer& operator=(const raw_buffer&) = delete;
+
+  raw_buffer(raw_buffer&& o) noexcept
+      : data_(o.data_), size_(o.size_), cap_(o.cap_) {
+    o.data_ = nullptr; o.size_ = 0; o.cap_ = 0;
+  }
+  raw_buffer& operator=(raw_buffer&& o) noexcept {
+    if (this != &o) {
+      ::free(data_);
+      data_ = o.data_; size_ = o.size_; cap_ = o.cap_;
+      o.data_ = nullptr; o.size_ = 0; o.cap_ = 0;
+    }
+    return *this;
+  }
 
   uint8_t       *data()     noexcept { return data_; }
   const uint8_t *data()     const noexcept { return data_; }
@@ -104,6 +113,27 @@ public:
   raw_buffer_back_inserter &operator=(uint8_t v) { buf_->push_back(v); return *this; }
 
   void write(const uint8_t *src, uint32_t len) { buf_->append(src, len); }
+};
+
+// std::streambuf backed by raw_buffer — bridges GEOS WKBWriter (which needs an
+// std::ostream) to raw_buffer without the extra allocation that a std::vector-
+// backed streambuf would introduce when copying into raw_buffer later.
+class raw_write_buf : public std::streambuf {
+  raw_buffer &buf_;
+
+protected:
+  int_type overflow(int_type c) override {
+    if (c != traits_type::eof())
+      buf_.push_back(static_cast<uint8_t>(c));
+    return c;
+  }
+  std::streamsize xsputn(const char *s, std::streamsize n) override {
+    buf_.append(reinterpret_cast<const uint8_t *>(s), static_cast<uint32_t>(n));
+    return n;
+  }
+
+public:
+  explicit raw_write_buf(raw_buffer &buf) : buf_(buf) {}
 };
 
 

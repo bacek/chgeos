@@ -26,7 +26,6 @@
 #include <geos/geom/Point.h>
 #include <geos/geom/Polygon.h>
 
-#include "../io.hpp"
 
 namespace ch {
 

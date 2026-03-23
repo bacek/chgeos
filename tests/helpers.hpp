@@ -1,9 +1,15 @@
 #pragma once
 #include <cstring>
+#include <cstdint>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include "functions.hpp"
+
+namespace ch {
+using Vector = std::vector<uint8_t>;
+}
 
 // Inline test helpers shared across all test_*.cpp files.
 
@@ -17,7 +23,8 @@ struct WasmPanicException : std::exception {
 };
 
 inline ch::Vector wkt2wkb(const std::string &wkt) {
-  return ch::write_ewkb(ch::read_wkt(ch::Vector(wkt.begin(), wkt.end())));
+  auto rb = ch::write_ewkb(ch::read_wkt(ch::Vector(wkt.begin(), wkt.end())));
+  return ch::Vector(rb.begin(), rb.end());
 }
 
 inline std::unique_ptr<ch::Geometry> geom(const std::string &wkt) {
@@ -32,9 +39,17 @@ inline std::string wkb2wkt(const ch::Vector &wkb) {
   return geom2wkt(ch::read_wkb(wkb));
 }
 
+inline std::string wkb2wkt(const ch::raw_buffer &rb) {
+  return geom2wkt(ch::read_wkb(std::span<const uint8_t>(rb.data(), rb.size())));
+}
+
 // WKB bytes as span — for predicate functions that now take raw bytes.
 inline std::span<const uint8_t> wkb(const ch::Vector & v) {
   return {v.data(), v.size()};
+}
+
+inline std::span<const uint8_t> wkb(const ch::raw_buffer &rb) {
+  return {rb.data(), rb.size()};
 }
 
 inline ch::Vector params(const std::string &s) {

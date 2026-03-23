@@ -5,7 +5,6 @@
 #include <cstring>
 #include <ostream>
 #include <string>
-#include <vector>
 
 #include <geos/geom/GeometryFactory.h>
 #include <geos/geom/LineString.h>
@@ -151,12 +150,12 @@ std::unique_ptr<Geometry> read_geojson(std::span<const uint8_t> input) {
     return reader.read(std::string(reinterpret_cast<const char*>(input.data()), input.size()));
 }
 
-Vector write_ewkb(const std::unique_ptr<Geometry>& geom) {
+raw_buffer write_ewkb(const std::unique_ptr<Geometry>& geom) {
     int32_t srid = geom->getSRID();
 
     WKBWriter writer;
-    Vector r;
-    VectorWriteBuf buf{r};
+    raw_buffer tmp(0);
+    raw_write_buf buf{tmp};
     std::ostream wkb{&buf};
     writer.write(*geom, wkb);
 
@@ -165,20 +164,25 @@ Vector write_ewkb(const std::unique_ptr<Geometry>& geom) {
     // omitting the SRID flag produces standard WKB that PostGIS and ClickHouse
     // both accept as SRID-less geometry.
     if (srid == 0 || srid == -1)
-        return r;
+        return tmp;
 
     // Inject SRID into the WKB header to produce PostGIS EWKB.
-    // Layout: [endian(1)] [type(4)] [srid(4)] [payload...]
-    bool little_endian = (r[0] == 0x01);
-
-    uint32_t type_word = read_u32(r.data() + 1, little_endian);
+    // Layout: [endian(1)] [type|SRID_FLAG(4)] [srid(4)] [payload...]
+    // raw_buffer has no insert(), so we build a fresh buffer of the right size.
+    bool little_endian = (tmp[0] == 0x01);
+    uint32_t type_word = read_u32(tmp.data() + 1, little_endian);
     type_word |= EWKB_SRID_FLAG;
-    write_u32(r.data() + 1, type_word, little_endian);
 
+    raw_buffer r(0);
+    r.reserve(tmp.size() + 4);
+    r.push_back(tmp[0]);                                       // endian byte
+    uint8_t type_bytes[4];
+    write_u32(type_bytes, type_word, little_endian);
+    r.append(type_bytes, 4);
     uint8_t srid_bytes[4];
     write_u32(srid_bytes, static_cast<uint32_t>(srid), little_endian);
-    r.insert(r.begin() + 5, srid_bytes, srid_bytes + 4);
-
+    r.append(srid_bytes, 4);
+    r.append(tmp.data() + 5, tmp.size() - 5);                 // geometry payload
     return r;
 }
 

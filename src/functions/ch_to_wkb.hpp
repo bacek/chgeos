@@ -9,19 +9,19 @@
 
 namespace ch {
 
-inline Vector st_geomfromchpoint_impl(ChPoint p) {
+inline raw_buffer st_geomfromchpoint_impl(ChPoint p) {
     return write_ewkb(chpoint_to_geos(p));
 }
 
-inline Vector st_geomfromchlinestring_impl(ChLineString ls) {
+inline raw_buffer st_geomfromchlinestring_impl(ChLineString ls) {
     return write_ewkb(chlinestring_to_geos(ls));
 }
 
-inline Vector st_geomfromchpolygon_impl(ChPolygon poly) {
+inline raw_buffer st_geomfromchpolygon_impl(ChPolygon poly) {
     return write_ewkb(chpolygon_to_geos(poly));
 }
 
-inline Vector st_geomfromchmultipolygon_impl(ChMultiPolygon mp) {
+inline raw_buffer st_geomfromchmultipolygon_impl(ChMultiPolygon mp) {
     return write_ewkb(chmultipolygon_to_geos(mp));
 }
 

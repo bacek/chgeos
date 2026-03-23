@@ -17,7 +17,6 @@
 #include "clickhouse.hpp"
 #include "geom/chgeom.hpp"
 #include "geom/wkb.hpp"
-#include "io.hpp"
 #include "mem.hpp"
 
 namespace ch {
@@ -25,12 +24,18 @@ namespace ch {
 template <typename B, typename Iter>
 void pack_result(msgpack23::Packer<B, Iter> &p,
                  std::unique_ptr<geos::geom::Geometry> res) {
-  p(write_ewkb(std::move(res)));
+  const auto buf = write_ewkb(res);
+  p(std::span(buf.data(), buf.size()));
+}
+
+template <typename B, typename Iter>
+void pack_result(msgpack23::Packer<B, Iter> &p, const raw_buffer &res) {
+  p(std::span(res.data(), res.size()));
 }
 
 template <typename B, typename Iter>
 void pack_result(msgpack23::Packer<B, Iter> &p, const std::string &res) {
-  p(ch::Vector(res.begin(), res.end()));
+  p(std::span(reinterpret_cast<const uint8_t *>(res.data()), res.size()));
 }
 
 template <typename B, typename Iter, typename T>
