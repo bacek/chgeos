@@ -83,6 +83,19 @@ public:
     data_[size_++] = v;
   }
 
+  void insert(uint32_t pos, const uint8_t *src, uint32_t len) {
+    if (len > UINT32_MAX - size_) ch::panic("raw_buffer overflow");
+    uint32_t new_size = size_ + len;
+    if (new_size > cap_) {
+      uint32_t c = cap_ ? cap_ : 1;
+      while (c < new_size) c *= 2;
+      grow_to(c);
+    }
+    std::memmove(data_ + pos + len, data_ + pos, size_ - pos);
+    std::memcpy(data_ + pos, src, len);
+    size_ = new_size;
+  }
+
   void append(const uint8_t *src, uint32_t len) {
     if (len > UINT32_MAX - size_) ch::panic("raw_buffer overflow");
     uint32_t new_size = size_ + len;
