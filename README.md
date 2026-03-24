@@ -2,6 +2,17 @@
 
 PostGIS-compatible spatial functions for ClickHouse, delivered as a WebAssembly UDF module powered by [GEOS](https://libgeos.org/) 3.12+.
 
+## Disclaimer
+
+This is my pet-project with `-Ofun` mentality.
+* Just a hobby, won't be big and professional.
+* I'm testing how far I can push Claude.
+* I'm (re-)learning low-level optimization I haven't done in 15+ years.
+* I'm extracting useful pieces out of this project into upstream projects. For example non-copy `std::span` handing in `msgpack23` and exceptions support in `wasmtime`.
+* This is nowhere near any useful application. For many reasons. Especially because CH<->UDF interaction is very limited. Basically it's one way street at the moment and any "spatial aware" query engine, which can use Parquet file metadata will be faster. Much faster. Order of magnitude faster.
+
+Having said that, I'm not saying it will never be useful. 
+
 ## Motivation
 
 ClickHouse is fast. If you need to crunch billions of rows, it's the right tool. But the moment you ask "can it do spatial analytics?" the answer is: technically yes, practically no.
