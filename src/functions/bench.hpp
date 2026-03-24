@@ -6,6 +6,7 @@
 #include "../clickhouse.hpp"
 #include "../geom/wkb.hpp"
 #include "../geom/wkb_envelope.hpp"
+#include "predicates.hpp"
 
 namespace ch {
 
@@ -30,6 +31,12 @@ inline uint8_t geos_bench_wkb_parse_impl(std::span<const uint8_t> a) {
 // bench_envelope: measures fast WKB bbox extraction (no GEOS allocation).
 inline uint8_t geos_bench_envelope_impl(std::span<const uint8_t> a) {
     return !wkb_bbox(a).is_empty() ? 1 : 0;
+}
+
+// bench_intersects_nobbox: st_intersects with no bbox shortcut — raw GEOS cost.
+inline bool geos_bench_intersects_nobbox_impl(std::span<const uint8_t> a,
+                                               std::span<const uint8_t> b) {
+    return st_intersects_impl(read_wkb(a), read_wkb(b));
 }
 
 // ── Debug / test helpers ───────────────────────────────────────────────────────
