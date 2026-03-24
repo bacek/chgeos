@@ -117,7 +117,7 @@ ORDER BY area DESC;
 | `st_makebox2d` | `low_left String, up_right String` | `WKB` | Bounding box from two corner points |
 | `st_collect` | `a String, b String` | `WKB` | Collect into GeometryCollection |
 | `st_envelope` | `wkb String` | `WKB` | Bounding box polygon |
-| `st_extent` | `wkb String` | `WKB` | Alias for `st_envelope` |
+| `st_extent` | `wkb String` | `WKB` | Bounding box polygon |
 | `st_expand` | `wkb String, units Float64` | `WKB` | Expand bounding box by distance |
 | `st_centroid` | `wkb String` | `WKB` | Centroid |
 | `st_interiorpoint` | `wkb String` | `WKB` | A point guaranteed to be inside |
@@ -225,6 +225,7 @@ These functions are exported from the WASM module for micro-benchmarking call ov
 | `geos_bench_noop_rb` | `wkb String` | `UInt8` | Same via CH-native `wkb()` serialization path |
 | `geos_bench_wkb_parse` | `wkb String` | `UInt8` | EWKB → GEOS parse cost only |
 | `geos_bench_envelope` | `wkb String` | `UInt8` | Fast WKB bbox extraction without GEOS allocation |
+| `geos_bench_intersects_nobbox` | `a String, b String` | `UInt8` | Full GEOS `st_intersects` with no bbox shortcut — raw GEOS cost |
 
 ## Building
 
@@ -283,9 +284,7 @@ SELECT 'chgeos', base64Decode('{base64 of chgeos.wasm}');
 Or from a file via `clickhouse-client`:
 
 ```bash
-clickhouse-client --query "
-  INSERT INTO system.webassembly_modules (name, code)
-  SELECT 'chgeos', readFile('/path/to/chgeos.wasm')"
+clickhouse client -q "INSERT INTO system.webassembly_modules (name, code) VALUES ('chgeos', file('/path/to/chgeos.wasm'))"
 ```
 
 ### Register functions
@@ -392,24 +391,28 @@ SELECT st_relate(
 
 ```
 src/
-├── main.cpp              # WASM exports: geos_version + CH_UDF_FUNC calls
-├── udf.hpp               # impl_wrapper (msgpack row loop) + CH_UDF_FUNC macro
+├── main.cpp              # WASM exports: CH_UDF_FUNC + CH_UDF_BBOX2 registrations
+├── udf.hpp               # impl_wrapper (msgpack row loop) + CH_UDF_FUNC/BBOX2 macros
 ├── functions.hpp         # Aggregator — includes all functions/* headers
 ├── functions/
-│   ├── accessors.hpp     # st_x, st_y, st_centroid, st_area, st_npoints, st_srid
+│   ├── accessors.hpp     # st_x, st_y, st_z, st_centroid, st_area, st_npoints, st_srid, ...
 │   ├── predicates.hpp    # st_contains, st_intersects, st_touches, st_dwithin, ...
-│   ├── constructors.hpp  # st_geomfromtext/wkb, st_extent, st_makebox2d, ...
-│   ├── transforms.hpp    # st_translate, st_scale, st_transform
-│   ├── overlay.hpp       # st_union, st_intersection, st_difference, ...
-│   ├── processing.hpp    # st_buffer, st_simplify, st_subdivide, ...
-│   └── io.hpp            # st_astext, st_aswkb, geos_version_str
+│   ├── constructors.hpp  # st_geomfromtext/wkb, st_extent, st_envelope, st_makebox2d, ...
+│   ├── transforms.hpp    # st_translate, st_scale, st_transform, st_transform_proj
+│   ├── overlay.hpp       # st_union, st_intersection, st_difference, st_union_agg, ...
+│   ├── processing.hpp    # st_buffer, st_simplify, st_subdivide, st_makevalid, ...
+│   ├── io.hpp            # st_astext, st_asewkt, st_geomfromgeojson, geos_version
+│   ├── ch_to_wkb.hpp     # st_geomfromchpoint/linestring/polygon/multipolygon
+│   └── bench.hpp         # geos_bench_* micro-benchmark helpers
 ├── geom/
-│   ├── wkb.hpp           # read_wkb, write_wkb, read_wkt
+│   ├── wkb.hpp           # read_wkb, write_ewkb, read_wkt, read_geojson
+│   ├── wkb_envelope.hpp  # wkb_bbox — fast bbox extraction without GEOS (inline)
 │   ├── filters.hpp       # TranslateFilter, ScaleFilter
-│   └── subdivide.hpp     # subdivide_recursive
-├── clickhouse.hpp        # Host ABI: clickhouse_log, clickhouse_throw
-├── mem.hpp               # RawBuffer, clickhouse_create/destroy_buffer
-└── io.hpp                # VectorWriteBuf (streambuf over std::vector)
+│   ├── subdivide.hpp     # subdivide_recursive
+│   └── chgeom.hpp        # ClickHouse native geometry type readers
+├── clickhouse.hpp        # Host ABI: log, panic, log_level
+├── clickhouse_types.hpp  # CH geometry type structs (Point, Ring, etc.)
+└── mem.hpp               # RawBuffer, clickhouse_create/destroy_buffer
 ```
 
 **Wire format:** Each UDF receives a `RawBuffer*` containing MsgPack-serialized argument columns and a row count. `impl_wrapper` unpacks rows, calls the `_impl` function, and packs results back into a new `RawBuffer`. Geometry is passed as raw WKB bytes (`std::span<const uint8_t>`).
