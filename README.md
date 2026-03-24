@@ -17,7 +17,13 @@ Having said that, I'm not saying it will never be useful.
 
 ClickHouse is fast. If you need to crunch billions of rows, it's the right tool. But the moment you ask "can it do spatial analytics?" the answer is: technically yes, practically no.
 
-You get `Point`, H3, S2. What you don't get is anything resembling a real spatial function library. No `ST_Area`. No `ST_Buffer`. No `ST_Intersects`. No `ST_Within`. The entire PostGIS vocabulary — functions that GIS engineers have been using since 2001 — is absent. If your data has geometry and you want to do anything non-trivial, the current answer is: export to PostGIS, do the work there, import back. Congratulations, you just negated the reason you chose ClickHouse.
+ClickHouse has native geometry types (`Point`, `Polygon`, `MultiPolygon`, ...) and some spatial functions under names like `polygonsIntersectCartesian`, `areaCartesian`, `polygonsWithinCartesian`. It also has H3 and S2 index support. What it doesn't have is:
+
+- **WKB / GeoParquet compatibility.** Native CH geometry types have their own internal representation. Real-world geometry data — GeoParquet, PostGIS, GDAL, anything — is encoded as WKB. You can't pass a WKB blob to `polygonsIntersectCartesian`.
+- **PostGIS-compatible names.** Every GIS engineer knows `ST_Intersects`, `ST_Buffer`, `ST_Within`. ClickHouse's equivalents are named differently, require type conversion, and are documented separately.
+- **The full GEOS function set.** `ST_Buffer`, `ST_Simplify`, `ST_Centroid`, `ST_MakeValid`, `ST_Subdivide`, `ST_Hausdorff/FrechetDistance`, `ST_Relate` (DE-9IM), `ST_Snap`, `ST_Segmentize`, `ST_Voronoi`, `ST_Delaunay`, `ST_ClusterIntersecting` — none of these exist in ClickHouse.
+
+The concrete use case that started this: querying geospatial data stored in Parquet files via Apache Iceberg. Large geometry datasets in a lakehouse, ClickHouse as the query engine, geometry encoded as WKB blobs in Parquet `BYTE_ARRAY` columns — industry standard, works everywhere. ClickHouse reads the WKB fine. It just can't do anything interesting with it.
 
 The concrete use case that started this: querying geospatial data stored in Parquet files via Apache Iceberg. Large geometry datasets in a lakehouse, ClickHouse as the query engine, geometry encoded as WKB blobs in Parquet `BYTE_ARRAY` columns — industry standard, works everywhere. ClickHouse reads the WKB fine. It just can't do anything interesting with it.
 

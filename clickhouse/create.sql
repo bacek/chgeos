@@ -3,8 +3,7 @@
 -- WKB geometries are passed/returned as raw bytes in a String column.
 --
 -- Load module first:
---   INSERT INTO system.webassembly_modules (name, code)
---   SELECT 'chgeos', readFile('/path/to/chgeos.wasm');
+--   clickhouse client -q "INSERT INTO system.webassembly_modules (name, code) VALUES ('chgeos', file('/path/to/chgeos.wasm'))"
 
 -- ---------------------------------------------------------------------------
 -- Version / metadata
