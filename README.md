@@ -8,10 +8,10 @@ This is my pet-project with `-Ofun` mentality.
 * Just a hobby, won't be big and professional.
 * I'm testing how far I can push Claude.
 * I'm (re-)learning low-level optimization I haven't done in 15+ years.
-* I'm extracting useful pieces out of this project into upstream projects. For example non-copy `std::span` handing in `msgpack23` and exceptions support in `wasmtime`.
-* This is nowhere near any useful application. For many reasons. Especially because CH<->UDF interaction is very limited. Basically it's one way street at the moment and any "spatial aware" query engine, which can use Parquet file metadata will be faster. Much faster. Order of magnitude faster.
+* I'm extracting useful pieces out of this project into upstream projects. For example non-copy `std::span` handling in `msgpack23` and exceptions support in `wasmtime`. Also, general improvements of WASM UDF support in ClickHouse. Watch this space ;)
+* This is nowhere near any useful application. For many reasons. Especially because CH<->UDF interaction is very limited. Basically it's a one-way street at the moment and any "spatial aware" query engine that can use Parquet file metadata will be faster. Much faster. Order of magnitude faster.
 
-Having said that, I'm not saying it will never be useful. 
+Having said that, I'm not saying it will never be useful.
 
 ## Motivation
 
@@ -21,11 +21,11 @@ ClickHouse has native geometry types (`Point`, `Polygon`, `MultiPolygon`, ...) a
 
 - **WKB / GeoParquet compatibility.** Native CH geometry types have their own internal representation. Real-world geometry data — GeoParquet, PostGIS, GDAL, anything — is encoded as WKB. You can't pass a WKB blob to `polygonsIntersectCartesian`.
 - **PostGIS-compatible names.** Every GIS engineer knows `ST_Intersects`, `ST_Buffer`, `ST_Within`. ClickHouse's equivalents are named differently, require type conversion, and are documented separately.
-- **The full GEOS function set.** `ST_Buffer`, `ST_Simplify`, `ST_Centroid`, `ST_MakeValid`, `ST_Subdivide`, `ST_Hausdorff/FrechetDistance`, `ST_Relate` (DE-9IM), `ST_Snap`, `ST_Segmentize`, `ST_Voronoi`, `ST_Delaunay`, `ST_ClusterIntersecting` — none of these exist in ClickHouse.
+- **The full GEOS function set.** `ST_Buffer`, `ST_Simplify`, `ST_Centroid`, `ST_MakeValid`, etc. — none of these exist in ClickHouse.
 
-The concrete use case that started this: querying geospatial data stored in Parquet files via Apache Iceberg. Large geometry datasets in a lakehouse, ClickHouse as the query engine, geometry encoded as WKB blobs in Parquet `BYTE_ARRAY` columns — industry standard, works everywhere. ClickHouse reads the WKB fine. It just can't do anything interesting with it.
+The concrete use case that started this: querying geospatial data stored in Parquet files via Apache Iceberg. Large geometry datasets in a lakehouse, ClickHouse as the query engine, geometry encoded as WKB blobs in Parquet `BYTE_ARRAY` columns — industry standard, works everywhere.
 
-The concrete use case that started this: querying geospatial data stored in Parquet files via Apache Iceberg. Large geometry datasets in a lakehouse, ClickHouse as the query engine, geometry encoded as WKB blobs in Parquet `BYTE_ARRAY` columns — industry standard, works everywhere. ClickHouse reads the WKB fine. It just can't do anything interesting with it.
+ClickHouse reads the WKB fine. But a bunch of functions are missing. And I really wanted to use them to make some particular DB quack in awe. I failed, btw.
 
 ### Why not a core PR?
 
