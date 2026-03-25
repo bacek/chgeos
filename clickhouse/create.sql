@@ -189,20 +189,24 @@ CREATE OR REPLACE FUNCTION st_contains
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_intersects
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_touches
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
+-- st_dwithin: distance-based, bbox pruning is NOT safe (false negatives possible)
 CREATE OR REPLACE FUNCTION st_dwithin
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String, dist Float64) RETURNS UInt8
@@ -213,26 +217,32 @@ CREATE OR REPLACE FUNCTION st_intersects_extent
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_within
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_crosses
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_overlaps
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
+-- st_disjoint: returns 1 when geometries do NOT intersect — inverted bbox logic,
+-- pruning is not safe with the standard disjoint check.
 CREATE OR REPLACE FUNCTION st_disjoint
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
@@ -243,25 +253,29 @@ CREATE OR REPLACE FUNCTION st_equals
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_covers
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_coveredby
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_containsproperly
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_relate
 LANGUAGE WASM FROM 'chgeos'
