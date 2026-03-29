@@ -103,7 +103,13 @@ t "st_difference"      "SELECT round(st_area(st_difference(st_geomfromtext('POLY
 t "st_symdiff_area"    "SELECT round(st_area(st_symdifference(st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))'), st_geomfromtext('POLYGON ((1 0, 3 0, 3 2, 1 2, 1 0))'))))"  "4"
 
 # Aggregate
-t "st_union_agg"       "SELECT round(st_area(st_union_agg(array(st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))'), st_geomfromtext('POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))')))))"  "2"
+t "st_union_agg"        "SELECT round(st_area(st_union_agg(geom))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))'))"  "2"
+t "st_collect_agg"      "SELECT st_numgeometries(st_collect_agg(geom)) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "2"
+t "st_collect_agg_nodissolve" "SELECT round(st_area(st_collect_agg(geom))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))'))"  "8"
+t "st_extent_agg"       "SELECT round(st_area(st_extent_agg(geom))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (3 4)'))"  "12"
+t "st_extent_agg_polys" "SELECT round(st_area(st_extent_agg(geom))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((3 0, 5 0, 5 2, 3 2, 3 0))'))"  "10"
+t "st_makeline_agg"     "SELECT st_astext(st_makeline_agg(geom)) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "LINESTRING (0 0, 1 0, 1 1)"
+t "st_convexhull_agg"   "SELECT round(st_area(st_convexhull_agg(geom)), 1) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (0 1)'))"  "0.5"
 
 # Multi-row batch
 t "batch_area_sum"     "SELECT sum(st_area(st_geomfromtext(wkt))) FROM (SELECT 'POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))' AS wkt UNION ALL SELECT 'POLYGON ((0 0, 2 0, 2 3, 0 3, 0 0))')"  "7"

@@ -216,3 +216,127 @@ TEST(StClusterIntersecting, TransitiveChain) {
     "POLYGON ((2 2, 4 2, 4 4, 2 4, 2 2)))"));
   EXPECT_EQ(result->getNumGeometries(), 1u);
 }
+
+// ── ST_CollectAgg ─────────────────────────────────────────────────────────────
+
+TEST(StCollectAgg, TwoPoints) {
+  auto result = st_collect_agg_impl(geom_vec({"POINT (0 0)", "POINT (1 1)"}));
+  EXPECT_EQ(result->getNumGeometries(), 2u);
+}
+
+TEST(StCollectAgg, DoesNotDissolve) {
+  // Overlapping polygons must NOT be dissolved — collect ≠ union
+  auto result = st_collect_agg_impl(geom_vec({
+    "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))",
+    "POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))",
+  }));
+  EXPECT_EQ(result->getNumGeometries(), 2u);
+  // Raw sum of areas exceeds the actual merged area, confirming no dissolve
+  EXPECT_NEAR(st_area_impl(std::move(result)), 4.0 + 4.0, 1e-10);
+}
+
+TEST(StCollectAgg, SingleGeometry) {
+  auto result = st_collect_agg_impl(geom_vec({"POINT (3 7)"}));
+  EXPECT_EQ(result->getNumGeometries(), 1u);
+}
+
+TEST(StCollectAgg, MixedTypes) {
+  auto result = st_collect_agg_impl(geom_vec({
+    "POINT (0 0)",
+    "LINESTRING (0 0, 1 1)",
+    "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+  }));
+  EXPECT_EQ(result->getNumGeometries(), 3u);
+}
+
+// ── ST_ExtentAgg ──────────────────────────────────────────────────────────────
+
+TEST(StExtentAgg, TwoPoints) {
+  // Points at (0,0) and (3,4) → envelope is a 3×4 rectangle, area = 12
+  auto result = st_extent_agg_impl(geom_vec({"POINT (0 0)", "POINT (3 4)"}));
+  EXPECT_NEAR(st_area_impl(std::move(result)), 12.0, 1e-10);
+}
+
+TEST(StExtentAgg, TwoPolygons) {
+  // First polygon covers [0,2]×[0,2]; second [3,5]×[0,2]
+  // Bounding envelope spans [0,5]×[0,2], area = 10
+  auto result = st_extent_agg_impl(geom_vec({
+    "POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))",
+    "POLYGON ((3 0, 5 0, 5 2, 3 2, 3 0))",
+  }));
+  EXPECT_NEAR(st_area_impl(std::move(result)), 10.0, 1e-10);
+}
+
+TEST(StExtentAgg, SingleGeometry) {
+  // Envelope of a 2×3 rectangle is itself
+  auto result = st_extent_agg_impl(geom_vec({
+    "POLYGON ((0 0, 2 0, 2 3, 0 3, 0 0))",
+  }));
+  EXPECT_NEAR(st_area_impl(std::move(result)), 6.0, 1e-10);
+}
+
+TEST(StExtentAgg, EnvelopeCoversAllInputs) {
+  // Every input geometry must be covered by the resulting envelope
+  // (covers includes boundary; contains would exclude it)
+  auto env = st_extent_agg_impl(geom_vec({
+    "POINT (1 1)", "POINT (5 5)", "POINT (3 8)",
+  }));
+  EXPECT_TRUE(env->covers(geom("POINT (1 1)").get()));
+  EXPECT_TRUE(env->covers(geom("POINT (5 5)").get()));
+  EXPECT_TRUE(env->covers(geom("POINT (3 8)").get()));
+}
+
+// ── ST_MakeLineAgg ────────────────────────────────────────────────────────────
+
+TEST(StMakeLineAgg, ThreePoints) {
+  auto result = st_makeline_agg_impl(geom_vec({
+    "POINT (0 0)", "POINT (1 0)", "POINT (1 1)",
+  }));
+  EXPECT_EQ(result->getNumPoints(), 3u);
+  EXPECT_NEAR(st_length_impl(std::move(result)), 2.0, 1e-10);
+}
+
+TEST(StMakeLineAgg, TwoPoints) {
+  auto result = st_makeline_agg_impl(geom_vec({
+    "POINT (0 0)", "POINT (3 4)",
+  }));
+  EXPECT_EQ(result->getNumPoints(), 2u);
+  EXPECT_NEAR(st_length_impl(std::move(result)), 5.0, 1e-10);
+}
+
+TEST(StMakeLineAgg, FromLinestrings) {
+  // Two linestrings: each has 2 points → result has 4 points
+  auto result = st_makeline_agg_impl(geom_vec({
+    "LINESTRING (0 0, 1 0)",
+    "LINESTRING (1 0, 2 0)",
+  }));
+  EXPECT_EQ(result->getNumPoints(), 4u);
+}
+
+// ── ST_ConvexHullAgg ──────────────────────────────────────────────────────────
+
+TEST(StConvexHullAgg, TrianglePoints) {
+  // Three corners of a right triangle → convex hull is that triangle, area = 0.5
+  auto result = st_convexhull_agg_impl(geom_vec({
+    "POINT (0 0)", "POINT (1 0)", "POINT (0 1)",
+  }));
+  EXPECT_NEAR(st_area_impl(std::move(result)), 0.5, 1e-10);
+}
+
+TEST(StConvexHullAgg, InteriorPointIgnored) {
+  // Square corners + one interior point → hull is the square, area = 1
+  auto result = st_convexhull_agg_impl(geom_vec({
+    "POINT (0 0)", "POINT (1 0)", "POINT (1 1)", "POINT (0 1)",
+    "POINT (0.5 0.5)",  // interior — must not affect the hull
+  }));
+  EXPECT_NEAR(st_area_impl(std::move(result)), 1.0, 1e-10);
+}
+
+TEST(StConvexHullAgg, TwoPolygons) {
+  // Two 1×1 unit squares separated by a gap → hull is a 3×1 rectangle, area = 3
+  auto result = st_convexhull_agg_impl(geom_vec({
+    "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))",
+    "POLYGON ((2 0, 3 0, 3 1, 2 1, 2 0))",
+  }));
+  EXPECT_NEAR(st_area_impl(std::move(result)), 3.0, 1e-10);
+}
