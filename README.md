@@ -173,12 +173,23 @@ ORDER BY area DESC;
 | Function | Arguments | Returns | Description |
 |---|---|---|---|
 | `st_union` | `a String, b String` | `WKB` | Union |
-| `st_union_agg` | `wkb_array Array(String)` | `WKB` | Union of an array of geometries |
 | `st_intersection` | `a String, b String` | `WKB` | Intersection |
 | `st_difference` | `a String, b String` | `WKB` | A minus B |
 | `st_symdifference` | `a String, b String` | `WKB` | Symmetric difference |
 | `st_unaryunion` | `wkb String` | `WKB` | Union all sub-geometries |
 | `st_clusterintersecting` | `wkb String` | `WKB` | Cluster intersecting geometries |
+
+### Aggregates
+
+True `GROUP BY` aggregates — ClickHouse accumulates rows per group and calls the WASM function once per group.
+
+| Function | Arguments | Returns | Description |
+|---|---|---|---|
+| `st_union_agg` | `wkb String` | `WKB` | Dissolving union of all geometries in a group |
+| `st_collect_agg` | `wkb String` | `WKB` | Collect into GeometryCollection (no dissolve) |
+| `st_extent_agg` | `wkb String` | `WKB` | Bounding box envelope of all geometries in a group |
+| `st_makeline_agg` | `wkb String` | `WKB` | Append all vertices in order into a LineString |
+| `st_convexhull_agg` | `wkb String` | `WKB` | Convex hull of all geometries in a group |
 
 ### Processing
 
@@ -374,12 +385,21 @@ SELECT
 FROM my_table;
 ```
 
-**Aggregate union over an array** (modelled after DuckDB's `ST_Union_Agg`; since ClickHouse WASM UDFs are scalar-only, pass an array built with `groupArray`):
+**Aggregate functions** — true `GROUP BY` aggregates, same as PostGIS/DuckDB:
 
 ```sql
-SELECT
-    region_id,
-    st_astext(st_union_agg(groupArray(geom))) AS merged
+-- Dissolving union per region
+SELECT region_id, st_astext(st_union_agg(geom)) AS merged
+FROM my_table
+GROUP BY region_id;
+
+-- Bounding box per category
+SELECT category, st_astext(st_extent_agg(geom)) AS bbox
+FROM my_table
+GROUP BY category;
+
+-- Collect all geometries per group (no dissolve)
+SELECT region_id, st_numgeometries(st_collect_agg(geom)) AS count
 FROM my_table
 GROUP BY region_id;
 ```
@@ -405,7 +425,7 @@ src/
 │   ├── predicates.hpp    # st_contains, st_intersects, st_touches, st_dwithin, ...
 │   ├── constructors.hpp  # st_geomfromtext/wkb, st_extent, st_envelope, st_makebox2d, ...
 │   ├── transforms.hpp    # st_translate, st_scale, st_transform, st_transform_proj
-│   ├── overlay.hpp       # st_union, st_intersection, st_difference, st_union_agg, ...
+│   ├── overlay.hpp       # st_union, st_intersection, st_difference, st_union_agg, st_collect_agg, st_extent_agg, ...
 │   ├── processing.hpp    # st_buffer, st_simplify, st_subdivide, st_makevalid, ...
 │   ├── io.hpp            # st_astext, st_asewkt, st_geomfromgeojson, geos_version
 │   ├── ch_to_wkb.hpp     # st_geomfromchpoint/linestring/polygon/multipolygon
@@ -430,8 +450,6 @@ src/
 - **No PROJ 9 / accurate CRS reprojection.** `ST_Transform` and `ST_TransformProj` exist in the DDL but PROJ is not linked into the WASM module. Datum-shift-aware reprojection (e.g. EPSG:4326 → EPSG:3857 with grid files, NAD27 → NAD83) requires PROJ 9 with datum grids, which cannot run inside the WASM sandbox. Reproject data before loading it into ClickHouse if accurate CRS conversion is needed.
 
 - **Planar geometry only.** All calculations are Cartesian — `ST_Distance`, `ST_Area`, `ST_Length` work in the coordinate units of the geometry, not meters on the sphere. Use an appropriate projected CRS (e.g. UTM) for metric results.
-
-- **No native aggregate functions.** WASM UDFs in ClickHouse are scalar only. `ST_Union_Agg` works around this by accepting an `Array(String)` rather than a true `GROUP BY` aggregate, but this requires materializing the geometry array in memory first.
 
 - **Geometry parsed on every call.** WKB is re-parsed from bytes for each row invocation — there is no persistent geometry cache across rows or queries.
 
