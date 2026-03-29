@@ -48,6 +48,35 @@ WHERE st_intersects(geometry, st_geomfromtext('POLYGON((...))'))
 ORDER BY area DESC;
 ```
 
+## In-flight ClickHouse changes
+
+chgeos depends on ClickHouse patches that are not yet merged upstream. All of them live on the [`bacek/wasm`](https://github.com/bacek/ClickHouse/tree/bacek/wasm) branch of the ClickHouse fork.
+
+### WASM UDF core
+
+| Commit area | What it does |
+|---|---|
+| `DETERMINISTIC` keyword | Allows marking a WASM UDF as deterministic so ClickHouse can constant-fold calls with literal arguments |
+| WASM UDFs in `system.functions` | WASM-registered functions appear in `system.functions` with their argument types and return type |
+
+### WASM aggregate functions (UDAFs)
+
+| Commit area | What it does |
+|---|---|
+| `is_aggregate = 1` setting | New `SETTINGS` clause on `CREATE FUNCTION` that registers the WASM export as a true `GROUP BY` aggregate. ClickHouse accumulates argument rows per group and calls the WASM function once at finalize with `Array(T)`-wrapped arguments |
+| `addBatchSinglePlace` | Performance path for aggregate function batch insertion |
+| ROW_DIRECT + is_aggregate guard | Validates that `is_aggregate = 1` is rejected for `ABI ROW_DIRECT` (array arguments cannot be passed as scalar WASM values) |
+
+### GeoParquet / Iceberg spatial pruning
+
+| Commit area | What it does |
+|---|---|
+| `isSpatialPredicate()` | New virtual method on `IFunctionBase`; WASM UDFs set it via `SETTINGS is_spatial_predicate = 1`. Enables the query planner to recognise spatial filter functions |
+| Spatial filter pushdown | Plugs `isSpatialPredicate()` into the `KeyCondition` hyperrectangle pipeline so spatial predicates participate in Parquet row-group and page pruning |
+| GeoParquet page-level pruning | Reads `covering.bbox` column statistics from Parquet page index and skips pages whose bbox is disjoint from the query geometry |
+| GeoParquet row-group pruning | Reads `covering.bbox` min/max statistics from Parquet row-group metadata |
+| Iceberg manifest-level pruning | Reads `covering.bbox` column bounds from Iceberg manifests and prunes whole files before opening them |
+
 ## How it works
 
 **Wire format:** Geometries are `String` columns containing raw EWKB bytes — the same format PostGIS, GeoParquet, and most spatial tools use. No conversion needed at the database boundary.
@@ -58,10 +87,7 @@ ORDER BY area DESC;
 
 **Bbox short-circuit:** Binary predicates (`ST_Intersects`, `ST_Contains`, `ST_Within`, etc.) extract bounding boxes directly from raw WKB bytes — no GEOS parse, no heap allocation — and return early when boxes don't overlap. GEOS is only invoked when the bbox check passes.
 
-> **Note:** ClickHouse WASM UDFs are experimental and not available on ClickHouse Cloud.
-> Active upstream PRs this project depends on or tracks:
-> - [#99373](https://github.com/ClickHouse/ClickHouse/pull/99373) — WASM UDF ABI improvements (BUFFERED_V1 stability)
-> - [#100005](https://github.com/ClickHouse/ClickHouse/pull/100005) — `DETERMINISTIC` keyword support for WASM UDFs
+> **Note:** ClickHouse WASM UDFs are experimental and not available on ClickHouse Cloud. The patches chgeos requires are tracked in the [In-flight ClickHouse changes](#in-flight-clickhouse-changes) section above.
 
 ## Functions
 
