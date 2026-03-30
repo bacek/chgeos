@@ -14,7 +14,7 @@ CH="${1:-$(command -v clickhouse 2>/dev/null)}"
 
 PARQUET="${2:?ERROR: parquet file required as second argument}"
 PORT="${CH_PORT:-19000}"
-FUEL="SETTINGS webassembly_udf_max_fuel=100000000000"
+FUEL="SETTINGS webassembly_udf_max_fuel=0"
 
 # Register bench-only functions (not in create.sql)
 "${CH}" client --port "${PORT}" -q "

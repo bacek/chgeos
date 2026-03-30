@@ -18,7 +18,7 @@ DATA_DIR="${2:?ERROR: data directory required as second argument}"
 [[ -d "${DATA_DIR}" ]] || { echo "ERROR: data directory '${DATA_DIR}' does not exist"; exit 1; }
 
 PORT="${CH_PORT:-19000}"
-FUEL="SETTINGS webassembly_udf_max_fuel=100000000000"
+FUEL="SETTINGS webassembly_udf_max_fuel=0"
 RUNS="${BENCH_RUNS:-5}"
 
 TRIP="${DATA_DIR}/trip.parquet"
