@@ -65,7 +65,7 @@ inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
 }
 
 // string_view: zero-copy view into the input buffer.
-// Valid only for the lifetime of the input buffer (same as udf.hpp variant).
+// Valid only for the lifetime of the input buffer (same as msgpack.hpp variant).
 inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
                           std::string_view & arg) {
     uint64_t len = rb_read_varuint(ptr, end);
@@ -141,7 +141,7 @@ inline void rb_pack_result(raw_buffer * buf, const raw_buffer & bytes) {
 }
 
 // ── rowbinary_impl_wrapper ────────────────────────────────────────────────────
-// Mirrors impl_wrapper in udf.hpp but uses RowBinary (de)serialization.
+// Mirrors impl_wrapper in msgpack.hpp but uses RowBinary (de)serialization.
 // Register the function with SETTINGS serialization_format = 'RowBinary'.
 
 template <typename Ret, typename... Args>
