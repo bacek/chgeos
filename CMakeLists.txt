@@ -26,7 +26,11 @@ add_compile_options($<IF:$<CONFIG:Debug>,-O0,-O2>)
 add_link_options($<IF:$<CONFIG:Debug>,-O0,-O2>)
 
 add_subdirectory(third-party/geos geos)
-option(BUILD_TESTING "..." ON)
+if(CMAKE_CROSSCOMPILING)
+  set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
+else()
+  option(BUILD_TESTING "..." ON)
+endif()
 option(BUILD_EXAMPLES "..." OFF)
 add_subdirectory(third-party/msgpack23 msgpack23)
 
