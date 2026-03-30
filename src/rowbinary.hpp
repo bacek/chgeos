@@ -119,6 +119,16 @@ inline void rb_pack_result(raw_buffer * buf, std::unique_ptr<geos::geom::Geometr
     buf->append(bytes.data(), static_cast<uint32_t>(bytes.size()));
 }
 
+inline void rb_pack_result(raw_buffer * buf, const std::string & s) {
+    rb_write_varuint(buf, s.size());
+    buf->append(reinterpret_cast<const uint8_t *>(s.data()), static_cast<uint32_t>(s.size()));
+}
+
+inline void rb_pack_result(raw_buffer * buf, const raw_buffer & bytes) {
+    rb_write_varuint(buf, bytes.size());
+    buf->append(bytes.data(), bytes.size());
+}
+
 // ── rowbinary_impl_wrapper ────────────────────────────────────────────────────
 // Mirrors impl_wrapper in udf.hpp but uses RowBinary (de)serialization.
 // Register the function with SETTINGS serialization_format = 'RowBinary'.

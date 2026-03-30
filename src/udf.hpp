@@ -144,6 +144,28 @@ raw_buffer *impl_wrapper(raw_buffer *ptr, uint32_t num_rows,
     return ch::impl_wrapper(ptr, num_rows, ch::name##_impl);                   \
   }
 
+// RowBinary scalar function — exports under the plain name.
+// Replace CH_UDF_FUNC with this for scalar functions; add
+//   SETTINGS serialization_format = 'RowBinary'
+// to the SQL DDL.
+#define CH_UDF_RB_ONLY(name)                                                           \
+    __attribute__((export_name(#name))) ch::raw_buffer *                               \
+    name(ch::raw_buffer * ptr, uint32_t num_rows) {                                    \
+        return ch::rowbinary_impl_wrapper(ptr, num_rows, ch::name##_impl);             \
+    }
+
+// RowBinary binary geometry predicate with bbox shortcut.
+// Replace CH_UDF_BBOX2 with this; same SQL DDL changes as CH_UDF_RB_ONLY.
+#define CH_UDF_RB_BBOX2(name, bbox_op, early_ret)                                          \
+    __attribute__((export_name(#name))) ch::raw_buffer * name(                             \
+        ch::raw_buffer * ptr, uint32_t num_rows) {                                         \
+        return ch::rowbinary_impl_wrapper(ptr, num_rows,                                   \
+            +[](std::span<const uint8_t> a, std::span<const uint8_t> b) -> bool {         \
+                return ch::with_bbox(a, b, ch::bbox_op, early_ret,                        \
+                    ch::name##_impl);                                                       \
+            });                                                                             \
+    }
+
 // Binary geometry predicate with bbox shortcut.
 // bbox_op : one of bbox_op_intersects / bbox_op_contains / bbox_op_rcontains
 // early_ret: value returned when the bbox check fails (false for most, true for disjoint)
