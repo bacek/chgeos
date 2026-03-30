@@ -64,6 +64,17 @@ inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
     ptr += len;
 }
 
+// string_view: zero-copy view into the input buffer.
+// Valid only for the lifetime of the input buffer (same as udf.hpp variant).
+inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
+                          std::string_view & arg) {
+    uint64_t len = rb_read_varuint(ptr, end);
+    if (static_cast<uint64_t>(end - ptr) < len)
+        throw std::runtime_error("RowBinary: string body truncated");
+    arg = std::string_view(reinterpret_cast<const char *>(ptr), static_cast<size_t>(len));
+    ptr += len;
+}
+
 // unique_ptr<Geometry>: read string field, parse as WKB.
 inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
                           std::unique_ptr<geos::geom::Geometry> & arg) {
