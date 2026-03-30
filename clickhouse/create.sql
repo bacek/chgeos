@@ -220,6 +220,14 @@ ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS is_spatial_predicate = 1;
 
+-- Same function, RowBinary serialization (lower overhead than MsgPack for raw WKB blobs).
+CREATE OR REPLACE FUNCTION st_intersects_extent_rb
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary', is_spatial_predicate = 1;
+
 CREATE OR REPLACE FUNCTION st_within
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8

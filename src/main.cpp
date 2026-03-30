@@ -1,6 +1,7 @@
 #include <geos/version.h>
 
 #include "functions.hpp"
+#include "rowbinary.hpp"
 #include "udf.hpp"
 
 extern "C" {
@@ -17,6 +18,7 @@ CH_UDF_FUNC(st_geomfromtext)
 CH_UDF_FUNC(st_geomfromgeojson)
 CH_UDF_FUNC(st_extent)
 CH_UDF_FUNC(st_intersects_extent)  // pure bbox, no GEOS
+CH_UDF_RB_FUNC(st_intersects_extent)  // same logic, RowBinary serialization
 CH_UDF_FUNC(st_x)
 CH_UDF_FUNC(st_y)
 CH_UDF_FUNC(st_centroid)

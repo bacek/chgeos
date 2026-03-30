@@ -13,6 +13,7 @@ add_executable(chgeos_tests
   test_overlay.cpp
   test_predicates.cpp
   test_processing.cpp
+  test_rowbinary.cpp
   test_transforms.cpp
   ${CMAKE_SOURCE_DIR}/src/geom/wkb.cpp
   ${CMAKE_SOURCE_DIR}/src/mem.cpp
