@@ -243,14 +243,6 @@ ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
 
--- Same function, RowBinary serialization — kept for backwards compatibility.
-CREATE OR REPLACE FUNCTION st_intersects_extent_rb
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI BUFFERED_V1
-DETERMINISTIC
-SETTINGS serialization_format = 'RowBinary', is_spatial_predicate = 1;
-
 CREATE OR REPLACE FUNCTION st_within
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
