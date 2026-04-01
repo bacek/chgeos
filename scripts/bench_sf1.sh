@@ -18,13 +18,20 @@ DATA_DIR="${2:?ERROR: data directory required as second argument}"
 [[ -d "${DATA_DIR}" ]] || { echo "ERROR: data directory '${DATA_DIR}' does not exist"; exit 1; }
 
 PORT="${CH_PORT:-19000}"
-FUEL="SETTINGS webassembly_udf_max_fuel=0"
+TIMEOUT="${BENCH_TIMEOUT:-120}"
+FUEL="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}"
 RUNS="${BENCH_RUNS:-5}"
 
-TRIP="${DATA_DIR}/trip.parquet"
-ZONE="${DATA_DIR}/zone.parquet"
-BUILDING="${DATA_DIR}/building.parquet"
-CUSTOMER="${DATA_DIR}/customer.parquet"
+# ClickHouse server restricts file() to user_files_path; symlink data files there.
+USER_FILES="${CH_USER_FILES:-/data/bacek/src/chgeos/tmp/data/user_files}"
+for _f in trip zone building customer; do
+    [[ -f "${DATA_DIR}/${_f}.parquet" ]] && ln -sf "${DATA_DIR}/${_f}.parquet" "${USER_FILES}/${_f}.parquet"
+done
+
+TRIP="file('trip.parquet', Parquet)"
+ZONE="file('zone.parquet', Parquet)"
+BUILDING="file('building.parquet', Parquet)"
+CUSTOMER="file('customer.parquet', Parquet)"
 
 run_once() {
     local query="$1"
@@ -37,17 +44,22 @@ run_once() {
 run() {
     local label="$1"; local query="$2"
 
-    local times=() sum=0 min=999999 max=0
+    local times=() sum=0 min=999999 max=0 timed_out=0
     for (( i=0; i<RUNS; i++ )); do
         local ms
         ms=$(run_once "${query}")
+        [[ "${ms}" -ge $(( TIMEOUT * 1000 - 500 )) ]] && { timed_out=1; break; }
         times+=("${ms}")
         sum=$(( sum + ms ))
         (( ms < min )) && min=${ms}
         (( ms > max )) && max=${ms}
     done
-    local avg=$(( sum / RUNS ))
 
+    if (( timed_out )); then
+        printf "| %-6s | %8s | %8s | %8s |\n" "${label}" "TIMEOUT" "TIMEOUT" "TIMEOUT"
+        return
+    fi
+    local avg=$(( sum / RUNS ))
     printf "| %-6s | %8s | %8s | %8s |\n" \
         "${label}" "${min}ms" "${avg}ms" "${max}ms"
 }
@@ -55,7 +67,7 @@ run() {
 echo ""
 echo "Data dir: ${DATA_DIR}  (${RUNS} runs each)"
 trip_count=$("${CH}" client --port "${PORT}" -q \
-    "SELECT count() FROM file('${TRIP}', Parquet)" 2>/dev/null || echo '?')
+    "SELECT count() FROM ${TRIP}" 2>/dev/null || echo '?')
 echo "trip rows: ${trip_count}"
 echo ""
 printf "| %-6s | %8s | %8s | %8s |\n" "Query" "min" "avg" "max"
@@ -65,18 +77,18 @@ echo  "|--------|----------|----------|----------|"
 run "Q1" \
 "SELECT t_tripkey, st_x(t_pickuploc), st_y(t_pickuploc), t_pickuptime,
     st_distance(t_pickuploc, st_geomfromtext('POINT (-111.7610 34.8697)')) AS distance_to_center
- FROM file('${TRIP}', Parquet)
+ FROM ${TRIP}
  WHERE st_dwithin(t_pickuploc, st_geomfromtext('POINT (-111.7610 34.8697)'), 0.45)
  ORDER BY distance_to_center ASC, t_tripkey ASC
  ${FUEL}"
 
-# q2: count trips within Coconino County
-run "Q2" \
-"SELECT count() AS trip_count
- FROM file('${TRIP}', Parquet) t
- WHERE st_intersects(t.t_pickuploc,
-     (SELECT z_boundary FROM file('${ZONE}', Parquet) WHERE z_name = 'Coconino County' LIMIT 1))
- ${FUEL}"
+### # q2: count trips within Coconino County
+### run "Q2" \
+### "SELECT count() AS trip_count
+###  FROM ${TRIP} t
+###  WHERE st_intersects(t.t_pickuploc,
+###      (SELECT z_boundary FROM ${ZONE} WHERE z_name = 'Coconino County' LIMIT 1))
+###  ${FUEL}"
 
 # q3: monthly stats within bounding box + buffer
 run "Q3" \
@@ -84,7 +96,7 @@ run "Q3" \
     count(t_tripkey) AS total_trips,
     avg(t_distance) AS avg_distance,
     avg(t_fare) AS avg_fare
- FROM file('${TRIP}', Parquet)
+ FROM ${TRIP}
  WHERE st_dwithin(t_pickuploc,
      st_geomfromtext('POLYGON((-111.9060 34.7347,-111.6160 34.7347,-111.6160 35.0047,-111.9060 35.0047,-111.9060 34.7347))'),
      0.045)
@@ -95,8 +107,8 @@ run "Q3" \
 # q4: zone distribution of top-1000 trips by tip
 run "Q4" \
 "SELECT z.z_zonekey, z.z_name, count() AS trip_count
- FROM file('${ZONE}', Parquet) z
- JOIN (SELECT t_pickuploc FROM file('${TRIP}', Parquet) ORDER BY t_tip DESC, t_tripkey ASC LIMIT 1000) top_trips
+ FROM ${ZONE} z
+ JOIN (SELECT t_pickuploc FROM ${TRIP} ORDER BY t_tip DESC, t_tripkey ASC LIMIT 1000) top_trips
    ON st_within(top_trips.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY trip_count DESC, z.z_zonekey ASC
@@ -108,8 +120,8 @@ run "Q5" \
     toStartOfMonth(t.t_pickuptime) AS pickup_month,
     st_area(st_convexhull(st_collect_agg(t.t_dropoffloc))) AS monthly_travel_hull_area,
     count() AS dropoff_count
- FROM file('${TRIP}', Parquet) t
- JOIN file('${CUSTOMER}', Parquet) c ON t.t_custkey = c.c_custkey
+ FROM ${TRIP} t
+ JOIN ${CUSTOMER} c ON t.t_custkey = c.c_custkey
  GROUP BY c.c_custkey, c.c_name, pickup_month
  HAVING dropoff_count > 5
  ORDER BY dropoff_count DESC, c.c_custkey ASC
@@ -121,7 +133,7 @@ run "Q6" \
     count(t.t_tripkey) AS total_pickups,
     avg(t.t_totalamount) AS avg_amount,
     avg(t.t_dropofftime - t.t_pickuptime) AS avg_duration
- FROM file('${TRIP}', Parquet) t, file('${ZONE}', Parquet) z
+ FROM ${TRIP} t, ${ZONE} z
  WHERE st_intersects(st_geomfromtext('POLYGON((-112.2110 34.4197,-111.3110 34.4197,-111.3110 35.3197,-112.2110 35.3197,-112.2110 34.4197))'), z.z_boundary)
    AND st_within(t.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
@@ -134,7 +146,7 @@ run "Q7" \
      SELECT t_tripkey,
          t_distance AS reported_distance_m,
          st_length(st_makeline(t_pickuploc, t_dropoffloc)) / 0.000009 AS line_distance_m
-     FROM file('${TRIP}', Parquet)
+     FROM ${TRIP}
  )
  SELECT t_tripkey, reported_distance_m, line_distance_m,
      reported_distance_m / nullIf(line_distance_m, 0) AS detour_ratio
@@ -145,16 +157,16 @@ run "Q7" \
 # q8: nearby pickup count per building (~500m)
 run "Q8" \
 "SELECT b.b_buildingkey, b.b_name, count() AS nearby_pickup_count
- FROM file('${TRIP}', Parquet) t
- JOIN file('${BUILDING}', Parquet) b ON st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
+ FROM ${TRIP} t
+ JOIN ${BUILDING} b ON st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
  GROUP BY b.b_buildingkey, b.b_name
  ORDER BY nearby_pickup_count DESC, b.b_buildingkey ASC
  ${FUEL}"
 
 # q9: building conflation via IoU
 run "Q9" \
-"WITH b1 AS (SELECT b_buildingkey AS id, b_boundary AS geom FROM file('${BUILDING}', Parquet)),
-      b2 AS (SELECT b_buildingkey AS id, b_boundary AS geom FROM file('${BUILDING}', Parquet)),
+"WITH b1 AS (SELECT b_buildingkey AS id, b_boundary AS geom FROM ${BUILDING}),
+      b2 AS (SELECT b_buildingkey AS id, b_boundary AS geom FROM ${BUILDING}),
       pairs AS (
           SELECT b1.id AS building_1, b2.id AS building_2,
               st_area(b1.geom) AS area1, st_area(b2.geom) AS area2,
@@ -175,8 +187,8 @@ run "Q10" \
     avg(t.t_dropofftime - t.t_pickuptime) AS avg_duration,
     avg(t.t_distance) AS avg_distance,
     count(t.t_tripkey) AS num_trips
- FROM file('${ZONE}', Parquet) z
- LEFT JOIN file('${TRIP}', Parquet) t ON st_within(t.t_pickuploc, z.z_boundary)
+ FROM ${ZONE} z
+ LEFT JOIN ${TRIP} t ON st_within(t.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY avg_duration DESC NULLS LAST, z.z_zonekey ASC
  ${FUEL}"
@@ -184,9 +196,9 @@ run "Q10" \
 # q11: count cross-zone trips
 run "Q11" \
 "SELECT count() AS cross_zone_trip_count
- FROM file('${TRIP}', Parquet) t
- JOIN file('${ZONE}', Parquet) pickup_zone  ON st_within(t.t_pickuploc,   pickup_zone.z_boundary)
- JOIN file('${ZONE}', Parquet) dropoff_zone ON st_within(t.t_dropoffloc, dropoff_zone.z_boundary)
+ FROM ${TRIP} t
+ JOIN ${ZONE} pickup_zone  ON st_within(t.t_pickuploc,   pickup_zone.z_boundary)
+ JOIN ${ZONE} dropoff_zone ON st_within(t.t_dropoffloc, dropoff_zone.z_boundary)
  WHERE pickup_zone.z_zonekey != dropoff_zone.z_zonekey
  ${FUEL}"
 
@@ -196,7 +208,7 @@ run "Q12" \
      SELECT t.t_tripkey, t.t_pickuploc, b.b_buildingkey, b.b_name AS building_name,
          st_distance(t.t_pickuploc, b.b_boundary) AS distance_to_building,
          row_number() OVER (PARTITION BY t.t_tripkey ORDER BY st_distance(t.t_pickuploc, b.b_boundary)) AS rn
-     FROM file('${TRIP}', Parquet) t CROSS JOIN file('${BUILDING}', Parquet) b
+     FROM ${TRIP} t CROSS JOIN ${BUILDING} b
      WHERE st_dwithin(t.t_pickuploc, b.b_boundary, 0.05)
  )
  SELECT t_tripkey, t_pickuploc, b_buildingkey, building_name, distance_to_building
