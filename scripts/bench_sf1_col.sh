@@ -36,7 +36,9 @@ CUSTOMER="file('customer.parquet', Parquet)"
 run_once() {
     local query="$1"
     local secs
-    secs=$( "${CH}" client --port "${PORT}" --time -q "${query}" 2>&1 1>/dev/null )
+    secs=$( "${CH}" client --port "${PORT}" --time -q "${query}" 2>&1 1>/dev/null \
+            | grep -E '^[0-9]+(\.[0-9]+)?$' | tail -1 )
+    [[ -z "${secs}" ]] && secs="${TIMEOUT}"
     awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}"
 }
 
