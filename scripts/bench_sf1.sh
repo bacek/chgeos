@@ -35,10 +35,9 @@ CUSTOMER="file('customer.parquet', Parquet)"
 
 run_once() {
     local query="$1"
-    result=$( { time "${CH}" client --port "${PORT}" -q "${query}" 2>/dev/null; } 2>&1 )
-    echo "${result}" | grep real | awk '{
-        split($2, t, /m|s/); print int((t[1]*60 + t[2])*1000+0.5)
-    }'
+    local secs
+    secs=$( "${CH}" client --port "${PORT}" --time -q "${query}" 2>&1 1>/dev/null )
+    awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}"
 }
 
 run() {
