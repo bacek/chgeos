@@ -3,6 +3,7 @@
 #include "functions.hpp"
 #include "rowbinary.hpp"
 #include "msgpack.hpp"
+#include "columnar.hpp"
 
 extern "C" {
 
@@ -139,5 +140,41 @@ CH_UDF_RB_ONLY(st_intersects_extent)
 CH_UDF_RB_FUNC(st_intersects_extent)  // keeps st_intersects_extent_rb export
 // st_dwithin: 3-arg, no bbox shortcut at predicate level
 CH_UDF_RB_ONLY(st_dwithin)
+
+// ── COLUMNAR_V1 — predicates ──────────────────────────────────────────────────
+CH_UDF_COL_BBOX2(st_contains,        bbox_op_contains,   false)
+CH_UDF_COL_BBOX2(st_intersects,      bbox_op_intersects, false)
+CH_UDF_COL_BBOX2(st_touches,         bbox_op_intersects, false)
+CH_UDF_COL_BBOX2(st_within,          bbox_op_rcontains,  false)
+CH_UDF_COL_BBOX2(st_crosses,         bbox_op_intersects, false)
+CH_UDF_COL_BBOX2(st_overlaps,        bbox_op_intersects, false)
+CH_UDF_COL_BBOX2(st_disjoint,        bbox_op_intersects, true)
+CH_UDF_COL_BBOX2(st_equals,          bbox_op_intersects, false)
+CH_UDF_COL_BBOX2(st_covers,          bbox_op_contains,   false)
+CH_UDF_COL_BBOX2(st_coveredby,       bbox_op_rcontains,  false)
+CH_UDF_COL_BBOX2(st_containsproperly,bbox_op_contains,   false)
+CH_UDF_COL_PRED3(st_dwithin)
+
+// ── COLUMNAR_V1 — scalar Float64 ─────────────────────────────────────────────
+CH_UDF_COL_SCALAR1_F64(st_x)
+CH_UDF_COL_SCALAR1_F64(st_y)
+CH_UDF_COL_SCALAR1_F64(st_z)
+CH_UDF_COL_SCALAR1_F64(st_area)
+CH_UDF_COL_SCALAR1_F64(st_length)
+CH_UDF_COL_SCALAR1_F64(st_perimeter)
+CH_UDF_COL_SCALAR2_F64(st_distance)
+CH_UDF_COL_SCALAR2_F64(st_hausdorffdistance)
+
+// ── COLUMNAR_V1 — geometry output ────────────────────────────────────────────
+CH_UDF_COL_GEOM2(st_intersection)
+CH_UDF_COL_GEOM2(st_union)
+CH_UDF_COL_GEOM2(st_difference)
+CH_UDF_COL_GEOM2(st_makeline)
+CH_UDF_COL_GEOM1(st_convexhull)
+CH_UDF_COL_GEOM1(st_envelope)
+CH_UDF_COL_GEOM1(st_centroid)
+CH_UDF_COL_GEOM1(st_makevalid)
+CH_UDF_COL_GEOM1(st_boundary)
+CH_UDF_COL_GEOM1(st_unaryunion)
 
 } // extern "C"

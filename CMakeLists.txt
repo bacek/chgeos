@@ -18,8 +18,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #   by strip_tag_exports.py (POST_BUILD below) because wasmtime's C API panics on
 #   ExternType::Tag (issue #10252) — no linker flag can suppress the attribute.
 if(CMAKE_CROSSCOMPILING)
-  add_compile_options(-fexceptions -fwasm-exceptions)
-  add_link_options(-fexceptions -fwasm-exceptions -sNO_FILESYSTEM=1)
+  add_compile_options(-fexceptions -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0)
+  add_link_options(-fexceptions -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 -sNO_FILESYSTEM=1)
 endif()
 
 add_compile_options($<IF:$<CONFIG:Debug>,-O0,-O2>)
