@@ -19,7 +19,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #   ExternType::Tag (issue #10252) — no linker flag can suppress the attribute.
 if(CMAKE_CROSSCOMPILING)
   add_compile_options(-fexceptions -fwasm-exceptions)
-  add_link_options(-fexceptions -fwasm-exceptions -sWASM_EXNREF=1 -sNO_FILESYSTEM=1)
+  add_link_options(-fexceptions -fwasm-exceptions -sNO_FILESYSTEM=1)
 endif()
 
 add_compile_options($<IF:$<CONFIG:Debug>,-O0,-O2>)
@@ -55,9 +55,10 @@ target_include_directories(chgeos PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/geos/capi)
 if(CMAKE_CROSSCOMPILING)
   # Set properties to produce .wasm and configure linker flags
   set_target_properties(chgeos PROPERTIES SUFFIX ".wasm")
-  target_link_options(chgeos PRIVATE 
+  target_link_options(chgeos PRIVATE
     "-Wl,--no-entry"    # Required if no main()
     # "-Wl,--export-all"  # Export all functions
     "-Wl,--allow-undefined" # Allows linker to skip missing system libs
+    "-Wl,--allow-multiple-definition" # emscripten 5.0.4+ also defines __throw_exception_with_stack_trace in libstandalonewasm; ours (earlier in link order) wins
   )
 endif()
