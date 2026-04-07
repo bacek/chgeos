@@ -370,6 +370,91 @@ raw_buffer* columnar_geom1(raw_buffer* ptr, uint32_t, Impl impl) {
     }
 }
 
+// (Span) -> bool
+template <typename Impl>
+raw_buffer* columnar_pred1(raw_buffer* ptr, uint32_t, Impl impl) {
+    auto cb = parse_columnar(ptr);
+    uint32_t n = cb.num_rows;
+    auto ca = cb.col(0);
+
+    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n);
+    try {
+        col_write_fixed_header<uint8_t>(out, n, COL_FIXED8);
+        uint8_t* res = out->data() + HEADER_BYTES + COL_DESC_BYTES;
+        for (uint32_t i = 0; i < n; ++i)
+            res[i] = (!ca.is_null(i) && impl(ca.get_bytes(i))) ? 1u : 0u;
+        return out;
+    } catch (const std::exception& e) {
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        ch::panic(e.what());
+    }
+}
+
+// (Span) -> int32_t
+template <typename Impl>
+raw_buffer* columnar_scalar1_i32(raw_buffer* ptr, uint32_t, Impl impl) {
+    auto cb = parse_columnar(ptr);
+    uint32_t n = cb.num_rows;
+    auto ca = cb.col(0);
+
+    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 4u);
+    try {
+        col_write_fixed_header<int32_t>(out, n, COL_FIXED32);
+        int32_t* res = reinterpret_cast<int32_t*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
+        for (uint32_t i = 0; i < n; ++i)
+            res[i] = ca.is_null(i) ? 0 : impl(ca.get_bytes(i));
+        return out;
+    } catch (const std::exception& e) {
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        ch::panic(e.what());
+    }
+}
+
+// (Span) -> std::string  (non-nullable output)
+template <typename Impl>
+raw_buffer* columnar_string1(raw_buffer* ptr, uint32_t, Impl impl) {
+    auto cb = parse_columnar(ptr);
+    uint32_t n = cb.num_rows;
+    auto ca = cb.col(0);
+
+    raw_buffer* out = clickhouse_create_buffer(0);
+    try {
+        ColBytesWriter w(out, n, /*nullable=*/false);
+        for (uint32_t i = 0; i < n; ++i) {
+            std::string s = impl(ca.get_bytes(i));
+            w.push_bytes({reinterpret_cast<const uint8_t*>(s.data()), s.size()});
+        }
+        w.finish();
+        return out;
+    } catch (const std::exception& e) {
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        ch::panic(e.what());
+    }
+}
+
+// (Span, Span) -> std::string  (non-nullable output)
+template <typename Impl>
+raw_buffer* columnar_string2(raw_buffer* ptr, uint32_t, Impl impl) {
+    auto cb = parse_columnar(ptr);
+    uint32_t n = cb.num_rows;
+    auto ca = cb.col(0);
+    auto cb2 = cb.col(1);
+
+    raw_buffer* out = clickhouse_create_buffer(0);
+    try {
+        ColBytesWriter w(out, n, /*nullable=*/false);
+        for (uint32_t i = 0; i < n; ++i) {
+            std::string s = impl(ca.get_bytes(i), cb2.get_bytes(i));
+            w.push_bytes({reinterpret_cast<const uint8_t*>(s.data()), s.size()});
+        }
+        w.finish();
+        return out;
+    } catch (const std::exception& e) {
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        ch::panic(e.what());
+    }
+}
+
 } // namespace ch
 
 // ── Registration macros ───────────────────────────────────────────────────────
@@ -424,4 +509,44 @@ raw_buffer* columnar_geom1(raw_buffer* ptr, uint32_t, Impl impl) {
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
         return ch::columnar_geom1(ptr, num_rows, ch::name##_impl);               \
+    }
+
+// 1-arg predicate (geom -> bool) → UInt8
+#define CH_UDF_COL_PRED1(name)                                                   \
+    __attribute__((export_name(#name "_col")))                                   \
+    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
+        return ch::columnar_pred1(ptr, num_rows,                                 \
+            +[](std::span<const uint8_t> a) -> bool {                            \
+                return ch::name##_impl(ch::read_wkb(a));                         \
+            });                                                                   \
+    }
+
+// 1-arg scalar (geom -> int32_t) → Int32
+#define CH_UDF_COL_SCALAR1_I32(name)                                             \
+    __attribute__((export_name(#name "_col")))                                   \
+    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
+        return ch::columnar_scalar1_i32(ptr, num_rows,                           \
+            +[](std::span<const uint8_t> a) {                                    \
+                return ch::name##_impl(ch::read_wkb(a));                         \
+            });                                                                   \
+    }
+
+// 1-arg string output (geom -> std::string) → String (non-nullable)
+#define CH_UDF_COL_STRING1(name)                                                 \
+    __attribute__((export_name(#name "_col")))                                   \
+    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
+        return ch::columnar_string1(ptr, num_rows,                               \
+            +[](std::span<const uint8_t> a) {                                    \
+                return ch::name##_impl(ch::read_wkb(a));                         \
+            });                                                                   \
+    }
+
+// 2-arg string output (geom, geom -> std::string) → String (non-nullable)
+#define CH_UDF_COL_STRING2(name)                                                 \
+    __attribute__((export_name(#name "_col")))                                   \
+    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
+        return ch::columnar_string2(ptr, num_rows,                               \
+            +[](std::span<const uint8_t> a, std::span<const uint8_t> b) {       \
+                return ch::name##_impl(ch::read_wkb(a), ch::read_wkb(b));       \
+            });                                                                   \
     }

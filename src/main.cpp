@@ -166,6 +166,28 @@ CH_UDF_COL_SCALAR2_F64(st_distance)
 CH_UDF_COL_SCALAR2_F64(st_hausdorffdistance)
 CH_UDF_COL_SCALAR2_F64(st_frechetdistance)
 
+// ── COLUMNAR_V1 — predicates (1-arg) ─────────────────────────────────────────
+CH_UDF_COL_PRED1(st_isvalid)
+CH_UDF_COL_PRED1(st_isempty)
+CH_UDF_COL_PRED1(st_issimple)
+CH_UDF_COL_PRED1(st_isring)
+
+// ── COLUMNAR_V1 — scalar Int32 ────────────────────────────────────────────────
+CH_UDF_COL_SCALAR1_I32(st_srid)
+CH_UDF_COL_SCALAR1_I32(st_npoints)
+CH_UDF_COL_SCALAR1_I32(st_numpoints)
+CH_UDF_COL_SCALAR1_I32(st_numgeometries)
+CH_UDF_COL_SCALAR1_I32(st_numinteriorrings)
+CH_UDF_COL_SCALAR1_I32(st_nrings)
+CH_UDF_COL_SCALAR1_I32(st_dimension)
+
+// ── COLUMNAR_V1 — string output ───────────────────────────────────────────────
+CH_UDF_COL_STRING1(st_astext)
+CH_UDF_COL_STRING1(st_asewkt)
+CH_UDF_COL_STRING1(st_geometrytype)
+CH_UDF_COL_STRING1(st_isvalidreason)
+CH_UDF_COL_STRING2(st_relate)
+
 // ── COLUMNAR_V1 — geometry output ────────────────────────────────────────────
 CH_UDF_COL_GEOM2(st_intersection)
 CH_UDF_COL_GEOM2(st_union)
