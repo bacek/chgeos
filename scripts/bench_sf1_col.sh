@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# SF1 geospatial benchmark suite for chgeos WASM UDFs.
+# SF1 geospatial benchmark suite for chgeos WASM UDFs (COLUMNAR_V1 variant).
 #
 # Usage:
-#   ./scripts/bench_sf1_col.sh [path/to/clickhouse] [path/to/data/dir]
+#   ./scripts/bench_sf1_col.sh [path/to/clickhouse] [path/to/data/dir] [QUERY]
+#
+# QUERY (optional): run only the named query, e.g. Q1, Q7
 #
 # The data directory must contain:
 #   trip.parquet, zone.parquet, building.parquet, customer.parquet
@@ -16,6 +18,8 @@ CH="${1:-$(command -v clickhouse 2>/dev/null)}"
 
 DATA_DIR="${2:?ERROR: data directory required as second argument}"
 [[ -d "${DATA_DIR}" ]] || { echo "ERROR: data directory '${DATA_DIR}' does not exist"; exit 1; }
+
+QUERY_FILTER="${3:-}"
 
 PORT="${CH_PORT:-19000}"
 TIMEOUT="${BENCH_TIMEOUT:-120}"
@@ -44,6 +48,7 @@ run_once() {
 
 run() {
     local label="$1"; local query="$2"
+    [[ -n "${QUERY_FILTER}" && "${label}" != "${QUERY_FILTER}" ]] && return 0
 
     local times=() sum=0 min=999999 max=0 timed_out=0
     for (( i=0; i<RUNS; i++ )); do
