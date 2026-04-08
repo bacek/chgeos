@@ -83,6 +83,23 @@ inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
     arg = read_wkb(raw);
 }
 
+// vector<unique_ptr<Geometry>>: read Array(String) field, parse each as WKB.
+// RowBinary Array layout: uint64_t count, then count × String (varuint + bytes).
+inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
+                          std::vector<std::unique_ptr<geos::geom::Geometry>> & arg) {
+    if (static_cast<uint64_t>(end - ptr) < sizeof(uint64_t))
+        throw std::runtime_error("RowBinary: array count truncated");
+    uint64_t count;
+    std::memcpy(&count, ptr, sizeof(uint64_t));
+    ptr += sizeof(uint64_t);
+    arg.reserve(static_cast<size_t>(count));
+    for (uint64_t i = 0; i < count; ++i) {
+        std::span<const uint8_t> raw;
+        rb_unpack_arg(ptr, end, raw);
+        arg.push_back(read_wkb(raw));
+    }
+}
+
 // Fixed-width integers (LE).
 template <std::integral T>
     requires (!std::is_same_v<T, bool>)

@@ -676,36 +676,40 @@ DETERMINISTIC
 SETTINGS serialization_format = 'RowBinary';
 
 -- Pseudo-aggregate functions: take Array(String) of WKBs, used with groupArray().
--- (RowBinary Array(String) unpacking not implemented — use MsgPack path.)
 CREATE OR REPLACE FUNCTION st_union_agg_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS String
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_collect_agg_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS String
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_extent_agg_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS String
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_makeline_agg_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS String
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_convexhull_agg_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS String
 ABI BUFFERED_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_clusterintersecting_mp
 LANGUAGE WASM FROM 'chgeos'

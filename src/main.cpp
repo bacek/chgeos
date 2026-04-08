@@ -22,12 +22,12 @@ CH_UDF_FUNC(st_geomfromchpoint)
 CH_UDF_FUNC(st_geomfromchlinestring)
 CH_UDF_FUNC(st_geomfromchpolygon)
 CH_UDF_FUNC(st_geomfromchmultipolygon)
-// Aggregate functions: RowBinary Array(String) unpacking not implemented
-CH_UDF_FUNC(st_union_agg)
-CH_UDF_FUNC(st_collect_agg)
-CH_UDF_FUNC(st_extent_agg)
-CH_UDF_FUNC(st_makeline_agg)
-CH_UDF_FUNC(st_convexhull_agg)
+// Pseudo-aggregate functions: Array(String) → Geometry, used with groupArray()
+CH_UDF_RB_ONLY(st_union_agg)
+CH_UDF_RB_ONLY(st_collect_agg)
+CH_UDF_RB_ONLY(st_extent_agg)
+CH_UDF_RB_ONLY(st_makeline_agg)
+CH_UDF_RB_ONLY(st_convexhull_agg)
 
 // ── RowBinary — scalar functions ──────────────────────────────────────────────
 // I/O
