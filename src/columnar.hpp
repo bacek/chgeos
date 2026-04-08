@@ -476,57 +476,8 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             ch::prep_a_##name, ch::prep_b_##name);                               \
     }
 
-// 1-arg scalar: geom -> double
-#define CH_UDF_COL_SCALAR1_F64(name)                                             \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
-    }
-
-// 2-arg scalar: (geom, geom) -> double
-#define CH_UDF_COL_SCALAR2_F64(name)                                             \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
-    }
-
-// 2-arg geometry transform: (geom, geom) -> geom
-#define CH_UDF_COL_GEOM2(name)                                                   \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
-    }
-
-// 1-arg geometry transform: geom -> geom
-#define CH_UDF_COL_GEOM1(name)                                                   \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
-    }
-
-// 1-arg predicate: geom -> bool
-#define CH_UDF_COL_PRED1(name)                                                   \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
-    }
-
-// 1-arg scalar: geom -> int32_t
-#define CH_UDF_COL_SCALAR1_I32(name)                                             \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
-    }
-
-// 1-arg string output: geom -> std::string  (non-nullable)
-#define CH_UDF_COL_STRING1(name)                                                 \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
-    }
-
-// 2-arg string output: (geom, geom) -> std::string  (non-nullable)
-#define CH_UDF_COL_STRING2(name)                                                 \
+// Generic columnar wrapper — all arg/return types deduced from name##_impl.
+#define CH_UDF_COL(name)                                                         \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
         return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
