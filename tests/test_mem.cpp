@@ -6,7 +6,7 @@
 
 #include "helpers.hpp"
 #include "mem.hpp"
-#include "udf.hpp"
+#include "msgpack.hpp"
 #include "functions/overlay.hpp"
 
 using namespace ch;
@@ -25,7 +25,7 @@ static std::vector<T> msgpack_roundtrip(const std::vector<T>& values) {
   {
     auto writer = raw_buffer_back_inserter(buf);
     msgpack23::Packer packer{writer};
-    for (const auto& v : values) packer(v);
+    for (T v : values) packer(v);
   }
   auto unpacker = msgpack23::Unpacker(
       std::span<const uint8_t>(buf->begin(), buf->end()));
