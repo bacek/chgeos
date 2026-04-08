@@ -3,3 +3,5 @@ build_native/
 build_wasm/
 .cache/
 tmp/
+Testing/
+clickhouse/config-test-preprocessed.xml
