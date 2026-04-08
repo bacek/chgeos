@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# SF1 geospatial benchmark suite — COLUMNAR_V1 (_col) variant.
+# SF1 geospatial benchmark suite — MsgPack/RowBinary (_mp) variant.
 #
 # Usage:
-#   ./scripts/bench_sf1_col.sh [path/to/clickhouse] [path/to/data/dir] [QUERY]
+#   ./scripts/bench_sf1_mp.sh [path/to/clickhouse] [path/to/data/dir] [QUERY]
 #
 # QUERY (optional): run only the named query, e.g. Q1, Q7
 #
@@ -81,10 +81,10 @@ echo  "|--------|----------|----------|----------|"
 
 # q1: trips within 50km of Sedona city center
 run "Q1" \
-"SELECT t_tripkey, st_x_col(t_pickuploc), st_y_col(t_pickuploc), t_pickuptime,
-    st_distance_col(t_pickuploc, st_geomfromtext('POINT (-111.7610 34.8697)')) AS distance_to_center
+"SELECT t_tripkey, st_x_mp(t_pickuploc), st_y_mp(t_pickuploc), t_pickuptime,
+    st_distance_mp(t_pickuploc, st_geomfromtext_mp('POINT (-111.7610 34.8697)')) AS distance_to_center
  FROM ${TRIP}
- WHERE st_dwithin_col(t_pickuploc, st_geomfromtext('POINT (-111.7610 34.8697)'), 0.45)
+ WHERE st_dwithin_mp(t_pickuploc, st_geomfromtext_mp('POINT (-111.7610 34.8697)'), 0.45)
  ORDER BY distance_to_center ASC, t_tripkey ASC
  ${FUEL}"
 
@@ -92,7 +92,7 @@ run "Q1" \
 ### run "Q2" \
 ### "SELECT count() AS trip_count
 ###  FROM ${TRIP} t
-###  WHERE st_intersects_col(t.t_pickuploc,
+###  WHERE st_intersects_mp(t.t_pickuploc,
 ###      (SELECT z_boundary FROM ${ZONE} WHERE z_name = 'Coconino County' LIMIT 1))
 ###  ${FUEL}"
 
@@ -103,8 +103,8 @@ run "Q3" \
     avg(t_distance) AS avg_distance,
     avg(t_fare) AS avg_fare
  FROM ${TRIP}
- WHERE st_dwithin_col(t_pickuploc,
-     st_geomfromtext('POLYGON((-111.9060 34.7347,-111.6160 34.7347,-111.6160 35.0047,-111.9060 35.0047,-111.9060 34.7347))'),
+ WHERE st_dwithin_mp(t_pickuploc,
+     st_geomfromtext_mp('POLYGON((-111.9060 34.7347,-111.6160 34.7347,-111.6160 35.0047,-111.9060 35.0047,-111.9060 34.7347))'),
      0.045)
  GROUP BY pickup_month
  ORDER BY pickup_month
@@ -115,7 +115,7 @@ run "Q4" \
 "SELECT z.z_zonekey, z.z_name, count() AS trip_count
  FROM ${ZONE} z
  JOIN (SELECT t_pickuploc FROM ${TRIP} ORDER BY t_tip DESC, t_tripkey ASC LIMIT 1000) top_trips
-   ON st_within_col(top_trips.t_pickuploc, z.z_boundary)
+   ON st_within_mp(top_trips.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY trip_count DESC, z.z_zonekey ASC
  ${FUEL}"
@@ -124,7 +124,7 @@ run "Q4" \
 run "Q5" \
 "SELECT c.c_custkey, c.c_name AS customer_name,
     toStartOfMonth(t.t_pickuptime) AS pickup_month,
-    st_area_col(st_convexhull_col(st_collect_agg(t.t_dropoffloc))) AS monthly_travel_hull_area,
+    st_area_mp(st_convexhull_mp(st_collect_agg_mp(t.t_dropoffloc))) AS monthly_travel_hull_area,
     count() AS dropoff_count
  FROM ${TRIP} t
  JOIN ${CUSTOMER} c ON t.t_custkey = c.c_custkey
@@ -140,8 +140,8 @@ run "Q6" \
     avg(t.t_totalamount) AS avg_amount,
     avg(t.t_dropofftime - t.t_pickuptime) AS avg_duration
  FROM ${TRIP} t, ${ZONE} z
- WHERE st_intersects_col(st_geomfromtext('POLYGON((-112.2110 34.4197,-111.3110 34.4197,-111.3110 35.3197,-112.2110 35.3197,-112.2110 34.4197))'), z.z_boundary)
-   AND st_within_col(t.t_pickuploc, z.z_boundary)
+ WHERE st_intersects_mp(st_geomfromtext_mp('POLYGON((-112.2110 34.4197,-111.3110 34.4197,-111.3110 35.3197,-112.2110 35.3197,-112.2110 34.4197))'), z.z_boundary)
+   AND st_within_mp(t.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY total_pickups DESC, z.z_zonekey ASC
  ${FUEL}"
@@ -151,7 +151,7 @@ run "Q7" \
 "WITH trip_lengths AS (
      SELECT t_tripkey,
          t_distance AS reported_distance_m,
-         st_length_col(st_makeline_col(t_pickuploc, t_dropoffloc)) / 0.000009 AS line_distance_m
+         st_length_mp(st_makeline_mp(t_pickuploc, t_dropoffloc)) / 0.000009 AS line_distance_m
      FROM ${TRIP}
  )
  SELECT t_tripkey, reported_distance_m, line_distance_m,
@@ -164,7 +164,7 @@ run "Q7" \
 run "Q8" \
 "SELECT b.b_buildingkey, b.b_name, count() AS nearby_pickup_count
  FROM ${TRIP} t
- JOIN ${BUILDING} b ON st_dwithin_col(t.t_pickuploc, b.b_boundary, 0.0045)
+ JOIN ${BUILDING} b ON st_dwithin_mp(t.t_pickuploc, b.b_boundary, 0.0045)
  GROUP BY b.b_buildingkey, b.b_name
  ORDER BY nearby_pickup_count DESC, b.b_buildingkey ASC
  ${FUEL}"
@@ -175,9 +175,9 @@ run "Q9" \
       b2 AS (SELECT b_buildingkey AS id, b_boundary AS geom FROM ${BUILDING}),
       pairs AS (
           SELECT b1.id AS building_1, b2.id AS building_2,
-              st_area_col(b1.geom) AS area1, st_area_col(b2.geom) AS area2,
-              st_area_col(st_intersection_col(b1.geom, b2.geom)) AS overlap_area
-          FROM b1 JOIN b2 ON b1.id < b2.id AND st_intersects_col(b1.geom, b2.geom)
+              st_area_mp(b1.geom) AS area1, st_area_mp(b2.geom) AS area2,
+              st_area_mp(st_intersection_mp(b1.geom, b2.geom)) AS overlap_area
+          FROM b1 JOIN b2 ON b1.id < b2.id AND st_intersects_mp(b1.geom, b2.geom)
       )
  SELECT building_1, building_2, area1, area2, overlap_area,
      CASE WHEN overlap_area = 0 THEN 0.0
@@ -194,7 +194,7 @@ run "Q10" \
     avg(t.t_distance) AS avg_distance,
     count(t.t_tripkey) AS num_trips
  FROM ${ZONE} z
- LEFT JOIN ${TRIP} t ON st_within_col(t.t_pickuploc, z.z_boundary)
+ LEFT JOIN ${TRIP} t ON st_within_mp(t.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY avg_duration DESC NULLS LAST, z.z_zonekey ASC
  ${FUEL}"
@@ -203,8 +203,8 @@ run "Q10" \
 run "Q11" \
 "SELECT count() AS cross_zone_trip_count
  FROM ${TRIP} t
- JOIN ${ZONE} pickup_zone  ON st_within_col(t.t_pickuploc,   pickup_zone.z_boundary)
- JOIN ${ZONE} dropoff_zone ON st_within_col(t.t_dropoffloc, dropoff_zone.z_boundary)
+ JOIN ${ZONE} pickup_zone  ON st_within_mp(t.t_pickuploc,   pickup_zone.z_boundary)
+ JOIN ${ZONE} dropoff_zone ON st_within_mp(t.t_dropoffloc, dropoff_zone.z_boundary)
  WHERE pickup_zone.z_zonekey != dropoff_zone.z_zonekey
  ${FUEL}"
 
@@ -212,10 +212,10 @@ run "Q11" \
 run "Q12" \
 "WITH candidates AS (
      SELECT t.t_tripkey, t.t_pickuploc, b.b_buildingkey, b.b_name AS building_name,
-         st_distance_col(t.t_pickuploc, b.b_boundary) AS distance_to_building,
-         row_number() OVER (PARTITION BY t.t_tripkey ORDER BY st_distance_col(t.t_pickuploc, b.b_boundary)) AS rn
+         st_distance_mp(t.t_pickuploc, b.b_boundary) AS distance_to_building,
+         row_number() OVER (PARTITION BY t.t_tripkey ORDER BY st_distance_mp(t.t_pickuploc, b.b_boundary)) AS rn
      FROM ${TRIP} t CROSS JOIN ${BUILDING} b
-     WHERE st_dwithin_col(t.t_pickuploc, b.b_boundary, 0.05)
+     WHERE st_dwithin_mp(t.t_pickuploc, b.b_boundary, 0.05)
  )
  SELECT t_tripkey, t_pickuploc, b_buildingkey, building_name, distance_to_building
  FROM candidates WHERE rn <= 5
