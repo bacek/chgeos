@@ -19,7 +19,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 #   ExternType::Tag (issue #10252) — no linker flag can suppress the attribute.
 if(CMAKE_CROSSCOMPILING)
   add_compile_options(-fexceptions -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0)
-  add_link_options(-fexceptions -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 -sNO_FILESYSTEM=1)
+  add_link_options(-fexceptions -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 -sNO_FILESYSTEM=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4294967296)
 endif()
 
 add_compile_options($<IF:$<CONFIG:Debug>,-O0,-O2>)

@@ -33,6 +33,10 @@ extern "C" [[noreturn]] void __throw_exception_with_stack_trace(void *) {
     __builtin_unreachable();
 }
 
+// Emscripten imports this from JS host when memory grows (ALLOW_MEMORY_GROWTH=1).
+// ClickHouse doesn't provide it; stub it as a no-op to keep it in-module.
+extern "C" void emscripten_notify_memory_growth(int) {}
+
 // Override assert failure to propagate as a ClickHouse exception instead of abort().
 extern "C" [[noreturn]] void __assert_fail(
     const char *assertion, const char *file, unsigned int line, const char *function)

@@ -2,21 +2,49 @@
     <allow_database_iceberg>true</allow_database_iceberg>
     <allow_experimental_webassembly_udf>true</allow_experimental_webassembly_udf>
     <webassembly_udf_engine>wasmtime</webassembly_udf_engine>
+    <tcp_port>19000</tcp_port>
+    <http_port>18123</http_port>
+    <path>/Users/bacek/src/chgeos/tmp/data</path>
+    <user_files_path>/Users/bacek/src/chgeos/tmp/data/user_files</user_files_path>
     <logger>
       <console>true</console>
     </logger>
     <filesystem_caches>
         <gcs_parquet_cache>
-            <path>/home/bacek/src/chgeos/tmp/filesystem_cache/</path>
+            <path>/Users/bacek/src/chgeos/tmp/filesystem_cache/</path>
             <max_size>1Gi</max_size>
             <cache_policy>LRU</cache_policy>
         </gcs_parquet_cache>
     </filesystem_caches>
+    <users>
+        <default>
+            <password></password>
+            <networks>
+                <ip>::/0</ip>
+            </networks>
+            <profile>default</profile>
+            <quota>default</quota>
+            <access_management>1</access_management>
+        </default>
+    </users>
+    <quotas>
+        <default>
+            <interval>
+                <duration>3600</duration>
+                <queries>0</queries>
+                <errors>0</errors>
+                <result_rows>0</result_rows>
+                <read_rows>0</read_rows>
+                <execution_time>0</execution_time>
+            </interval>
+        </default>
+    </quotas>
     <profiles>
         <default>
             <filesystem_cache_name>gcs_parquet_cache</filesystem_cache_name>
             <enable_filesystem_cache>1</enable_filesystem_cache>
             <webassembly_udf_max_fuel>0</webassembly_udf_max_fuel>
+            <webassembly_udf_max_memory>4294967296</webassembly_udf_max_memory>
         </default>
     </profiles>
 </clickhouse>
