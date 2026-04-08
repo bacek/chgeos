@@ -80,18 +80,35 @@ Reference numbers after PreparedGeometry optimization (April 2026, 6M rows):
 
 ## Architecture
 
-### Two wire formats
+### Three wire formats
 
 **MsgPack** (`src/msgpack.hpp`, `src/mem.hpp`):
 - One call per row; ClickHouse serializes each row as a msgpack sequence
 - `impl_wrapper(buf, n, fn_impl)` — unpacks args row by row
-- Registered via `CH_UDF_FUNC` / `CH_UDF_FUNC_MULTI` macros
+- Registered via `CH_UDF_FUNC` macro
+
+**RowBinary** (`src/rowbinary.hpp`):
+- One call per batch; generic `rowbinary_impl_wrapper` deduces types from `_impl`
+- Registered via `CH_UDF_RB_ONLY` / `CH_UDF_RB_BBOX2` macros
 
 **COLUMNAR_V1** (`src/columnar.hpp`):
 - One call for all N rows; ClickHouse sends columns (not rows)
 - Constant columns (`COL_IS_CONST` flag) send one value broadcast to all rows
 - `columnar_impl_wrapper(buf, n, fn_impl, ...)` — single generic template
-- Registered via `CH_UDF_COL_*` macros; exported as `name_col`
+- Registered via `CH_UDF_COL` / `CH_UDF_COL_BBOX2` / `CH_UDF_COL_PRED3` macros
+
+### Function naming
+
+Each function can have up to three SQL names registered in `clickhouse/create.sql`:
+
+| Suffix | ABI | Example | Registered as |
+|--------|-----|---------|---------------|
+| `_mp` | MsgPack or RowBinary | `st_contains_mp` | direct WASM binding |
+| `_col` | COLUMNAR_V1 | `st_contains_col` | direct WASM binding |
+| *(none)* | SQL alias | `st_contains` | `AS (a, b) -> st_contains_col(a, b)` |
+
+Canonical (unsuffixed) aliases point to `_col` when available, `_mp` otherwise.
+Users call canonical names; suffixed names are available for explicit path selection.
 
 ### Source layout
 
@@ -161,24 +178,22 @@ Callbacks are defined as `constexpr` non-capturing lambdas in `predicates.hpp`:
 ### Registration macros (main.cpp)
 
 ```cpp
-CH_UDF_FUNC(name)                           // MsgPack only
-CH_UDF_RB_ONLY(name)                        // RowBinary only
+// MsgPack / RowBinary (exported as name_mp)
+CH_UDF_FUNC(name)                           // MsgPack
+CH_UDF_RB_ONLY(name)                        // RowBinary
 CH_UDF_RB_BBOX2(name, bbox_op, early_ret)   // RowBinary + bbox shortcut
-CH_UDF_COL_BBOX2(name, bbox_op, early_ret)  // Columnar + bbox + PreparedGeometry
-CH_UDF_COL_PRED3(name)                      // Columnar 3-arg pred (geom,geom,double) + PreparedGeometry dist
-CH_UDF_COL_PRED1(name)                      // Columnar 1-arg pred → bool
-CH_UDF_COL_SCALAR1_F64(name)               // Columnar geom → double
-CH_UDF_COL_SCALAR2_F64(name)               // Columnar (geom,geom) → double
-CH_UDF_COL_SCALAR1_I32(name)               // Columnar geom → int32_t
-CH_UDF_COL_GEOM1(name)                     // Columnar geom → geom
-CH_UDF_COL_GEOM2(name)                     // Columnar (geom,geom) → geom
-CH_UDF_COL_STRING1(name)                   // Columnar geom → string
-CH_UDF_COL_STRING2(name)                   // Columnar (geom,geom) → string
+
+// COLUMNAR_V1 (exported as name_col)
+CH_UDF_COL(name)                            // Generic — all types deduced from name_impl
+CH_UDF_COL_BBOX2(name, bbox_op, early_ret)  // + bbox + PreparedGeometry (2-arg predicates)
+CH_UDF_COL_PRED3(name)                      // + PreparedGeometry dist (3-arg: geom,geom,double)
 ```
 
-Adding a new function: implement `name_impl` in the appropriate `functions/` header,
-add the macro call in `main.cpp`, add a `CREATE OR REPLACE FUNCTION` in `clickhouse/create.sql`.
-No other files need changes.
+Adding a new function:
+1. Implement `name_impl` in the appropriate `functions/` header
+2. Add the macro call in `main.cpp`
+3. Add `CREATE OR REPLACE FUNCTION name_mp` / `name_col` in `clickhouse/create.sql`
+4. Add the canonical alias `CREATE OR REPLACE FUNCTION name AS (...) -> name_col(...)` (or `_mp`)
 
 ## Tests
 
@@ -203,6 +218,6 @@ for building COLUMNAR_V1 buffers in tests — reuse for new columnar tests.
 - **WASM can't link natively** — linker errors in `build/` for the WASM target are expected; only `chgeos_tests` links
 - **`vector<bool>` specialization** — don't iterate `const auto& v : vec<bool>`, use `T v : vec<T>` (bit_reference issue on Apple Clang)
 - **LSP errors** — GEOS headers not in LSP include path; all GEOS-related errors in LSP are false positives
-- **st_dwithin bbox check**: `wkb_bbox(b).expanded(dist)` — the const-col path pre-expands bbox_a by dist so the per-row check is just `bbox_a_expanded.intersects(wkb_bbox(span_b))`
+- **st_dwithin bbox check**: the const-col path uses `bbox_a.intersects(wkb_bbox(span_b).expanded(dist))`
 - **`early_ret=true` for st_disjoint** — bbox miss means bboxes don't intersect → geometries are disjoint → result is `true`
 - **`prep_b_st_containsproperly = nullptr`** — GEOS PreparedGeometry has no B-const acceleration for containsProperly

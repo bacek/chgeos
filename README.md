@@ -81,11 +81,18 @@ chgeos depends on ClickHouse patches that are not yet merged upstream. All of th
 
 **Wire format:** Geometries are `String` columns containing raw EWKB bytes — the same format PostGIS, GeoParquet, and most spatial tools use. No conversion needed at the database boundary.
 
-**ABI:** Every UDF uses `BUFFERED_V1` — ClickHouse passes an entire column as a MsgPack buffer in one call, the module processes all rows in a tight loop, returns results. WASM boundary overhead is constant per query, not per row.
+**Three ABIs:** Functions are registered under three wire formats. The fastest path (COLUMNAR_V1) is the default for all functions that support it:
+- **COLUMNAR_V1** (`ABI COLUMNAR_V1`) — one call for all N rows; ClickHouse sends columns, not rows. Constant columns (e.g. a filter polygon) are sent once, not N times. Exported as `name_col`.
+- **RowBinary** (`ABI BUFFERED_V1`, `serialization_format = 'RowBinary'`) — one call per batch with typed binary encoding. Exported as `name_mp`.
+- **MsgPack** (`ABI BUFFERED_V1`) — original path, used for aggregates and CH native type converters. Also exported as `name_mp`.
 
-**Template machinery:** A single `impl_wrapper<Ret, Args...>` template handles all MsgPack unpacking and packing. Adding a function is two lines: the C++ impl and a macro invocation. No hand-written marshaling.
+Canonical PostGIS-compatible function names (`st_contains`, `st_distance`, etc.) are SQL aliases that route to `_col` when a columnar variant exists, or `_mp` otherwise.
+
+**Template machinery:** A single `columnar_impl_wrapper<Ret, Args...>` template deduces all argument and return types from the `_impl` function pointer. Adding a new columnar function is two lines: the C++ impl and a `CH_UDF_COL(name)` macro invocation.
 
 **Bbox short-circuit:** Binary predicates (`ST_Intersects`, `ST_Contains`, `ST_Within`, etc.) extract bounding boxes directly from raw WKB bytes — no GEOS parse, no heap allocation — and return early when boxes don't overlap. GEOS is only invoked when the bbox check passes.
+
+**PreparedGeometry:** When a geometry column is constant across all rows (e.g. a filter polygon in a WHERE clause), the columnar wrapper parses the WKB once, builds a GEOS `PreparedGeometry` (STR-tree spatial index), and reuses it for all N rows. This accelerates all 11 binary predicates and `ST_DWithin`.
 
 > **Note:** ClickHouse WASM UDFs are experimental and not available on ClickHouse Cloud. The patches chgeos requires are tracked in the [In-flight ClickHouse changes](#in-flight-clickhouse-changes) section above.
 
@@ -332,30 +339,33 @@ clickhouse client -q "INSERT INTO system.webassembly_modules (name, code) VALUES
 
 ### Register functions
 
-Each function must be registered individually. All use `ABI BUFFERED_V1` and MsgPack serialization:
+All function DDL is in `clickhouse/create.sql`. Load them all at once:
+
+```bash
+clickhouse client --multiquery < clickhouse/create.sql
+```
+
+Each function is registered under up to three names:
 
 ```sql
-CREATE OR REPLACE FUNCTION st_geomfromtext
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkt String) RETURNS String
-ABI BUFFERED_V1;
-
-CREATE OR REPLACE FUNCTION st_astext
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS String
-ABI BUFFERED_V1;
-
-CREATE OR REPLACE FUNCTION st_intersects
+-- COLUMNAR_V1 (fastest path, preferred for analytical queries)
+CREATE OR REPLACE FUNCTION st_intersects_col
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
-ABI BUFFERED_V1;
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_distance
+-- RowBinary / MsgPack (fallback, used for aggregates and CH-native type converters)
+CREATE OR REPLACE FUNCTION st_intersects_mp
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Float64
-ABI BUFFERED_V1;
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
 
--- ... (one CREATE FUNCTION per function)
+-- Canonical PostGIS-compatible alias (routes to _col when available, _mp otherwise)
+CREATE OR REPLACE FUNCTION st_intersects AS (a, b) -> st_intersects_col(a, b);
 ```
 
 ### Usage examples
@@ -443,15 +453,19 @@ SELECT st_relate(
 
 ```
 src/
-├── main.cpp              # WASM exports: CH_UDF_FUNC + CH_UDF_BBOX2 registrations
-├── udf.hpp               # impl_wrapper (msgpack row loop) + CH_UDF_FUNC/BBOX2 macros
+├── main.cpp              # WASM exports: macro registrations for all three ABIs
+├── columnar.hpp          # COLUMNAR_V1 wire format, ColView, columnar_impl_wrapper
+├── rowbinary.hpp         # RowBinary wire format, rowbinary_impl_wrapper
+├── msgpack.hpp           # MsgPack wire format, impl_wrapper, registration macros
+├── mem.hpp / mem.cpp     # raw_buffer, clickhouse_create/destroy_buffer
+├── col_prep_op.hpp       # ColPrepOp / ColPrepDistOp type aliases
 ├── functions.hpp         # Aggregator — includes all functions/* headers
 ├── functions/
 │   ├── accessors.hpp     # st_x, st_y, st_z, st_centroid, st_area, st_npoints, st_srid, ...
-│   ├── predicates.hpp    # st_contains, st_intersects, st_touches, st_dwithin, ...
+│   ├── predicates.hpp    # st_contains, st_intersects, ..., PreparedGeometry callbacks
 │   ├── constructors.hpp  # st_geomfromtext/wkb, st_extent, st_envelope, st_makebox2d, ...
 │   ├── transforms.hpp    # st_translate, st_scale, st_transform, st_transform_proj
-│   ├── overlay.hpp       # st_union, st_intersection, st_difference, st_union_agg, st_collect_agg, st_extent_agg, ...
+│   ├── overlay.hpp       # st_union, st_intersection, st_difference, aggregates, ...
 │   ├── processing.hpp    # st_buffer, st_simplify, st_subdivide, st_makevalid, ...
 │   ├── io.hpp            # st_astext, st_asewkt, st_geomfromgeojson, geos_version
 │   ├── ch_to_wkb.hpp     # st_geomfromchpoint/linestring/polygon/multipolygon
@@ -467,7 +481,7 @@ src/
 └── mem.hpp               # RawBuffer, clickhouse_create/destroy_buffer
 ```
 
-**Wire format:** Each UDF receives a `RawBuffer*` containing MsgPack-serialized argument columns and a row count. `impl_wrapper` unpacks rows, calls the `_impl` function, and packs results back into a new `RawBuffer`. Geometry is passed as raw WKB bytes (`std::span<const uint8_t>`).
+**Wire formats:** The preferred path is COLUMNAR_V1 — `columnar_impl_wrapper` receives all N rows as typed columns, deduces arg/return types from the `_impl` function pointer, and dispatches output via `if constexpr`. MsgPack and RowBinary paths exist for aggregates and functions without a columnar variant. Geometry is passed as raw WKB bytes (`std::span<const uint8_t>`).
 
 ## Limitations
 
@@ -477,7 +491,7 @@ src/
 
 - **Planar geometry only.** All calculations are Cartesian — `ST_Distance`, `ST_Area`, `ST_Length` work in the coordinate units of the geometry, not meters on the sphere. Use an appropriate projected CRS (e.g. UTM) for metric results.
 
-- **Geometry parsed on every call.** WKB is re-parsed from bytes for each row invocation — there is no persistent geometry cache across rows or queries.
+- **Geometry parsed per row (with exceptions).** WKB is re-parsed from bytes for each row. The exception is constant geometry columns in COLUMNAR_V1: when one argument is constant (e.g. a filter polygon), PreparedGeometry builds a spatial index once and reuses it for all rows.
 
 - **Experimental ClickHouse feature.** `allow_experimental_webassembly_udf` is not production-ready and not available on ClickHouse Cloud. The UDF API may change between ClickHouse releases.
 
