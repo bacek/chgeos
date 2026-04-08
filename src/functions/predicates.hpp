@@ -157,6 +157,12 @@ constexpr ColPrepOp prep_a_st_touches =
 constexpr ColPrepOp prep_b_st_touches =
     +[](const PreparedGeometry* pb, const Geometry* a) { return pb->touches(a); };
 
+// dwithin: PreparedGeometry::isWithinDistance is available for both directions.
+constexpr ColPrepDistOp prep_a_st_dwithin =
+    +[](const PreparedGeometry* pa, const Geometry* b, double d) { return pa->isWithinDistance(b, d); };
+constexpr ColPrepDistOp prep_b_st_dwithin =
+    +[](const PreparedGeometry* pb, const Geometry* a, double d) { return pb->isWithinDistance(a, d); };
+
 // containsProperly: PreparedGeometry only accelerates the A-const direction.
 constexpr ColPrepOp prep_a_st_containsproperly =
     +[](const PreparedGeometry* pa, const Geometry* b) { return pa->containsProperly(b); };

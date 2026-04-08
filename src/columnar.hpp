@@ -276,10 +276,12 @@ T col_get_arg(const ColView& col, uint32_t row) {
 template <typename Ret, typename... Args>
 raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                   Ret (*impl)(Args...),
-                                  BboxOp    bbox_op   = nullptr,
-                                  bool      early_ret = false,
-                                  ColPrepOp prep_a    = nullptr,
-                                  ColPrepOp prep_b    = nullptr) {
+                                  BboxOp        bbox_op      = nullptr,
+                                  bool          early_ret    = false,
+                                  ColPrepOp     prep_a       = nullptr,
+                                  ColPrepOp     prep_b       = nullptr,
+                                  ColPrepDistOp prep_a_dist  = nullptr,
+                                  ColPrepDistOp prep_b_dist  = nullptr) {
     using PGF = geos::geom::prep::PreparedGeometryFactory;
 
     auto cb = parse_columnar(ptr);
@@ -344,6 +346,47 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                             res[i] = early_ret ? 1u : 0u; continue;
                         }
                         res[i] = prep_b(pb.get(), read_wkb(span_a).get()) ? 1u : 0u;
+                    }
+                    return out;
+                }
+            }
+
+            // 3-arg distance predicate: (geom, geom, double) with PreparedGeometry.
+            // col(0)=geom_a, col(1)=geom_b, col(2)=distance.
+            if constexpr (nargs >= 3) {
+                // A-const dist path
+                if (cols[0].is_const && prep_a_dist) {
+                    if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
+                    auto span_a = cols[0].get_bytes(0);
+                    BBox  bbox_a = wkb_bbox(span_a);
+                    auto  geom_a = read_wkb(span_a);
+                    auto  pa     = PGF::prepare(geom_a.get());
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[1].is_null(i)) { res[i] = 0u; continue; }
+                        auto   span_b = cols[1].get_bytes(i);
+                        double dist   = col_get_arg<double>(cols[2], i);
+                        if (!bbox_a.intersects(wkb_bbox(span_b).expanded(dist))) {
+                            res[i] = 0u; continue;
+                        }
+                        res[i] = prep_a_dist(pa.get(), read_wkb(span_b).get(), dist) ? 1u : 0u;
+                    }
+                    return out;
+                }
+                // B-const dist path
+                if (cols[1].is_const && prep_b_dist) {
+                    if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
+                    auto span_b = cols[1].get_bytes(0);
+                    BBox  bbox_b = wkb_bbox(span_b);
+                    auto  geom_b = read_wkb(span_b);
+                    auto  pb     = PGF::prepare(geom_b.get());
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[0].is_null(i)) { res[i] = 0u; continue; }
+                        auto   span_a = cols[0].get_bytes(i);
+                        double dist   = col_get_arg<double>(cols[2], i);
+                        if (!wkb_bbox(span_a).intersects(bbox_b.expanded(dist))) {
+                            res[i] = 0u; continue;
+                        }
+                        res[i] = prep_b_dist(pb.get(), read_wkb(span_a).get(), dist) ? 1u : 0u;
                     }
                     return out;
                 }
@@ -424,11 +467,13 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             ch::bbox_op, early_ret, ch::prep_a_##name, ch::prep_b_##name);       \
     }
 
-// 3-arg predicate: (geom, geom, double) -> bool  [impl handles its own bbox]
+// 3-arg predicate: (geom, geom, double) -> bool  with PreparedGeometry support.
 #define CH_UDF_COL_PRED3(name)                                                   \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
+            nullptr, false, nullptr, nullptr,                                     \
+            ch::prep_a_##name, ch::prep_b_##name);                               \
     }
 
 // 1-arg scalar: geom -> double

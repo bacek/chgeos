@@ -11,4 +11,8 @@ namespace ch {
 using ColPrepOp = bool (*)(const geos::geom::prep::PreparedGeometry*,
                            const geos::geom::Geometry*);
 
+// Like ColPrepOp but carries an extra double (distance) — used for st_dwithin.
+using ColPrepDistOp = bool (*)(const geos::geom::prep::PreparedGeometry*,
+                               const geos::geom::Geometry*, double);
+
 } // namespace ch

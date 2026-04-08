@@ -8,6 +8,7 @@ add_executable(chgeos_tests
   test_unpack.cpp
   test_bbox_wrapper.cpp
   test_accessors.cpp
+  test_columnar.cpp
   test_constructors.cpp
   test_io.cpp
   test_overlay.cpp
