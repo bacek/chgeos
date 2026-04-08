@@ -29,14 +29,24 @@
 //
 // SQL: ABI COLUMNAR_V1  (no serialization_format needed)
 
+#include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstring>
 #include <limits>
 #include <span>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <type_traits>
+#include <utility>
+
+#include <geos/geom/prep/PreparedGeometryFactory.h>
 
 #include "clickhouse.hpp"
+#include "col_prep_op.hpp"
 #include "geom/wkb.hpp"
+#include "geom/wkb_envelope.hpp"
 #include "mem.hpp"
 
 namespace ch {
@@ -236,317 +246,243 @@ struct ColBytesWriter {
     }
 };
 
-// ── Generic wrappers ──────────────────────────────────────────────────────────
+// ── Input column accessor by type ─────────────────────────────────────────────
 
-// (Span, Span) -> bool
-template <typename Impl>
-raw_buffer* columnar_pred2(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-    auto cb2 = cb.col(1);
-
-    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n);
-    try {
-        col_write_fixed_header<uint8_t>(out, n, COL_FIXED8);
-        uint8_t* res = out->data() + HEADER_BYTES + COL_DESC_BYTES;
-        for (uint32_t i = 0; i < n; ++i)
-            res[i] = (!ca.is_null(i) && !cb2.is_null(i) && impl(ca.get_bytes(i), cb2.get_bytes(i))) ? 1u : 0u;
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
+template <typename T>
+T col_get_arg(const ColView& col, uint32_t row) {
+    if constexpr (std::is_same_v<T, std::span<const uint8_t>>) {
+        return col.get_bytes(row);
+    } else if constexpr (std::is_same_v<T, double>) {
+        return col.get_fixed<double>(row);
+    } else if constexpr (std::is_same_v<T, int32_t>) {
+        return col.get_fixed<int32_t>(row);
+    } else if constexpr (std::is_same_v<T, std::string_view>) {
+        auto s = col.get_bytes(row);
+        return {reinterpret_cast<const char*>(s.data()), s.size()};
+    } else if constexpr (std::is_same_v<T, std::unique_ptr<geos::geom::Geometry>>) {
+        return read_wkb(col.get_bytes(row));
     }
 }
 
-// (Span, Span, double) -> bool
-template <typename Impl>
-raw_buffer* columnar_pred3(raw_buffer* ptr, uint32_t, Impl impl) {
+// ── Generic columnar wrapper ───────────────────────────────────────────────────
+// Mirrors rowbinary_impl_wrapper: takes a typed function pointer, deduces
+// argument and return types, dispatches column reads and output format.
+//
+// Optional parameters (for binary geometry predicates only):
+//   bbox_op  / early_ret — bbox short-circuit applied before WKB parsing
+//   prep_a   — PreparedGeometry callback when col(0) is const
+//   prep_b   — PreparedGeometry callback when col(1) is const
+
+template <typename Ret, typename... Args>
+raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
+                                  Ret (*impl)(Args...),
+                                  BboxOp    bbox_op   = nullptr,
+                                  bool      early_ret = false,
+                                  ColPrepOp prep_a    = nullptr,
+                                  ColPrepOp prep_b    = nullptr) {
+    using PGF = geos::geom::prep::PreparedGeometryFactory;
+
     auto cb = parse_columnar(ptr);
     uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-    auto cb2 = cb.col(1);
-    auto cc  = cb.col(2);
+    constexpr size_t nargs = sizeof...(Args);
 
-    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n);
+    std::array<ColView, nargs> cols;
+    for (size_t j = 0; j < nargs; ++j) cols[j] = cb.col(static_cast<uint32_t>(j));
+
+    // Call impl with args read from each column for a given row.
+    auto invoke = [&](uint32_t row) {
+        return [&]<size_t... I>(std::index_sequence<I...>) {
+            return impl(col_get_arg<std::decay_t<Args>>(cols[I], row)...);
+        }(std::make_index_sequence<nargs>{});
+    };
+
+    // Check whether any column is null for a given row.
+    auto any_null = [&](uint32_t row) {
+        bool null = false;
+        for (size_t j = 0; j < nargs; ++j) null |= cols[j].is_null(row);
+        return null;
+    };
+
+    raw_buffer* out = nullptr;
     try {
-        col_write_fixed_header<uint8_t>(out, n, COL_FIXED8);
-        uint8_t* res = out->data() + HEADER_BYTES + COL_DESC_BYTES;
-        for (uint32_t i = 0; i < n; ++i)
-            res[i] = (!ca.is_null(i) && !cb2.is_null(i) &&
-                      impl(ca.get_bytes(i), cb2.get_bytes(i), cc.get_fixed<double>(i))) ? 1u : 0u;
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
-}
+        // ── bool output (predicates) ──────────────────────────────────────────
+        if constexpr (std::is_same_v<Ret, bool>) {
+            out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n);
+            col_write_fixed_header<uint8_t>(out, n, COL_FIXED8);
+            uint8_t* res = out->data() + HEADER_BYTES + COL_DESC_BYTES;
 
-// (Span) -> double
-template <typename Impl>
-raw_buffer* columnar_scalar1_f64(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
+            if constexpr (nargs >= 2) {
+                // A-const fast path: prepare col(0) once, vary col(1)
+                if (cols[0].is_const && prep_a) {
+                    if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
+                    auto span_a = cols[0].get_bytes(0);
+                    BBox  bbox_a = wkb_bbox(span_a);
+                    auto  geom_a = read_wkb(span_a);
+                    auto  pa     = PGF::prepare(geom_a.get());
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[1].is_null(i)) { res[i] = 0u; continue; }
+                        auto span_b = cols[1].get_bytes(i);
+                        if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
+                            res[i] = early_ret ? 1u : 0u; continue;
+                        }
+                        res[i] = prep_a(pa.get(), read_wkb(span_b).get()) ? 1u : 0u;
+                    }
+                    return out;
+                }
 
-    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 8u);
-    try {
-        col_write_fixed_header<double>(out, n, COL_FIXED64);
-        double* res = reinterpret_cast<double*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
-        for (uint32_t i = 0; i < n; ++i)
-            res[i] = ca.is_null(i) ? std::numeric_limits<double>::quiet_NaN() : impl(ca.get_bytes(i));
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
-}
+                // B-const fast path: prepare col(1) once, vary col(0)
+                if (cols[1].is_const && prep_b) {
+                    if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
+                    auto span_b = cols[1].get_bytes(0);
+                    BBox  bbox_b = wkb_bbox(span_b);
+                    auto  geom_b = read_wkb(span_b);
+                    auto  pb     = PGF::prepare(geom_b.get());
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[0].is_null(i)) { res[i] = 0u; continue; }
+                        auto span_a = cols[0].get_bytes(i);
+                        if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
+                            res[i] = early_ret ? 1u : 0u; continue;
+                        }
+                        res[i] = prep_b(pb.get(), read_wkb(span_a).get()) ? 1u : 0u;
+                    }
+                    return out;
+                }
+            }
 
-// (Span, Span) -> double
-template <typename Impl>
-raw_buffer* columnar_scalar2_f64(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-    auto cb2 = cb.col(1);
+            // Baseline
+            for (uint32_t i = 0; i < n; ++i) {
+                if (any_null(i)) { res[i] = 0u; continue; }
+                if constexpr (nargs >= 2) {
+                    if (bbox_op && !bbox_op(wkb_bbox(cols[0].get_bytes(i)),
+                                            wkb_bbox(cols[1].get_bytes(i)))) {
+                        res[i] = early_ret ? 1u : 0u; continue;
+                    }
+                }
+                res[i] = invoke(i) ? 1u : 0u;
+            }
+            return out;
 
-    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 8u);
-    try {
-        col_write_fixed_header<double>(out, n, COL_FIXED64);
-        double* res = reinterpret_cast<double*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
-        for (uint32_t i = 0; i < n; ++i)
-            res[i] = (ca.is_null(i) || cb2.is_null(i))
-                ? std::numeric_limits<double>::quiet_NaN()
-                : impl(ca.get_bytes(i), cb2.get_bytes(i));
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
-}
+        // ── double output ─────────────────────────────────────────────────────
+        } else if constexpr (std::is_same_v<Ret, double>) {
+            out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 8u);
+            col_write_fixed_header<double>(out, n, COL_FIXED64);
+            double* res = reinterpret_cast<double*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
+            for (uint32_t i = 0; i < n; ++i)
+                res[i] = any_null(i) ? std::numeric_limits<double>::quiet_NaN() : invoke(i);
+            return out;
 
-// (Span, Span) -> WKB
-template <typename Impl>
-raw_buffer* columnar_geom2(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-    auto cb2 = cb.col(1);
+        // ── int32_t output ────────────────────────────────────────────────────
+        } else if constexpr (std::is_same_v<Ret, int32_t>) {
+            out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 4u);
+            col_write_fixed_header<int32_t>(out, n, COL_FIXED32);
+            int32_t* res = reinterpret_cast<int32_t*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
+            for (uint32_t i = 0; i < n; ++i)
+                res[i] = any_null(i) ? 0 : invoke(i);
+            return out;
 
-    raw_buffer* out = clickhouse_create_buffer(0);
-    try {
-        ColBytesWriter w(out, n);
-        for (uint32_t i = 0; i < n; ++i) {
-            if (ca.is_null(i) || cb2.is_null(i)) { w.push_null(); continue; }
-            w.push_geom(impl(read_wkb(ca.get_bytes(i)), read_wkb(cb2.get_bytes(i))));
+        // ── Geometry output (nullable) ────────────────────────────────────────
+        } else if constexpr (std::is_same_v<Ret, std::unique_ptr<geos::geom::Geometry>>) {
+            out = clickhouse_create_buffer(0);
+            ColBytesWriter w(out, n);
+            for (uint32_t i = 0; i < n; ++i) {
+                if (any_null(i)) { w.push_null(); continue; }
+                w.push_geom(invoke(i));
+            }
+            w.finish();
+            return out;
+
+        // ── string output (non-nullable — preserves current columnar_string* behaviour)
+        } else if constexpr (std::is_same_v<Ret, std::string>) {
+            out = clickhouse_create_buffer(0);
+            ColBytesWriter w(out, n, /*nullable=*/false);
+            for (uint32_t i = 0; i < n; ++i) {
+                std::string s = invoke(i);
+                w.push_bytes({reinterpret_cast<const uint8_t*>(s.data()), s.size()});
+            }
+            w.finish();
+            return out;
         }
-        w.finish();
-        return out;
+
     } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        if (out) clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
         ch::panic(e.what());
     }
-}
-
-// (Span) -> WKB
-template <typename Impl>
-raw_buffer* columnar_geom1(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-
-    raw_buffer* out = clickhouse_create_buffer(0);
-    try {
-        ColBytesWriter w(out, n);
-        for (uint32_t i = 0; i < n; ++i) {
-            if (ca.is_null(i)) { w.push_null(); continue; }
-            w.push_geom(impl(read_wkb(ca.get_bytes(i))));
-        }
-        w.finish();
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
-}
-
-// (Span) -> bool
-template <typename Impl>
-raw_buffer* columnar_pred1(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-
-    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n);
-    try {
-        col_write_fixed_header<uint8_t>(out, n, COL_FIXED8);
-        uint8_t* res = out->data() + HEADER_BYTES + COL_DESC_BYTES;
-        for (uint32_t i = 0; i < n; ++i)
-            res[i] = (!ca.is_null(i) && impl(ca.get_bytes(i))) ? 1u : 0u;
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
-}
-
-// (Span) -> int32_t
-template <typename Impl>
-raw_buffer* columnar_scalar1_i32(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-
-    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 4u);
-    try {
-        col_write_fixed_header<int32_t>(out, n, COL_FIXED32);
-        int32_t* res = reinterpret_cast<int32_t*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
-        for (uint32_t i = 0; i < n; ++i)
-            res[i] = ca.is_null(i) ? 0 : impl(ca.get_bytes(i));
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
-}
-
-// (Span) -> std::string  (non-nullable output)
-template <typename Impl>
-raw_buffer* columnar_string1(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-
-    raw_buffer* out = clickhouse_create_buffer(0);
-    try {
-        ColBytesWriter w(out, n, /*nullable=*/false);
-        for (uint32_t i = 0; i < n; ++i) {
-            std::string s = impl(ca.get_bytes(i));
-            w.push_bytes({reinterpret_cast<const uint8_t*>(s.data()), s.size()});
-        }
-        w.finish();
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
-}
-
-// (Span, Span) -> std::string  (non-nullable output)
-template <typename Impl>
-raw_buffer* columnar_string2(raw_buffer* ptr, uint32_t, Impl impl) {
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
-    auto ca = cb.col(0);
-    auto cb2 = cb.col(1);
-
-    raw_buffer* out = clickhouse_create_buffer(0);
-    try {
-        ColBytesWriter w(out, n, /*nullable=*/false);
-        for (uint32_t i = 0; i < n; ++i) {
-            std::string s = impl(ca.get_bytes(i), cb2.get_bytes(i));
-            w.push_bytes({reinterpret_cast<const uint8_t*>(s.data()), s.size()});
-        }
-        w.finish();
-        return out;
-    } catch (const std::exception& e) {
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
+    __builtin_unreachable();
 }
 
 } // namespace ch
 
 // ── Registration macros ───────────────────────────────────────────────────────
+// All macros route through columnar_impl_wrapper; return types and arg types
+// are deduced from the _impl function pointer.
 
-// 2-arg binary predicate with bbox shortcut — exports <name>_col
+// 2-arg binary predicate with bbox shortcut + PreparedGeometry optimisation.
 #define CH_UDF_COL_BBOX2(name, bbox_op, early_ret)                               \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_pred2(ptr, num_rows,                                 \
-            +[](std::span<const uint8_t> a, std::span<const uint8_t> b) -> bool {\
-                return ch::with_bbox(a, b, ch::bbox_op, early_ret,               \
-                    ch::name##_impl);                                             \
-            });                                                                   \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
+            ch::bbox_op, early_ret, ch::prep_a_##name, ch::prep_b_##name);       \
     }
 
-// 3-arg predicate: (geom, geom, double) -> bool
+// 3-arg predicate: (geom, geom, double) -> bool  [impl handles its own bbox]
 #define CH_UDF_COL_PRED3(name)                                                   \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_pred3(ptr, num_rows, ch::name##_impl);               \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }
 
-// 1-arg scalar(Span -> double) — for impls that take unique_ptr<Geometry>
+// 1-arg scalar: geom -> double
 #define CH_UDF_COL_SCALAR1_F64(name)                                             \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_scalar1_f64(ptr, num_rows,                           \
-            +[](std::span<const uint8_t> a) {                                    \
-                return ch::name##_impl(ch::read_wkb(a));                         \
-            });                                                                   \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }
 
-// 2-arg scalar(Span, Span -> double) — for impls that take unique_ptr<Geometry>
+// 2-arg scalar: (geom, geom) -> double
 #define CH_UDF_COL_SCALAR2_F64(name)                                             \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_scalar2_f64(ptr, num_rows,                           \
-            +[](std::span<const uint8_t> a, std::span<const uint8_t> b) {       \
-                return ch::name##_impl(ch::read_wkb(a), ch::read_wkb(b));       \
-            });                                                                   \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }
 
-// 2-arg geom->geom
+// 2-arg geometry transform: (geom, geom) -> geom
 #define CH_UDF_COL_GEOM2(name)                                                   \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_geom2(ptr, num_rows, ch::name##_impl);               \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }
 
-// 1-arg geom->geom
+// 1-arg geometry transform: geom -> geom
 #define CH_UDF_COL_GEOM1(name)                                                   \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_geom1(ptr, num_rows, ch::name##_impl);               \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }
 
-// 1-arg predicate (geom -> bool) → UInt8
+// 1-arg predicate: geom -> bool
 #define CH_UDF_COL_PRED1(name)                                                   \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_pred1(ptr, num_rows,                                 \
-            +[](std::span<const uint8_t> a) -> bool {                            \
-                return ch::name##_impl(ch::read_wkb(a));                         \
-            });                                                                   \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }
 
-// 1-arg scalar (geom -> int32_t) → Int32
+// 1-arg scalar: geom -> int32_t
 #define CH_UDF_COL_SCALAR1_I32(name)                                             \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_scalar1_i32(ptr, num_rows,                           \
-            +[](std::span<const uint8_t> a) {                                    \
-                return ch::name##_impl(ch::read_wkb(a));                         \
-            });                                                                   \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }
 
-// 1-arg string output (geom -> std::string) → String (non-nullable)
+// 1-arg string output: geom -> std::string  (non-nullable)
 #define CH_UDF_COL_STRING1(name)                                                 \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_string1(ptr, num_rows,                               \
-            +[](std::span<const uint8_t> a) {                                    \
-                return ch::name##_impl(ch::read_wkb(a));                         \
-            });                                                                   \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }
 
-// 2-arg string output (geom, geom -> std::string) → String (non-nullable)
+// 2-arg string output: (geom, geom) -> std::string  (non-nullable)
 #define CH_UDF_COL_STRING2(name)                                                 \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
-        return ch::columnar_string2(ptr, num_rows,                               \
-            +[](std::span<const uint8_t> a, std::span<const uint8_t> b) {       \
-                return ch::name##_impl(ch::read_wkb(a), ch::read_wkb(b));       \
-            });                                                                   \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
     }

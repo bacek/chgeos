@@ -7,13 +7,16 @@
 #include <geos/geom/IntersectionMatrix.h>
 #include <geos/geom/prep/PreparedGeometryFactory.h>
 
+#include "../col_prep_op.hpp"
 #include "../geom/wkb.hpp"
 #include "../geom/wkb_envelope.hpp"
 
 namespace ch {
 
-using Geometry = geos::geom::Geometry;
-using Span     = std::span<const uint8_t>;
+using Geometry              = geos::geom::Geometry;
+using Span                  = std::span<const uint8_t>;
+using PreparedGeometry      = geos::geom::prep::PreparedGeometry;
+using PreparedGeometryFactory = geos::geom::prep::PreparedGeometryFactory;
 
 // ── Bbox operations ────────────────────────────────────────────────────────────
 
@@ -103,5 +106,67 @@ inline std::string st_relate_impl(std::unique_ptr<Geometry> a, std::unique_ptr<G
 inline bool st_relate_pattern_impl(std::unique_ptr<Geometry> a, std::unique_ptr<Geometry> b, std::string_view pattern) {
     return a->relate(*b, std::string(pattern));
 }
+
+// ── Per-column PreparedGeometry callbacks ─────────────────────────────────────
+// prep_a_*: col(0) is const — prep is built from A, other is the variable B.
+// prep_b_*: col(1) is const — prep is built from B, other is the variable A.
+// All must be non-capturing (+[]) to convert to ColPrepOp (raw function pointer).
+
+constexpr ColPrepOp prep_a_st_contains =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->contains(b); };
+constexpr ColPrepOp prep_b_st_contains =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->within(a); };
+
+constexpr ColPrepOp prep_a_st_within =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->within(b); };
+constexpr ColPrepOp prep_b_st_within =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->contains(a); };
+
+constexpr ColPrepOp prep_a_st_covers =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->covers(b); };
+constexpr ColPrepOp prep_b_st_covers =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->coveredBy(a); };
+
+constexpr ColPrepOp prep_a_st_coveredby =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->coveredBy(b); };
+constexpr ColPrepOp prep_b_st_coveredby =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->covers(a); };
+
+constexpr ColPrepOp prep_a_st_intersects =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->intersects(b); };
+constexpr ColPrepOp prep_b_st_intersects =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->intersects(a); };
+
+constexpr ColPrepOp prep_a_st_disjoint =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->disjoint(b); };
+constexpr ColPrepOp prep_b_st_disjoint =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->disjoint(a); };
+
+constexpr ColPrepOp prep_a_st_overlaps =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->overlaps(b); };
+constexpr ColPrepOp prep_b_st_overlaps =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->overlaps(a); };
+
+constexpr ColPrepOp prep_a_st_crosses =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->crosses(b); };
+constexpr ColPrepOp prep_b_st_crosses =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->crosses(a); };
+
+constexpr ColPrepOp prep_a_st_touches =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->touches(b); };
+constexpr ColPrepOp prep_b_st_touches =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->touches(a); };
+
+// containsProperly: PreparedGeometry only accelerates the A-const direction.
+constexpr ColPrepOp prep_a_st_containsproperly =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->containsProperly(b); };
+constexpr ColPrepOp prep_b_st_containsproperly = nullptr;  // no PrepGeom accel for B-const
+
+// equals: PreparedGeometry has no equals(); fall through to underlying Geometry.
+// Still saves WKB re-parse for the const side.
+constexpr ColPrepOp prep_a_st_equals =
+    +[](const PreparedGeometry* pa, const Geometry* b) { return pa->getGeometry().equals(b); };
+constexpr ColPrepOp prep_b_st_equals =
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->getGeometry().equals(a); };
 
 } // namespace ch
