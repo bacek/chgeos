@@ -50,10 +50,23 @@ run() {
     local label="$1"; local query="$2"
     [[ -n "${QUERY_FILTER}" && "${label}" != "${QUERY_FILTER}" ]] && return 0
 
-    local times=() sum=0 min=999999 max=0 timed_out=0
+    local times=() sum=0 min=999999 max=0 timed_out=0 rows="?"
     for (( i=0; i<RUNS; i++ )); do
         local ms
-        ms=$(run_once "${query}")
+        if (( i == 0 )); then
+            local tmpf; tmpf=$(mktemp)
+            local secs
+            secs=$( "${CH}" client --port "${PORT}" --time -q "${query}" 2>&1 1>"${tmpf}" \
+                    | grep -E '^[0-9]+(\.[0-9]+)?$' | tail -1 ) || true
+            [[ -z "${secs}" ]] && secs="${TIMEOUT}"
+            ms=$(awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}")
+            if [[ "${ms}" -lt $(( TIMEOUT * 1000 - 500 )) ]]; then
+                rows=$(wc -l < "${tmpf}" | tr -d ' ')
+            fi
+            rm -f "${tmpf}"
+        else
+            ms=$(run_once "${query}")
+        fi
         [[ "${ms}" -ge $(( TIMEOUT * 1000 - 500 )) ]] && { timed_out=1; break; }
         times+=("${ms}")
         sum=$(( sum + ms ))
@@ -62,12 +75,12 @@ run() {
     done
 
     if (( timed_out )); then
-        printf "| %-6s | %8s | %8s | %8s |\n" "${label}" "TIMEOUT" "TIMEOUT" "TIMEOUT"
+        printf "| %-6s | %8s | %8s | %8s | %10s |\n" "${label}" "TIMEOUT" "TIMEOUT" "TIMEOUT" "${rows}"
         return
     fi
     local avg=$(( sum / RUNS ))
-    printf "| %-6s | %8s | %8s | %8s |\n" \
-        "${label}" "${min}ms" "${avg}ms" "${max}ms"
+    printf "| %-6s | %8s | %8s | %8s | %10s |\n" \
+        "${label}" "${min}ms" "${avg}ms" "${max}ms" "${rows}"
 }
 
 echo ""
@@ -76,8 +89,8 @@ trip_count=$("${CH}" client --port "${PORT}" -q \
     "SELECT count() FROM ${TRIP}" 2>/dev/null || echo '?')
 echo "trip rows: ${trip_count}"
 echo ""
-printf "| %-6s | %8s | %8s | %8s |\n" "Query" "min" "avg" "max"
-echo  "|--------|----------|----------|----------|"
+printf "| %-6s | %8s | %8s | %8s | %10s |\n" "Query" "min" "avg" "max" "rows"
+echo  "|--------|----------|----------|----------|------------|"
 
 # q1: trips within 50km of Sedona city center
 run "Q1" \
@@ -124,7 +137,7 @@ run "Q4" \
 run "Q5" \
 "SELECT c.c_custkey, c.c_name AS customer_name,
     toStartOfMonth(t.t_pickuptime) AS pickup_month,
-    st_area_col(st_convexhull_col(st_collect_agg(t.t_dropoffloc))) AS monthly_travel_hull_area,
+    st_area_col(st_convexhull_col(st_collect_agg_mp(groupArray(t.t_dropoffloc)))) AS monthly_travel_hull_area,
     count() AS dropoff_count
  FROM ${TRIP} t
  JOIN ${CUSTOMER} c ON t.t_custkey = c.c_custkey
