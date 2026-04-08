@@ -1,0 +1,27 @@
+<!-- This file was generated automatically.
+     Do not edit it: it is likely to be discarded and generated again before it's read next time.
+     Files used to generate this file:
+       /Users/bacek/src/chgeos/clickhouse/config-test.xml      -->
+
+<clickhouse>
+    <allow_database_iceberg>true</allow_database_iceberg>
+    <allow_experimental_webassembly_udf>true</allow_experimental_webassembly_udf>
+    <webassembly_udf_engine>wasmtime</webassembly_udf_engine>
+    <logger>
+      <console>true</console>
+    </logger>
+    <filesystem_caches>
+        <gcs_parquet_cache>
+            <path>/home/bacek/src/chgeos/tmp/filesystem_cache/</path>
+            <max_size>1Gi</max_size>
+            <cache_policy>LRU</cache_policy>
+        </gcs_parquet_cache>
+    </filesystem_caches>
+    <profiles>
+        <default>
+            <filesystem_cache_name>gcs_parquet_cache</filesystem_cache_name>
+            <enable_filesystem_cache>1</enable_filesystem_cache>
+            <webassembly_udf_max_fuel>0</webassembly_udf_max_fuel>
+        </default>
+    </profiles>
+</clickhouse>

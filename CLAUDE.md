@@ -91,7 +91,7 @@ Reference numbers after PreparedGeometry optimization (April 2026, 6M rows):
 - One call for all N rows; ClickHouse sends columns (not rows)
 - Constant columns (`COL_IS_CONST` flag) send one value broadcast to all rows
 - `columnar_impl_wrapper(buf, n, fn_impl, ...)` — single generic template
-- Registered via `CH_UDF_COL_*` macros; exported as `name_col`
+- Registered via `CH_UDF_COL_*` macros; exported as `name` (canonical — no suffix)
 
 ### Source layout
 
