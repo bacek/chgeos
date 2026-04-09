@@ -49,7 +49,6 @@ run_once() {
 run() {
     local label="$1"; local query="$2"
     [[ -n "${QUERY_FILTER}" && "${label}" != "${QUERY_FILTER}" ]] && return 0
-
     local times=() sum=0 min=999999 max=0 timed_out=0 rows="?"
     for (( i=0; i<RUNS; i++ )); do
         local ms

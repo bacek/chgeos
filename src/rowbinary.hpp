@@ -84,14 +84,10 @@ inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
 }
 
 // vector<unique_ptr<Geometry>>: read Array(String) field, parse each as WKB.
-// RowBinary Array layout: uint64_t count, then count × String (varuint + bytes).
+// RowBinary Array layout: VarUInt count, then count × String (varuint + bytes).
 inline void rb_unpack_arg(const uint8_t *& ptr, const uint8_t * end,
                           std::vector<std::unique_ptr<geos::geom::Geometry>> & arg) {
-    if (static_cast<uint64_t>(end - ptr) < sizeof(uint64_t))
-        throw std::runtime_error("RowBinary: array count truncated");
-    uint64_t count;
-    std::memcpy(&count, ptr, sizeof(uint64_t));
-    ptr += sizeof(uint64_t);
+    uint64_t count = rb_read_varuint(ptr, end);
     arg.reserve(static_cast<size_t>(count));
     for (uint64_t i = 0; i < count; ++i) {
         std::span<const uint8_t> raw;
