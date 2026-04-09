@@ -22,8 +22,13 @@ if(CMAKE_CROSSCOMPILING)
   add_link_options(-fexceptions -fwasm-exceptions -sWASM_LEGACY_EXCEPTIONS=0 -sNO_FILESYSTEM=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=1073741824)
 endif()
 
-add_compile_options($<IF:$<CONFIG:Debug>,-O0,-O2>)
-add_link_options($<IF:$<CONFIG:Debug>,-O0,-O2>)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "" FORCE)
+endif()
+# Debug: -O0; Release (and WASM): -O3 -DNDEBUG from CMAKE_BUILD_TYPE defaults.
+# Only force -O0 for Debug to avoid overriding Release's -O3.
+add_compile_options($<$<CONFIG:Debug>:-O0>)
+add_link_options($<$<CONFIG:Debug>:-O0>)
 
 add_subdirectory(third-party/geos geos)
 if(CMAKE_CROSSCOMPILING)

@@ -111,6 +111,27 @@ struct ColView {
         std::memcpy(&v, data + idx * sizeof(T), sizeof(T));
         return v;
     }
+
+    // True when every row in the batch carries identical bytes — covers the
+    // cross-join pattern where CH repeats the same zone WKB N times without
+    // setting COL_IS_CONST (which is only set for compile-time literals).
+    //
+    // Two-step check:
+    //  1. O(1): all rows have equal size  →  offsets[N] == N * offsets[1]
+    //  2. O(size): first and last rows have equal bytes  →  memcmp
+    // For real geometry data the size check alone rejects nearly all mixes;
+    // memcmp is a final guard.
+    bool is_effectively_const_bytes() const noexcept {
+        if (is_const) return true;
+        if (!offsets || row_count < 2) return false;
+        uint32_t elem_stride = offsets[1];           // bytes from row 0 start to row 1 start
+        if (elem_stride == 0) return false;           // empty column
+        if (offsets[row_count] != elem_stride * row_count) return false;  // unequal sizes
+        // Compare first row bytes with last row bytes (excluding null terminator).
+        uint32_t wkb_len = elem_stride > 0 ? elem_stride - 1 : 0;
+        uint32_t last_start = offsets[row_count - 1];
+        return std::memcmp(data, data + last_start, wkb_len) == 0;
+    }
 };
 
 struct ColumnarBuf {
@@ -315,7 +336,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 
             if constexpr (nargs >= 2) {
                 // A-const fast path: prepare col(0) once, vary col(1)
-                if (cols[0].is_const && prep_a) {
+                if (cols[0].is_effectively_const_bytes() && prep_a) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_a = cols[0].get_bytes(0);
                     BBox  bbox_a = wkb_bbox(span_a);
@@ -333,7 +354,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                 }
 
                 // B-const fast path: prepare col(1) once, vary col(0)
-                if (cols[1].is_const && prep_b) {
+                if (cols[1].is_effectively_const_bytes() && prep_b) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_b = cols[1].get_bytes(0);
                     BBox  bbox_b = wkb_bbox(span_b);
@@ -355,7 +376,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             // col(0)=geom_a, col(1)=geom_b, col(2)=distance.
             if constexpr (nargs >= 3) {
                 // A-const dist path
-                if (cols[0].is_const && prep_a_dist) {
+                if (cols[0].is_effectively_const_bytes() && prep_a_dist) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_a = cols[0].get_bytes(0);
                     BBox  bbox_a = wkb_bbox(span_a);
@@ -373,7 +394,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     return out;
                 }
                 // B-const dist path
-                if (cols[1].is_const && prep_b_dist) {
+                if (cols[1].is_effectively_const_bytes() && prep_b_dist) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_b = cols[1].get_bytes(0);
                     BBox  bbox_b = wkb_bbox(span_b);
