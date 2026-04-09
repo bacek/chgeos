@@ -39,41 +39,6 @@ endif()
 option(BUILD_EXAMPLES "..." OFF)
 add_subdirectory(third-party/msgpack23 msgpack23)
 
-# Poco Foundation only — for LRUCache used in WASM UDF PreparedGeometry cache.
-set(ENABLE_FOUNDATION             ON  CACHE BOOL "" FORCE)
-set(ENABLE_ENCODINGS              OFF CACHE BOOL "" FORCE)
-set(ENABLE_XML                    OFF CACHE BOOL "" FORCE)
-set(ENABLE_JSON                   OFF CACHE BOOL "" FORCE)
-set(ENABLE_MONGODB                OFF CACHE BOOL "" FORCE)
-set(ENABLE_DATA                   OFF CACHE BOOL "" FORCE)
-set(ENABLE_DATA_SQLITE            OFF CACHE BOOL "" FORCE)
-set(ENABLE_REDIS                  OFF CACHE BOOL "" FORCE)
-set(ENABLE_PROMETHEUS             OFF CACHE BOOL "" FORCE)
-set(ENABLE_PDF                    OFF CACHE BOOL "" FORCE)
-set(ENABLE_UTIL                   OFF CACHE BOOL "" FORCE)
-set(ENABLE_NET                    OFF CACHE BOOL "" FORCE)
-set(ENABLE_NETSSL                 OFF CACHE BOOL "" FORCE)
-set(ENABLE_NETSSL_WIN             OFF CACHE BOOL "" FORCE)
-set(ENABLE_ZIP                    OFF CACHE BOOL "" FORCE)
-set(ENABLE_SEVENZIP               OFF CACHE BOOL "" FORCE)
-set(ENABLE_CPPPARSER              OFF CACHE BOOL "" FORCE)
-set(ENABLE_POCODOC                OFF CACHE BOOL "" FORCE)
-set(ENABLE_PAGECOMPILER           OFF CACHE BOOL "" FORCE)
-set(ENABLE_PAGECOMPILER_FILE2PAGE OFF CACHE BOOL "" FORCE)
-set(ENABLE_ACTIVERECORD           OFF CACHE BOOL "" FORCE)
-set(ENABLE_ACTIVERECORD_COMPILER  OFF CACHE BOOL "" FORCE)
-set(ENABLE_TESTS                  OFF CACHE BOOL "" FORCE)
-set(ENABLE_SAMPLES                OFF CACHE BOOL "" FORCE)
-set(POCO_UNBUNDLED                OFF CACHE BOOL "" FORCE)
-add_subdirectory(third-party/poco poco)
-if(CMAKE_CROSSCOMPILING)
-  # Emscripten treats itself as Linux but lacks several Linux-specific headers.
-  # Inject a stubs directory first so Poco Foundation finds them as no-ops.
-  target_compile_definitions(Foundation PRIVATE POCO_NO_INOTIFY)
-  target_include_directories(Foundation BEFORE PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/wasm-stubs)
-endif()
-
 add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/mem.cpp)
 
 if(NOT CMAKE_CROSSCOMPILING)
@@ -90,9 +55,7 @@ endif()
 
 target_link_libraries(chgeos PRIVATE geos)
 target_link_libraries(chgeos PRIVATE msgpack23)
-target_link_libraries(chgeos PRIVATE Poco::Foundation)
 target_include_directories(chgeos PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/geos/capi)
-target_include_directories(chgeos PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third-party/poco/Foundation/include)
 
 if(CMAKE_CROSSCOMPILING)
   # Set properties to produce .wasm and configure linker flags

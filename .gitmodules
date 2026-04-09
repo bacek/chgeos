@@ -7,6 +7,3 @@
 [submodule "third-party/msgpack23"]
 	path = third-party/msgpack23
 	url = https://github.com/rwindegger/msgpack23.git
-[submodule "third-party/poco"]
-	path = third-party/poco
-	url = https://github.com/pocoproject/poco.git
