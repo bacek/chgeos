@@ -33,6 +33,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -42,6 +43,9 @@
 #include <utility>
 
 #include <geos/geom/prep/PreparedGeometryFactory.h>
+
+#include <Poco/LRUCache.h>
+#include <Poco/Mutex.h>  // for Poco::NullMutex
 
 #include "clickhouse.hpp"
 #include "col_prep_op.hpp"
@@ -285,6 +289,52 @@ T col_get_arg(const ColView& col, uint32_t row) {
     }
 }
 
+// ── PreparedGeometry LRU cache ────────────────────────────────────────────────
+// Accelerates cross-join patterns where a geometry column carries only a small
+// number of distinct WKB values but COL_IS_CONST is not set (e.g. 3 zone
+// polygons joined against 6M trip rows).
+//
+// Uses Poco::LRUCache so entries are evicted LRU when capacity is exceeded —
+// no cap-and-refuse fallback needed.
+//
+// Key: 64-bit fingerprint from WKB size + 8 bytes at the midpoint.
+//   The midpoint is used instead of the header bytes because same-type WKBs
+//   (polygon/multipolygon) share identical headers; coordinate data is unique.
+//
+// geom is declared before prep so that on destruction prep is destroyed first
+// (PreparedGeometry holds a reference to Geometry and must not outlive it).
+struct PrepEntry {
+    BBox                                                      bbox;
+    std::shared_ptr<geos::geom::Geometry>                     geom;
+    std::shared_ptr<const geos::geom::prep::PreparedGeometry> prep;
+};
+
+inline uint64_t prep_cache_key(std::span<const uint8_t> wkb) noexcept {
+    uint32_t sz   = static_cast<uint32_t>(wkb.size());
+    uint64_t mid8 = 0;
+    if (wkb.size() >= 16) {
+        size_t mid = wkb.size() / 2;
+        std::memcpy(&mid8, wkb.data() + mid, std::min<size_t>(8u, wkb.size() - mid));
+    } else if (!wkb.empty()) {
+        std::memcpy(&mid8, wkb.data(), std::min<size_t>(wkb.size(), sizeof mid8));
+    }
+    // Knuth multiplicative hash to mix size into the key so different-sized
+    // polygons that happen to share midpoint bytes don't collide.
+    return static_cast<uint64_t>(sz) * 11400714819323198485ULL ^ mid8;
+}
+
+inline PrepEntry make_prep_entry(std::span<const uint8_t> wkb) {
+    PrepEntry e;
+    e.bbox = wkb_bbox(wkb);
+    e.geom = read_wkb(wkb);                                                     // unique_ptr → shared_ptr
+    e.prep = geos::geom::prep::PreparedGeometryFactory::prepare(e.geom.get());  // unique_ptr → shared_ptr
+    return e;
+}
+
+// Convenience alias — WASM is single-threaded per instance, so NullMutex suffices.
+template <class TKey, class TValue>
+using PrepLRU = Poco::LRUCache<TKey, TValue, Poco::NullMutex, Poco::NullMutex>;
+
 // ── Generic columnar wrapper ───────────────────────────────────────────────────
 // Mirrors rowbinary_impl_wrapper: takes a typed function pointer, deduces
 // argument and return types, dispatches column reads and output format.
@@ -339,6 +389,8 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                 if (cols[0].is_effectively_const_bytes() && prep_a) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_a = cols[0].get_bytes(0);
+                    ch::log(ch::log_level::trace, std::format(
+                        "chgeos prep: A-const path, n={}, col0_wkb_size={}", n, span_a.size()));
                     BBox  bbox_a = wkb_bbox(span_a);
                     auto  geom_a = read_wkb(span_a);
                     auto  pa     = PGF::prepare(geom_a.get());
@@ -357,6 +409,8 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                 if (cols[1].is_effectively_const_bytes() && prep_b) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_b = cols[1].get_bytes(0);
+                    ch::log(ch::log_level::trace, std::format(
+                        "chgeos prep: B-const path, n={}, col1_wkb_size={}", n, span_b.size()));
                     BBox  bbox_b = wkb_bbox(span_b);
                     auto  geom_b = read_wkb(span_b);
                     auto  pb     = PGF::prepare(geom_b.get());
@@ -368,6 +422,75 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                         }
                         res[i] = prep_b(pb.get(), read_wkb(span_a).get()) ? 1u : 0u;
                     }
+                    return out;
+                }
+
+                // B-cache: col(1) has few distinct WKBs (e.g. zone polygons on
+                // right of cross join — the typical CH join layout where the smaller
+                // table drives the right side).  Tried first because in our benchmark
+                // queries zones always end up on col(1); caching them with
+                // PreparedGeometry is the high-value optimization.
+                if (prep_b) {
+                    static PrepLRU<uint64_t, PrepEntry> lru_b(16);
+                    uint32_t hits = 0, misses = 0;
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[0].is_null(i) || cols[1].is_null(i)) { res[i] = 0u; continue; }
+                        auto span_b = cols[1].get_bytes(i);
+                        uint64_t key = prep_cache_key(span_b);
+                        auto ep = lru_b.get(key);
+                        PrepEntry local;
+                        const PrepEntry* e;
+                        if (ep) {
+                            ++hits;
+                            e = ep.get();
+                        } else {
+                            ++misses;
+                            local = make_prep_entry(span_b);
+                            lru_b.add(key, local);
+                            e = &local;
+                        }
+                        auto span_a = cols[0].get_bytes(i);
+                        if (bbox_op && !bbox_op(wkb_bbox(span_a), e->bbox)) {
+                            res[i] = early_ret ? 1u : 0u; continue;
+                        }
+                        res[i] = prep_b(e->prep.get(), read_wkb(span_a).get()) ? 1u : 0u;
+                    }
+                    ch::log(ch::log_level::trace, std::format(
+                        "chgeos prep: B-cache path, n={}, hits={}, misses={}, lru_size={}",
+                        n, hits, misses, lru_b.size()));
+                    return out;
+                }
+
+                // A-cache: col(0) has few distinct WKBs (e.g. zone polygons on
+                // left of cross join, or st_containsproperly which has no prep_b).
+                if (prep_a) {
+                    static PrepLRU<uint64_t, PrepEntry> lru_a(16);
+                    uint32_t hits = 0, misses = 0;
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[0].is_null(i) || cols[1].is_null(i)) { res[i] = 0u; continue; }
+                        auto span_a = cols[0].get_bytes(i);
+                        uint64_t key = prep_cache_key(span_a);
+                        auto ep = lru_a.get(key);
+                        PrepEntry local;
+                        const PrepEntry* e;
+                        if (ep) {
+                            ++hits;
+                            e = ep.get();
+                        } else {
+                            ++misses;
+                            local = make_prep_entry(span_a);
+                            lru_a.add(key, local);
+                            e = &local;
+                        }
+                        auto span_b = cols[1].get_bytes(i);
+                        if (bbox_op && !bbox_op(e->bbox, wkb_bbox(span_b))) {
+                            res[i] = early_ret ? 1u : 0u; continue;
+                        }
+                        res[i] = prep_a(e->prep.get(), read_wkb(span_b).get()) ? 1u : 0u;
+                    }
+                    ch::log(ch::log_level::trace, std::format(
+                        "chgeos prep: A-cache path, n={}, hits={}, misses={}, lru_size={}",
+                        n, hits, misses, lru_a.size()));
                     return out;
                 }
             }

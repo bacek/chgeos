@@ -23,11 +23,13 @@ add_executable(chgeos_tests
 target_include_directories(chgeos_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_BINARY_DIR}/geos/capi
+  ${CMAKE_SOURCE_DIR}/third-party/poco/Foundation/include
 )
 
 target_link_libraries(chgeos_tests PRIVATE
   geos
   msgpack23
+  Poco::Foundation
   GTest::gtest_main
 )
 
