@@ -17,55 +17,103 @@ struct ColData {
     std::vector<uint8_t>  data;
 };
 
-// Assemble a COLUMNAR_V1 raw_buffer from a row count and per-column data.
-static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
-    uint32_t pos = HEADER_BYTES + static_cast<uint32_t>(cols.size()) * COL_DESC_BYTES;
+// Monotonically increasing counter so test allocations never share a fingerprint
+// even if the allocator reuses the same address after a free.
+static uint64_t s_test_version = 1;
 
-    struct BI { uint32_t null_off, offsets_off, data_off, data_sz; };
-    std::vector<BI> bi;
-    for (auto& col : cols) {
-        BI b{};
-        if (!col.null_map.empty()) {
-            b.null_off = pos;
-            pos += static_cast<uint32_t>(col.null_map.size());
-        }
-        if (!col.offsets.empty()) {
-            pos = (pos + 3u) & ~3u;   // 4-byte align
-            b.offsets_off = pos;
-            pos += static_cast<uint32_t>(col.offsets.size()) * 4u;
-        }
-        b.data_off = pos;
-        b.data_sz  = static_cast<uint32_t>(col.data.size());
-        pos += b.data_sz;
-        bi.push_back(b);
+// Build a single per-column raw_buffer with ColBufHeader layout.
+static raw_buffer* make_col_buf(uint32_t num_rows, const ColData& col) {
+    // Stored row count: infer from the data vectors.
+    // offsets vector has stored_rows+1 entries; null_map has stored_rows bytes.
+    // For fixed-width columns with no offsets/null_map, fall back to num_rows
+    // (non-const) or 1 (const).
+    uint32_t stored_rows;
+    if (!col.offsets.empty())
+        stored_rows = static_cast<uint32_t>(col.offsets.size()) - 1u;
+    else if (!col.null_map.empty())
+        stored_rows = static_cast<uint32_t>(col.null_map.size());
+    else
+        stored_rows = (col.col_type & static_cast<uint32_t>(COL_IS_CONST)) ? 1u : num_rows;
+
+    // Compute byte offsets (starting after ColBufHeader).
+    uint32_t pos = COL_BUF_HDR_BYTES;
+    uint32_t null_off = 0, offsets_off = 0;
+
+    if (!col.null_map.empty()) {
+        null_off = pos;
+        pos += static_cast<uint32_t>(col.null_map.size());
     }
+    if (!col.offsets.empty()) {
+        pos = (pos + 3u) & ~3u;   // 4-byte align
+        offsets_off = pos;
+        pos += static_cast<uint32_t>(col.offsets.size()) * 4u;
+    }
+    uint32_t data_off = pos;
+    uint32_t data_sz  = static_cast<uint32_t>(col.data.size());
+    pos += data_sz;
 
     auto* buf = clickhouse_create_buffer(pos);
     buf->resize(pos);
     uint8_t* p = buf->data();
     std::memset(p, 0, pos);
 
-    std::memcpy(p, &num_rows, 4);
-    uint32_t nc = static_cast<uint32_t>(cols.size());
-    std::memcpy(p + 4, &nc, 4);
+    ColBufHeader hdr{};
+    hdr.type           = col.col_type;
+    hdr.num_rows       = stored_rows;
+    hdr.null_offset    = null_off;
+    hdr.offsets_offset = offsets_off;
+    hdr.data_offset    = data_off;
+    hdr.data_size      = data_sz;
+    std::memcpy(p, &hdr, sizeof(hdr));
 
-    for (size_t i = 0; i < cols.size(); ++i) {
-        ColDescriptor d{};
-        d.type           = cols[i].col_type;
-        d.null_offset    = bi[i].null_off;
-        d.offsets_offset = bi[i].offsets_off;
-        d.data_offset    = bi[i].data_off;
-        d.data_size      = bi[i].data_sz;
-        std::memcpy(p + HEADER_BYTES + i * COL_DESC_BYTES, &d, sizeof(d));
+    if (!col.null_map.empty())
+        std::memcpy(p + null_off,    col.null_map.data(), col.null_map.size());
+    if (!col.offsets.empty())
+        std::memcpy(p + offsets_off, col.offsets.data(),  col.offsets.size() * 4u);
+    if (!col.data.empty())
+        std::memcpy(p + data_off,    col.data.data(),     col.data.size());
 
-        if (!cols[i].null_map.empty())
-            std::memcpy(p + bi[i].null_off, cols[i].null_map.data(), cols[i].null_map.size());
-        if (!cols[i].offsets.empty())
-            std::memcpy(p + bi[i].offsets_off, cols[i].offsets.data(), cols[i].offsets.size() * 4);
-        if (!cols[i].data.empty())
-            std::memcpy(p + bi[i].data_off, cols[i].data.data(), cols[i].data.size());
-    }
     return buf;
+}
+
+// Assemble a COLUMNAR_V1 call buffer from a row count and per-column data.
+// Returns the call buffer; per-column buffers are reachable via the handles
+// stored in the call buffer and must be freed with free_columnar().
+static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
+    const uint32_t nc = static_cast<uint32_t>(cols.size());
+
+    // Build per-column buffers and collect their addresses as u64 handles.
+    std::vector<uint64_t> handles(nc);
+    for (uint32_t ci = 0; ci < nc; ++ci) {
+        raw_buffer* cb = make_col_buf(num_rows, cols[ci]);
+        handles[ci] = static_cast<uint64_t>(reinterpret_cast<uintptr_t>(cb));
+    }
+
+    // Call buffer: [num_rows:u32 | num_cols:u32 | handle[0]:u64 | ...]
+    uint32_t call_size = CALL_HDR_BYTES + nc * static_cast<uint32_t>(sizeof(uint64_t));
+    auto* call_buf = clickhouse_create_buffer(call_size);
+    call_buf->resize(call_size);
+    uint8_t* p = call_buf->data();
+    std::memcpy(p,     &num_rows, 4);
+    std::memcpy(p + 4, &nc,       4);
+    for (uint32_t ci = 0; ci < nc; ++ci)
+        std::memcpy(p + CALL_HDR_BYTES + ci * sizeof(uint64_t), &handles[ci], 8);
+
+    return call_buf;
+}
+
+// Free the call buffer and all per-column buffers it references.
+static void free_columnar(raw_buffer* call_buf) {
+    const uint8_t* p = call_buf->data();
+    uint32_t nc;
+    std::memcpy(&nc, p + 4, 4);
+    for (uint32_t ci = 0; ci < nc; ++ci) {
+        uint64_t h;
+        std::memcpy(&h, p + CALL_HDR_BYTES + ci * sizeof(uint64_t), 8);
+        auto* cb = reinterpret_cast<raw_buffer*>(static_cast<uintptr_t>(h));
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(cb));
+    }
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(call_buf));
 }
 
 // Non-nullable variable-length (geometry/WKB) column.
@@ -142,7 +190,7 @@ TEST(ColumnarPrepGeom, ContainsAConst_MatchesBaseline) {
         columnar_impl_wrapper(buf_aconst, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_aconst));
+    free_columnar(buf_aconst);
 
     EXPECT_EQ(got[0], 1u);  // inside
     EXPECT_EQ(got[1], 0u);  // outside
@@ -157,7 +205,7 @@ TEST(ColumnarPrepGeom, ContainsAConst_MatchesBaseline) {
         columnar_impl_wrapper(buf_base, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_base));
+    free_columnar(buf_base);
 
     EXPECT_EQ(got, base);
 }
@@ -179,7 +227,7 @@ TEST(ColumnarPrepGeom, ContainsBConst_MatchesBaseline) {
         columnar_impl_wrapper(buf_bconst, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_bconst));
+    free_columnar(buf_bconst);
 
     EXPECT_EQ(got[0], 1u);  // big polygon contains pt
     EXPECT_EQ(got[1], 0u);  // small polygon doesn't
@@ -193,7 +241,7 @@ TEST(ColumnarPrepGeom, ContainsBConst_MatchesBaseline) {
         columnar_impl_wrapper(buf_base, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_base));
+    free_columnar(buf_base);
 
     EXPECT_EQ(got, base);
 }
@@ -212,7 +260,7 @@ TEST(ColumnarPrepGeom, ConstColNull_AllResultsZero) {
         columnar_impl_wrapper(buf, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    free_columnar(buf);
 
     EXPECT_EQ(got, (std::vector<uint8_t>{0u, 0u, 0u}));
 }
@@ -232,7 +280,7 @@ TEST(ColumnarPrepGeom, VariableColNullRow_YieldsZero) {
         columnar_impl_wrapper(buf, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    free_columnar(buf);
 
     EXPECT_EQ(got[0], 1u);  // inside → true
     EXPECT_EQ(got[1], 0u);  // NULL → 0
@@ -266,7 +314,7 @@ TEST(ColumnarPrepGeomDist, DWithinAConst_MatchesBaseline) {
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_aconst));
+    free_columnar(buf_aconst);
 
     EXPECT_EQ(got[0], 1u);  // dist 3 < 5 → true
     EXPECT_EQ(got[1], 0u);  // dist 10 > 5 → false
@@ -283,7 +331,7 @@ TEST(ColumnarPrepGeomDist, DWithinAConst_MatchesBaseline) {
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_base));
+    free_columnar(buf_base);
 
     EXPECT_EQ(got, base);
 }
@@ -305,7 +353,7 @@ TEST(ColumnarPrepGeomDist, DWithinBConst_MatchesBaseline) {
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_bconst));
+    free_columnar(buf_bconst);
 
     EXPECT_EQ(got[0], 1u);  // near → true
     EXPECT_EQ(got[1], 0u);  // far  → false
@@ -321,7 +369,7 @@ TEST(ColumnarPrepGeomDist, DWithinBConst_MatchesBaseline) {
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_base));
+    free_columnar(buf_base);
 
     EXPECT_EQ(got, base);
 }
@@ -342,7 +390,7 @@ TEST(ColumnarPrepGeomDist, DWithinConstColNull_AllResultsZero) {
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    free_columnar(buf);
 
     EXPECT_EQ(got, (std::vector<uint8_t>{0u, 0u}));
 }
@@ -364,7 +412,7 @@ TEST(ColumnarPrepGeomDist, DWithinBboxMissShortCircuits) {
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    free_columnar(buf);
 
     EXPECT_EQ(got[0], 0u);
 }

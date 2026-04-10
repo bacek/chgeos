@@ -60,6 +60,7 @@ clickhouse_create_buffer(uint32_t size) {
 __attribute__((export_name("clickhouse_destroy_buffer")))
 void
 clickhouse_destroy_buffer(uint8_t *buf) {
+  ch::record_destroyed_handle(reinterpret_cast<uintptr_t>(buf));
   ch::raw_buffer *raw = reinterpret_cast<ch::raw_buffer *>(buf);
   raw->~raw_buffer();
   free(raw);
