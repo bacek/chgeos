@@ -39,32 +39,46 @@ CUSTOMER="file('customer.parquet', Parquet)"
 
 run_once() {
     local query="$1"
-    local secs
-    secs=$( "${CH}" client --port "${PORT}" --time -q "${query}" 2>&1 1>/dev/null \
-            | grep -E '^[0-9]+(\.[0-9]+)?$' | tail -1 )
+    local tmpf; tmpf=$(mktemp)
+    local rc=0
+    "${CH}" client --port "${PORT}" --time -q "${query}" >/dev/null 2>"${tmpf}" || rc=$?
+    local secs; secs=$(grep -E '^[0-9]+(\.[0-9]+)?$' "${tmpf}" | tail -1)
+    rm -f "${tmpf}"
     [[ -z "${secs}" ]] && secs="${TIMEOUT}"
-    awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}"
+    local ms; ms=$(awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}")
+    # Non-zero exit with time well below the limit = query error, not timeout.
+    if [[ ${rc} -ne 0 && "${ms}" -lt $(( TIMEOUT * 1000 - 500 )) ]]; then
+        echo "ERROR"
+    else
+        echo "${ms}"
+    fi
 }
 
 run() {
     local label="$1"; local query="$2"
     [[ -n "${QUERY_FILTER}" && "${label}" != "${QUERY_FILTER}" ]] && return 0
-    local times=() sum=0 min=999999 max=0 timed_out=0 rows="?"
+    local times=() sum=0 min=999999 max=0 timed_out=0 errored=0 rows="?"
     for (( i=0; i<RUNS; i++ )); do
         local ms
         if (( i == 0 )); then
-            local tmpf; tmpf=$(mktemp)
+            local tmpf tmpf_err; tmpf=$(mktemp); tmpf_err=$(mktemp)
             local secs
-            secs=$( "${CH}" client --port "${PORT}" --time -q "${query}" 2>&1 1>"${tmpf}" \
-                    | grep -E '^[0-9]+(\.[0-9]+)?$' | tail -1 ) || true
+            local rc=0
+            "${CH}" client --port "${PORT}" --time -q "${query}" >"${tmpf}" 2>"${tmpf_err}" || rc=$?
+            secs=$(grep -E '^[0-9]+(\.[0-9]+)?$' "${tmpf_err}" | tail -1)
+            rm -f "${tmpf_err}"
             [[ -z "${secs}" ]] && secs="${TIMEOUT}"
             ms=$(awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}")
+            if [[ ${rc} -ne 0 && "${ms}" -lt $(( TIMEOUT * 1000 - 500 )) ]]; then
+                errored=1; rm -f "${tmpf}"; break
+            fi
             if [[ "${ms}" -lt $(( TIMEOUT * 1000 - 500 )) ]]; then
                 rows=$(wc -l < "${tmpf}" | tr -d ' ')
             fi
             rm -f "${tmpf}"
         else
             ms=$(run_once "${query}")
+            if [[ "${ms}" == "ERROR" ]]; then errored=1; break; fi
         fi
         [[ "${ms}" -ge $(( TIMEOUT * 1000 - 500 )) ]] && { timed_out=1; break; }
         times+=("${ms}")
@@ -73,6 +87,10 @@ run() {
         (( ms > max )) && max=${ms}
     done
 
+    if (( errored )); then
+        printf "| %-6s | %8s | %8s | %8s | %10s |\n" "${label}" "ERROR" "ERROR" "ERROR" "${rows}"
+        return
+    fi
     if (( timed_out )); then
         printf "| %-6s | %8s | %8s | %8s | %10s |\n" "${label}" "TIMEOUT" "TIMEOUT" "TIMEOUT" "${rows}"
         return

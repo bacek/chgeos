@@ -39,21 +39,30 @@ CUSTOMER="file('customer.parquet', Parquet)"
 
 run_once() {
     local query="$1"
-    local secs
-    secs=$( "${CH}" client --port "${PORT}" --time -q "${query}" 2>&1 1>/dev/null \
-            | grep -E '^[0-9]+(\.[0-9]+)?$' | tail -1 )
+    local tmpf; tmpf=$(mktemp)
+    local rc=0
+    "${CH}" client --port "${PORT}" --time -q "${query}" >/dev/null 2>"${tmpf}" || rc=$?
+    local secs; secs=$(grep -E '^[0-9]+(\.[0-9]+)?$' "${tmpf}" | tail -1)
+    rm -f "${tmpf}"
     [[ -z "${secs}" ]] && secs="${TIMEOUT}"
-    awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}"
+    local ms; ms=$(awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}")
+    # Non-zero exit with time well below the limit = query error, not timeout.
+    if [[ ${rc} -ne 0 && "${ms}" -lt $(( TIMEOUT * 1000 - 500 )) ]]; then
+        echo "ERROR"
+    else
+        echo "${ms}"
+    fi
 }
 
 run() {
     local label="$1"; local query="$2"
     [[ -n "${QUERY_FILTER}" && "${label}" != "${QUERY_FILTER}" ]] && return 0
 
-    local times=() sum=0 min=999999 max=0 timed_out=0
+    local times=() sum=0 min=999999 max=0 timed_out=0 errored=0
     for (( i=0; i<RUNS; i++ )); do
         local ms
         ms=$(run_once "${query}")
+        if [[ "${ms}" == "ERROR" ]]; then errored=1; break; fi
         [[ "${ms}" -ge $(( TIMEOUT * 1000 - 500 )) ]] && { timed_out=1; break; }
         times+=("${ms}")
         sum=$(( sum + ms ))
@@ -61,6 +70,10 @@ run() {
         (( ms > max )) && max=${ms}
     done
 
+    if (( errored )); then
+        printf "| %-6s | %8s | %8s | %8s |\n" "${label}" "ERROR" "ERROR" "ERROR"
+        return
+    fi
     if (( timed_out )); then
         printf "| %-6s | %8s | %8s | %8s |\n" "${label}" "TIMEOUT" "TIMEOUT" "TIMEOUT"
         return
