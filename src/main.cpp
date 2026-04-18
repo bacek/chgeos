@@ -154,8 +154,6 @@ CH_UDF_COL_BBOX2(st_covers,          bbox_op_contains,   false)
 CH_UDF_COL_BBOX2(st_coveredby,       bbox_op_rcontains,  false)
 CH_UDF_COL_BBOX2(st_containsproperly,bbox_op_contains,   false)
 CH_UDF_COL_PRED3(st_dwithin)
-// st_dwithin (no suffix) = canonical alias forwarding to st_dwithin_col.
-CH_UDF_CANONICAL(st_dwithin)
 
 // ── COLUMNAR_V1 — all other (types deduced from _impl) ──────────────────────
 CH_UDF_COL(st_x)

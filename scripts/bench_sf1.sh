@@ -145,6 +145,7 @@ run "Q3" \
  ${FUEL}"
 
 # q4: zone distribution of top-1000 trips by tip
+# R-tree on top_trips (1000 point WKBs, fast build); probe with 263 zones.
 run "Q4" \
 "SELECT z.z_zonekey, z.z_name, count() AS trip_count
  FROM ${ZONE} z
@@ -198,10 +199,12 @@ run "Q7" \
  ${FUEL}"
 
 # q8: nearby pickup count per building (~500m)
+# JOIN syntax: R-tree built on trips (6M points, right side),
+# probed 20K times with building bbox expanded by 0.0045.
 run "Q8" \
 "SELECT b.b_buildingkey, b.b_name, count() AS nearby_pickup_count
- FROM ${TRIP} t, ${BUILDING} b
- WHERE st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
+ FROM ${BUILDING} b
+ JOIN ${TRIP} t ON st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
  GROUP BY b.b_buildingkey, b.b_name
  ORDER BY nearby_pickup_count DESC, b.b_buildingkey ASC
  ${FUEL}"
@@ -246,13 +249,15 @@ run "Q11" \
  ${FUEL}"
 
 # q12: 5 nearest buildings per trip (dwithin pre-filter + window rank)
+# JOIN syntax: R-tree built on trips (6M points, right side),
+# probed 20K times with building bbox expanded by 0.05.
 run "Q12" \
 "WITH candidates AS (
      SELECT t.t_tripkey, t.t_pickuploc, b.b_buildingkey, b.b_name AS building_name,
          st_distance(t.t_pickuploc, b.b_boundary) AS distance_to_building,
          row_number() OVER (PARTITION BY t.t_tripkey ORDER BY st_distance(t.t_pickuploc, b.b_boundary)) AS rn
-     FROM ${TRIP} t CROSS JOIN ${BUILDING} b
-     WHERE st_dwithin(t.t_pickuploc, b.b_boundary, 0.05)
+     FROM ${BUILDING} b
+     JOIN ${TRIP} t ON st_dwithin(t.t_pickuploc, b.b_boundary, 0.05)
  )
  SELECT t_tripkey, t_pickuploc, b_buildingkey, building_name, distance_to_building
  FROM candidates WHERE rn <= 5

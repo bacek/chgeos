@@ -797,16 +797,6 @@ DETERMINISTIC
 SETTINGS serialization_format = 'RowBinary';
 
 -- ---------------------------------------------------------------------------
--- st_dwithin_col: exact distance predicate (PreparedGeometry optimised).
--- st_dwithin (canonical) expands to st_intersects+st_expand_mp for R-tree compat.
--- ---------------------------------------------------------------------------
-CREATE OR REPLACE FUNCTION st_dwithin_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String, dist Float64) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
--- ---------------------------------------------------------------------------
 -- COLUMNAR_V1 — canonical names (no suffix)
 -- ---------------------------------------------------------------------------
 
@@ -888,7 +878,12 @@ ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_dwithin AS (a, b, dist) -> st_intersects_extent(a, st_expand(b, dist)) AND st_distance(a, b) < dist;
+CREATE OR REPLACE FUNCTION st_dwithin
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String, dist Float64) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1, spatial_expand_arg = 2;
 
 -- Scalar Float64 (1 geometry arg)
 CREATE OR REPLACE FUNCTION st_x

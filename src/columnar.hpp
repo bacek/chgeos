@@ -491,10 +491,9 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
     }
 
 // 3-arg predicate: (geom, geom, double) -> bool  with PreparedGeometry support.
-// Exported as name_col; CH_UDF_CANONICAL(name) provides the no-suffix alias.
 #define CH_UDF_COL_PRED3(name)                                                   \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
+    __attribute__((export_name(#name)))                                          \
+    ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
         return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
             nullptr, false, nullptr, nullptr,                                     \
             ch::prep_a_##name, ch::prep_b_##name);                               \
