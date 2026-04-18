@@ -9,27 +9,6 @@
 
 namespace ch {
 
-// ── Destroyed-handle registry ────────────────────────────────────────────────
-// clickhouse_destroy_buffer() records each freed raw_buffer address here.
-// ColPrepCache::valid_for() checks this ring before declaring a hit, so that if
-// the allocator reuses an address for a new buffer with different data the stale
-// cache entry is safely invalidated rather than causing incorrect results.
-
-static constexpr uint32_t DESTROYED_HANDLE_SLOTS = 16;
-inline uintptr_t g_destroyed_handles[DESTROYED_HANDLE_SLOTS] = {};
-inline uint32_t  g_destroyed_idx = 0;
-
-inline void record_destroyed_handle(uintptr_t h) noexcept {
-    g_destroyed_handles[g_destroyed_idx] = h;
-    g_destroyed_idx = (g_destroyed_idx + 1u) % DESTROYED_HANDLE_SLOTS;
-}
-
-inline bool is_recently_destroyed(uintptr_t h) noexcept {
-    for (uint32_t i = 0; i < DESTROYED_HANDLE_SLOTS; ++i)
-        if (g_destroyed_handles[i] == h) return true;
-    return false;
-}
-
 // ABI: ClickHouse reads {ptr, size} at offsets 0 and 4 (WASM32).
 // data_ and size_ are the first two fields — layout is fixed, privacy is irrelevant to ABI.
 class raw_buffer {

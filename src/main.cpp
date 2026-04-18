@@ -154,6 +154,8 @@ CH_UDF_COL_BBOX2(st_covers,          bbox_op_contains,   false)
 CH_UDF_COL_BBOX2(st_coveredby,       bbox_op_rcontains,  false)
 CH_UDF_COL_BBOX2(st_containsproperly,bbox_op_contains,   false)
 CH_UDF_COL_PRED3(st_dwithin)
+// st_dwithin (no suffix) = canonical alias forwarding to st_dwithin_col.
+CH_UDF_CANONICAL(st_dwithin)
 
 // ── COLUMNAR_V1 — all other (types deduced from _impl) ──────────────────────
 CH_UDF_COL(st_x)
@@ -204,5 +206,48 @@ CH_UDF_COL(st_polygonize)
 CH_UDF_COL(st_clusterintersecting)
 CH_UDF_COL(st_extent)
 CH_UDF_COL(st_interiorpoint)
+CH_UDF_COL(st_expand)
+
+// ── COLUMNAR_V1 — additional functions ───────────────────────────────────────
+// Accessors (densify variants)
+CH_UDF_COL(st_hausdorffdistance_densify)
+CH_UDF_COL(st_frechetdistance_densify)
+// Predicate (3 args: geom, geom, string_view)
+CH_UDF_COL(st_relate_pattern)
+// I/O
+CH_UDF_COL(geos_version)
+CH_UDF_COL(st_geomfromgeojson)
+// Constructors
+CH_UDF_COL(st_startpoint)
+CH_UDF_COL(st_endpoint)
+CH_UDF_COL(st_makebox2d)
+CH_UDF_COL(st_geometryn)
+CH_UDF_COL(st_exteriorring)
+CH_UDF_COL(st_interiorringn)
+CH_UDF_COL(st_pointn)
+CH_UDF_COL(st_minimumboundingcircle)
+CH_UDF_COL(st_snap)
+CH_UDF_COL(st_offsetcurve)
+CH_UDF_COL(st_delaunaytriangles)
+CH_UDF_COL(st_voronoidiagram)
+CH_UDF_COL(st_makepoint)
+CH_UDF_COL(st_makepoint3d)
+CH_UDF_COL(st_makepolygon)
+CH_UDF_COL(st_addpoint)
+CH_UDF_COL(st_removepoint)
+CH_UDF_COL(st_setpoint)
+// Processing
+CH_UDF_COL(st_buffer)
+CH_UDF_COL(st_buffer_params)
+CH_UDF_COL(st_simplify)
+CH_UDF_COL(st_segmentize)
+CH_UDF_COL(st_subdivide)
+// Transforms
+CH_UDF_COL(st_translate)
+CH_UDF_COL(st_scale)
+CH_UDF_COL(st_setsrid)
+CH_UDF_COL(st_transform)
+CH_UDF_COL(st_transform_proj)
+
 
 } // extern "C"

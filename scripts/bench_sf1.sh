@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# SF1 geospatial benchmark suite for chgeos WASM UDFs.
+# SF1 geospatial benchmark suite — "default" version.
 #
 # Usage:
 #   ./scripts/bench_sf1.sh [path/to/clickhouse] [path/to/data/dir] [QUERY]
@@ -24,6 +24,10 @@ QUERY_FILTER="${3:-}"
 PORT="${CH_PORT:-19000}"
 TIMEOUT="${BENCH_TIMEOUT:-120}"
 FUEL="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}"
+# Q5 needs query_plan_execute_functions_after_sorting=0 to force WASM to run in
+# parallel threads before the ORDER BY merge (otherwise CH defers it to
+# single-threaded post-sort, causing ~7× slowdown).
+FUEL5="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}, query_plan_execute_functions_after_sorting=0"
 RUNS="${BENCH_RUNS:-5}"
 
 # ClickHouse server restricts file() to user_files_path; symlink data files there.
@@ -57,12 +61,29 @@ run_once() {
 run() {
     local label="$1"; local query="$2"
     [[ -n "${QUERY_FILTER}" && "${label}" != "${QUERY_FILTER}" ]] && return 0
-
-    local times=() sum=0 min=999999 max=0 timed_out=0 errored=0
+    local times=() sum=0 min=999999 max=0 timed_out=0 errored=0 rows="?"
     for (( i=0; i<RUNS; i++ )); do
         local ms
-        ms=$(run_once "${query}")
-        if [[ "${ms}" == "ERROR" ]]; then errored=1; break; fi
+        if (( i == 0 )); then
+            local tmpf tmpf_err; tmpf=$(mktemp); tmpf_err=$(mktemp)
+            local secs
+            local rc=0
+            "${CH}" client --port "${PORT}" --time -q "${query}" >"${tmpf}" 2>"${tmpf_err}" || rc=$?
+            secs=$(grep -E '^[0-9]+(\.[0-9]+)?$' "${tmpf_err}" | tail -1)
+            rm -f "${tmpf_err}"
+            [[ -z "${secs}" ]] && secs="${TIMEOUT}"
+            ms=$(awk "BEGIN {printf \"%d\", ${secs} * 1000 + 0.5}")
+            if [[ ${rc} -ne 0 && "${ms}" -lt $(( TIMEOUT * 1000 - 500 )) ]]; then
+                errored=1; rm -f "${tmpf}"; break
+            fi
+            if [[ "${ms}" -lt $(( TIMEOUT * 1000 - 500 )) ]]; then
+                rows=$(wc -l < "${tmpf}" | tr -d ' ')
+            fi
+            rm -f "${tmpf}"
+        else
+            ms=$(run_once "${query}")
+            if [[ "${ms}" == "ERROR" ]]; then errored=1; break; fi
+        fi
         [[ "${ms}" -ge $(( TIMEOUT * 1000 - 500 )) ]] && { timed_out=1; break; }
         times+=("${ms}")
         sum=$(( sum + ms ))
@@ -71,16 +92,16 @@ run() {
     done
 
     if (( errored )); then
-        printf "| %-6s | %8s | %8s | %8s |\n" "${label}" "ERROR" "ERROR" "ERROR"
+        printf "| %-6s | %8s | %8s | %8s | %10s |\n" "${label}" "ERROR" "ERROR" "ERROR" "${rows}"
         return
     fi
     if (( timed_out )); then
-        printf "| %-6s | %8s | %8s | %8s |\n" "${label}" "TIMEOUT" "TIMEOUT" "TIMEOUT"
+        printf "| %-6s | %8s | %8s | %8s | %10s |\n" "${label}" "TIMEOUT" "TIMEOUT" "TIMEOUT" "${rows}"
         return
     fi
     local avg=$(( sum / RUNS ))
-    printf "| %-6s | %8s | %8s | %8s |\n" \
-        "${label}" "${min}ms" "${avg}ms" "${max}ms"
+    printf "| %-6s | %8s | %8s | %8s | %10s |\n" \
+        "${label}" "${min}ms" "${avg}ms" "${max}ms" "${rows}"
 }
 
 echo ""
@@ -89,8 +110,8 @@ trip_count=$("${CH}" client --port "${PORT}" -q \
     "SELECT count() FROM ${TRIP}" 2>/dev/null || echo '?')
 echo "trip rows: ${trip_count}"
 echo ""
-printf "| %-6s | %8s | %8s | %8s |\n" "Query" "min" "avg" "max"
-echo  "|--------|----------|----------|----------|"
+printf "| %-6s | %8s | %8s | %8s | %10s |\n" "Query" "min" "avg" "max" "rows"
+echo  "|--------|----------|----------|----------|------------|"
 
 # q1: trips within 50km of Sedona city center
 run "Q1" \
@@ -101,13 +122,13 @@ run "Q1" \
  ORDER BY distance_to_center ASC, t_tripkey ASC
  ${FUEL}"
 
-### # q2: count trips within Coconino County
-### run "Q2" \
-### "SELECT count() AS trip_count
-###  FROM ${TRIP} t
-###  WHERE st_intersects(t.t_pickuploc,
-###      (SELECT z_boundary FROM ${ZONE} WHERE z_name = 'Coconino County' LIMIT 1))
-###  ${FUEL}"
+# q2: count trips within Coconino County
+run "Q2" \
+"SELECT count() AS trip_count
+ FROM ${TRIP} t
+ WHERE st_intersects(t.t_pickuploc,
+     (SELECT z_boundary FROM ${ZONE} WHERE z_name = 'Coconino County' LIMIT 1))
+ ${FUEL}"
 
 # q3: monthly stats within bounding box + buffer
 run "Q3" \
@@ -137,14 +158,14 @@ run "Q4" \
 run "Q5" \
 "SELECT c.c_custkey, c.c_name AS customer_name,
     toStartOfMonth(t.t_pickuptime) AS pickup_month,
-    st_area(st_convexhull(st_collect_agg(t.t_dropoffloc))) AS monthly_travel_hull_area,
+    st_area(st_convexhull(st_collect_agg(groupArray(t.t_dropoffloc)))) AS monthly_travel_hull_area,
     count() AS dropoff_count
  FROM ${TRIP} t
  JOIN ${CUSTOMER} c ON t.t_custkey = c.c_custkey
  GROUP BY c.c_custkey, c.c_name, pickup_month
  HAVING dropoff_count > 5
  ORDER BY dropoff_count DESC, c.c_custkey ASC
- ${FUEL}"
+ ${FUEL5}"
 
 # q6: zone stats for trips in bbox-intersecting zones
 run "Q6" \
@@ -152,9 +173,12 @@ run "Q6" \
     count(t.t_tripkey) AS total_pickups,
     avg(t.t_totalamount) AS avg_amount,
     avg(t.t_dropofftime - t.t_pickuptime) AS avg_duration
- FROM ${TRIP} t, ${ZONE} z
- WHERE st_intersects(st_geomfromtext('POLYGON((-112.2110 34.4197,-111.3110 34.4197,-111.3110 35.3197,-112.2110 35.3197,-112.2110 34.4197))'), z.z_boundary)
-   AND st_within(t.t_pickuploc, z.z_boundary)
+ FROM ${TRIP} t
+ JOIN (
+     SELECT z_zonekey, z_name, z_boundary
+     FROM ${ZONE}
+     WHERE st_intersects(st_geomfromtext('POLYGON((-112.2110 34.4197,-111.3110 34.4197,-111.3110 35.3197,-112.2110 35.3197,-112.2110 34.4197))'), z_boundary)
+ ) z ON st_within(t.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY total_pickups DESC, z.z_zonekey ASC
  ${FUEL}"
@@ -176,8 +200,8 @@ run "Q7" \
 # q8: nearby pickup count per building (~500m)
 run "Q8" \
 "SELECT b.b_buildingkey, b.b_name, count() AS nearby_pickup_count
- FROM ${TRIP} t
- JOIN ${BUILDING} b ON st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
+ FROM ${TRIP} t, ${BUILDING} b
+ WHERE st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
  GROUP BY b.b_buildingkey, b.b_name
  ORDER BY nearby_pickup_count DESC, b.b_buildingkey ASC
  ${FUEL}"

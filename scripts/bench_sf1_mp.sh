@@ -119,13 +119,13 @@ run "Q1" \
  ORDER BY distance_to_center ASC, t_tripkey ASC
  ${FUEL}"
 
-### # q2: count trips within Coconino County
-### run "Q2" \
-### "SELECT count() AS trip_count
-###  FROM ${TRIP} t
-###  WHERE st_intersects_mp(t.t_pickuploc,
-###      (SELECT z_boundary FROM ${ZONE} WHERE z_name = 'Coconino County' LIMIT 1))
-###  ${FUEL}"
+# q2: count trips within Coconino County
+run "Q2" \
+"SELECT count() AS trip_count
+ FROM ${TRIP} t
+ WHERE st_intersects_mp(t.t_pickuploc,
+     (SELECT z_boundary FROM ${ZONE} WHERE z_name = 'Coconino County' LIMIT 1))
+ ${FUEL}"
 
 # q3: monthly stats within bounding box + buffer
 run "Q3" \

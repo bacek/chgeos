@@ -1,34 +1,33 @@
 #pragma once
 
-// COLUMNAR_V1 wire format for ClickHouse WASM UDFs — per-column persistent buffers.
+// COLUMNAR_V1 wire format for ClickHouse WASM UDFs.
 //
-// Two-buffer design: a tiny ephemeral call buffer + one persistent buffer per column.
-// CH allocates per-column buffers once and reuses them when column data is unchanged.
-// Constant geometry columns therefore cross the WASM boundary only on first use.
+// Replaces RowBinary with a columnar layout.  Key benefit: ColumnConst data
+// (e.g. a constant 169 KB polygon) is passed ONCE regardless of num_rows.
 //
 // ┌──────────────────────────────────────────────────────────────────────────┐
-// │ Per-column buffer: ColBufHeader (32 bytes) followed by column data       │
-// │   type           : u32  — ColType | COL_IS_CONST flag                   │
-// │   num_rows       : u32  — stored rows (1 if COL_IS_CONST)               │
-// │   null_offset    : u32  — byte offset to u8[num_rows]; 0 = no nulls     │
-// │   offsets_offset : u32  — byte offset to u32[num_rows+1]; 0 = fixed     │
-// │   data_offset    : u32  — byte offset to raw column data                │
-// │   data_size      : u32  — bytes in the data block                       │
-// │   version        : u64  — monotonic; same column data → same version    │
-// │ Column data at offsets described above (same layout as before)           │
+// │ BufHeader (8 bytes)                                                      │
+// │   num_rows : u32                                                         │
+// │   num_cols : u32                                                         │
 // ├──────────────────────────────────────────────────────────────────────────┤
-// │ Call buffer (ephemeral, one per invocation)                              │
-// │   num_rows       : u32                                                   │
-// │   num_cols       : u32                                                   │
-// │   col_handle[i]  : u64  — address of per-column raw_buffer (WASM ptr)   │
+// │ ColDescriptor[num_cols] (20 bytes each)                                  │
+// │   type           : u32  — ColType | COL_IS_CONST flag                   │
+// │   null_offset    : u32  — offset to u8[row_count] null map; 0=no nulls  │
+// │   offsets_offset : u32  — offset to u32[row_count+1] start offsets;     │
+// │                           0 for fixed-width columns                      │
+// │   data_offset    : u32  — offset to raw column data                     │
+// │   data_size      : u32  — total bytes in the data block                 │
+// ├──────────────────────────────────────────────────────────────────────────┤
+// │ Data blocks at offsets described above                                   │
 // └──────────────────────────────────────────────────────────────────────────┘
 //
-// Output buffer: unchanged format — BufHeader(8B) + ColDescriptor(20B) + data.
+// Offsets (COL_BYTES / COL_NULL_BYTES):
+//   offsets[0..row_count] are start-based (offsets[0]=0).
+//   Data is stored with explicit null terminators (CH 26.4+ ColumnString has none;
+//   the CH-side serializer adds them so WASM get_bytes() can use end-start-1).
+//   String i bytes: data[offsets[i] .. offsets[i+1]-2], len = offsets[i+1]-offsets[i]-1.
 //
-// String encoding (COL_BYTES / COL_NULL_BYTES): offsets[0..num_rows] start-based.
-// Data stored with explicit null terminators; get_bytes() uses end-start-1.
-//
-// SQL: ABI COLUMNAR_V1
+// SQL: ABI COLUMNAR_V1  (no serialization_format needed)
 
 #include <algorithm>
 #include <array>
@@ -69,18 +68,6 @@ enum ColType : uint32_t {
 
 // ── Wire structs ──────────────────────────────────────────────────────────────
 
-// Per-column persistent buffer header (24 bytes).
-struct ColBufHeader {
-    uint32_t type;            // ColType | COL_IS_CONST
-    uint32_t num_rows;        // stored rows (1 if COL_IS_CONST)
-    uint32_t null_offset;     // byte offset from buffer start; 0 = no nulls
-    uint32_t offsets_offset;  // byte offset to u32[num_rows+1]; 0 = fixed-width
-    uint32_t data_offset;     // byte offset to raw data
-    uint32_t data_size;       // bytes of data
-};
-static_assert(sizeof(ColBufHeader) == 24);
-
-// Output format descriptor (unchanged from original COLUMNAR_V1).
 struct ColDescriptor {
     uint32_t type;
     uint32_t null_offset;
@@ -90,10 +77,8 @@ struct ColDescriptor {
 };
 static_assert(sizeof(ColDescriptor) == 20);
 
-static constexpr uint32_t COL_BUF_HDR_BYTES = 24;  // sizeof ColBufHeader
-static constexpr uint32_t CALL_HDR_BYTES    = 8;   // call buffer header: num_rows + num_cols
-static constexpr uint32_t HEADER_BYTES      = 8;   // output BufHeader
-static constexpr uint32_t COL_DESC_BYTES    = 20;  // output ColDescriptor
+static constexpr uint32_t HEADER_BYTES  = 8;   // sizeof BufHeader
+static constexpr uint32_t COL_DESC_BYTES = 20;  // sizeof ColDescriptor
 
 // ── Input column accessor ─────────────────────────────────────────────────────
 
@@ -104,7 +89,6 @@ struct ColView {
     const uint8_t*  null_map;     // nullable: null_map[i]!=0 → NULL; nullptr = non-nullable
     const uint32_t* offsets;      // start-based; nullptr for fixed-width
     const uint8_t*  data;
-    uintptr_t       col_handle;   // address of the per-column raw_buffer
 
     bool is_null(uint32_t row) const noexcept {
         if (!null_map) return false;
@@ -151,41 +135,32 @@ struct ColView {
 };
 
 struct ColumnarBuf {
-    uint32_t         num_rows;
-    uint32_t         num_cols;
-    const uint64_t*  handles;  // col_handle[i]: address of per-column raw_buffer
+    uint32_t              num_rows;
+    uint32_t              num_cols;
+    const ColDescriptor*  descs;
+    const uint8_t*        base;
 
     ColView col(uint32_t i) const {
-        // Dereference handle → per-column raw_buffer → ColBufHeader + data.
-        // In WASM32, uintptr_t truncates u64 to 32 bits (the WASM linear-memory address).
-        // In native test builds, all 64 bits hold the native pointer.
-        uintptr_t handle = static_cast<uintptr_t>(handles[i]);
-        const raw_buffer* cb = reinterpret_cast<const raw_buffer*>(handle);
-        const uint8_t* base = cb->data();
-        ColBufHeader hdr;
-        std::memcpy(&hdr, base, sizeof(hdr));
-
+        ColDescriptor d;
+        std::memcpy(&d, descs + i, sizeof(d));
         ColView v;
-        v.is_const    = (hdr.type & COL_IS_CONST) != 0;
-        v.base_type   = static_cast<ColType>(hdr.type & ~COL_IS_CONST);
-        v.row_count   = hdr.num_rows;
-        v.null_map    = hdr.null_offset    ? base + hdr.null_offset    : nullptr;
-        v.offsets     = hdr.offsets_offset
-                        ? reinterpret_cast<const uint32_t*>(base + hdr.offsets_offset)
-                        : nullptr;
-        v.data        = base + hdr.data_offset;
-        v.col_handle  = handle;
+        v.is_const  = (d.type & COL_IS_CONST) != 0;
+        v.base_type = static_cast<ColType>(d.type & ~COL_IS_CONST);
+        v.row_count = v.is_const ? 1u : num_rows;
+        v.null_map  = d.null_offset    ? base + d.null_offset    : nullptr;
+        v.offsets   = d.offsets_offset ? reinterpret_cast<const uint32_t*>(base + d.offsets_offset) : nullptr;
+        v.data      = base + d.data_offset;
         return v;
     }
 };
 
 inline ColumnarBuf parse_columnar(const raw_buffer* buf) {
-    // Call buffer: [num_rows:u32 | num_cols:u32 | col_handle[0]:u64 | ...]
     const uint8_t* p = buf->data();
     ColumnarBuf cb;
+    cb.base = p;
     std::memcpy(&cb.num_rows, p,     4);
     std::memcpy(&cb.num_cols, p + 4, 4);
-    cb.handles = reinterpret_cast<const uint64_t*>(p + CALL_HDR_BYTES);
+    cb.descs = reinterpret_cast<const ColDescriptor*>(p + HEADER_BYTES);
     return cb;
 }
 
@@ -302,6 +277,8 @@ T col_get_arg(const ColView& col, uint32_t row) {
         return col.get_fixed<double>(row);
     } else if constexpr (std::is_same_v<T, int32_t>) {
         return col.get_fixed<int32_t>(row);
+    } else if constexpr (std::is_same_v<T, uint32_t>) {
+        return col.get_fixed<uint32_t>(row);
     } else if constexpr (std::is_same_v<T, std::string_view>) {
         auto s = col.get_bytes(row);
         return {reinterpret_cast<const char*>(s.data()), s.size()};
@@ -310,47 +287,14 @@ T col_get_arg(const ColView& col, uint32_t row) {
     }
 }
 
-// ── PreparedGeometry cache ─────────────────────────────────────────────────────
-// One-entry cache per const-column slot.  Keyed by col_handle (raw_buffer address).
-// clickhouse_destroy_buffer() records freed addresses in a ring; valid_for() checks
-// that ring so that if the allocator reuses an address for a different geometry the
-// stale entry is invalidated rather than producing incorrect results.
-
-struct ColPrepCache {
-    uintptr_t col_handle = 0;
-    BBox      bbox       = {};
-    std::unique_ptr<geos::geom::Geometry>                     geom;
-    std::unique_ptr<const geos::geom::prep::PreparedGeometry> prep;
-
-    // A hit requires: same buffer address AND the buffer hasn't been destroyed
-    // since we cached it.  clickhouse_destroy_buffer() records freed addresses
-    // in a ring, so a reused address correctly triggers a rebuild.
-    bool valid_for(const ColView& cv) const noexcept {
-        return prep != nullptr &&
-               col_handle == cv.col_handle &&
-               !is_recently_destroyed(cv.col_handle);
-    }
-
-    void rebuild(const ColView& cv) {
-        using PGF = geos::geom::prep::PreparedGeometryFactory;
-        auto span  = cv.get_bytes(0);
-        col_handle = cv.col_handle;
-        bbox       = wkb_bbox(span);
-        geom       = read_wkb(span);
-        prep       = PGF::prepare(geom.get());
-    }
-};
-
 // ── Generic columnar wrapper ───────────────────────────────────────────────────
 // Mirrors rowbinary_impl_wrapper: takes a typed function pointer, deduces
 // argument and return types, dispatches column reads and output format.
 //
 // Optional parameters (for binary geometry predicates only):
 //   bbox_op  / early_ret — bbox short-circuit applied before WKB parsing
-//   prep_a   — PreparedGeometry callback when col(0) is effectively const
-//   prep_b   — PreparedGeometry callback when col(1) is effectively const
-// Each const-column slot has a static one-entry ColPrepCache; the cache is
-// invalidated when the buffer address changes or the old address was destroyed.
+//   prep_a   — PreparedGeometry callback when col(0) is const
+//   prep_b   — PreparedGeometry callback when col(1) is const
 
 template <typename Ret, typename... Args>
 raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
@@ -361,6 +305,8 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                   ColPrepOp     prep_b       = nullptr,
                                   ColPrepDistOp prep_a_dist  = nullptr,
                                   ColPrepDistOp prep_b_dist  = nullptr) {
+    using PGF = geos::geom::prep::PreparedGeometryFactory;
+
     auto cb = parse_columnar(ptr);
     uint32_t n = cb.num_rows;
     constexpr size_t nargs = sizeof...(Args);
@@ -391,100 +337,81 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             uint8_t* res = out->data() + HEADER_BYTES + COL_DESC_BYTES;
 
             if constexpr (nargs >= 2) {
-                // These statics are safe under parallel ClickHouse queries because
-                // each WasmCompartment is an independent module instantiation with
-                // its own linear memory.  Static C++ locals compiled to WASM live
-                // inside that linear memory, so cache_a/cache_b are per-compartment,
-                // not globally shared.  No locking needed.
-                static ColPrepCache cache_a;
-                static ColPrepCache cache_b;
-
-                // A-const fast path: col(0) is constant (or effectively constant).
-                // cache_a.valid_for() is O(1); is_effectively_const_bytes() is called
-                // only on cache miss, amortising the O(size) check across batches.
-                if (prep_a) {
-                    bool eff_a = cache_a.valid_for(cols[0]) ||
-                                 cols[0].is_effectively_const_bytes();
-                    if (eff_a) {
-                        if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
-                        if (!cache_a.valid_for(cols[0])) cache_a.rebuild(cols[0]);
-                        for (uint32_t i = 0; i < n; ++i) {
-                            if (cols[1].is_null(i)) { res[i] = 0u; continue; }
-                            auto span_b = cols[1].get_bytes(i);
-                            if (bbox_op && !bbox_op(cache_a.bbox, wkb_bbox(span_b))) {
-                                res[i] = early_ret ? 1u : 0u; continue;
-                            }
-                            res[i] = prep_a(cache_a.prep.get(), read_wkb(span_b).get()) ? 1u : 0u;
+                // A-const fast path: prepare col(0) once, vary col(1)
+                if (cols[0].is_effectively_const_bytes() && prep_a) {
+                    if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
+                    auto span_a = cols[0].get_bytes(0);
+                    BBox  bbox_a = wkb_bbox(span_a);
+                    auto  geom_a = read_wkb(span_a);
+                    auto  pa     = PGF::prepare(geom_a.get());
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[1].is_null(i)) { res[i] = 0u; continue; }
+                        auto span_b = cols[1].get_bytes(i);
+                        if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
+                            res[i] = early_ret ? 1u : 0u; continue;
                         }
-                        return out;
+                        res[i] = prep_a(pa.get(), read_wkb(span_b).get()) ? 1u : 0u;
                     }
+                    return out;
                 }
 
-                // B-const fast path: col(1) is constant (or effectively constant).
-                if (prep_b) {
-                    bool eff_b = cache_b.valid_for(cols[1]) ||
-                                 cols[1].is_effectively_const_bytes();
-                    if (eff_b) {
-                        if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
-                        if (!cache_b.valid_for(cols[1])) cache_b.rebuild(cols[1]);
-                        for (uint32_t i = 0; i < n; ++i) {
-                            if (cols[0].is_null(i)) { res[i] = 0u; continue; }
-                            auto span_a = cols[0].get_bytes(i);
-                            if (bbox_op && !bbox_op(wkb_bbox(span_a), cache_b.bbox)) {
-                                res[i] = early_ret ? 1u : 0u; continue;
-                            }
-                            res[i] = prep_b(cache_b.prep.get(), read_wkb(span_a).get()) ? 1u : 0u;
+                // B-const fast path: prepare col(1) once, vary col(0)
+                if (cols[1].is_effectively_const_bytes() && prep_b) {
+                    if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
+                    auto span_b = cols[1].get_bytes(0);
+                    BBox  bbox_b = wkb_bbox(span_b);
+                    auto  geom_b = read_wkb(span_b);
+                    auto  pb     = PGF::prepare(geom_b.get());
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[0].is_null(i)) { res[i] = 0u; continue; }
+                        auto span_a = cols[0].get_bytes(i);
+                        if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
+                            res[i] = early_ret ? 1u : 0u; continue;
                         }
-                        return out;
+                        res[i] = prep_b(pb.get(), read_wkb(span_a).get()) ? 1u : 0u;
                     }
+                    return out;
                 }
             }
 
             // 3-arg distance predicate: (geom, geom, double) with PreparedGeometry.
             // col(0)=geom_a, col(1)=geom_b, col(2)=distance.
             if constexpr (nargs >= 3) {
-                // Same per-compartment isolation as cache_a/cache_b above.
-                static ColPrepCache cache_a_dist;
-                static ColPrepCache cache_b_dist;
-
                 // A-const dist path
-                if (prep_a_dist) {
-                    bool eff_a = cache_a_dist.valid_for(cols[0]) ||
-                                 cols[0].is_effectively_const_bytes();
-                    if (eff_a) {
-                        if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
-                        if (!cache_a_dist.valid_for(cols[0])) cache_a_dist.rebuild(cols[0]);
-                        for (uint32_t i = 0; i < n; ++i) {
-                            if (cols[1].is_null(i)) { res[i] = 0u; continue; }
-                            auto   span_b = cols[1].get_bytes(i);
-                            double dist   = col_get_arg<double>(cols[2], i);
-                            if (!cache_a_dist.bbox.intersects(wkb_bbox(span_b).expanded(dist))) {
-                                res[i] = 0u; continue;
-                            }
-                            res[i] = prep_a_dist(cache_a_dist.prep.get(), read_wkb(span_b).get(), dist) ? 1u : 0u;
+                if (cols[0].is_effectively_const_bytes() && prep_a_dist) {
+                    if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
+                    auto span_a = cols[0].get_bytes(0);
+                    BBox  bbox_a = wkb_bbox(span_a);
+                    auto  geom_a = read_wkb(span_a);
+                    auto  pa     = PGF::prepare(geom_a.get());
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[1].is_null(i)) { res[i] = 0u; continue; }
+                        auto   span_b = cols[1].get_bytes(i);
+                        double dist   = col_get_arg<double>(cols[2], i);
+                        if (!bbox_a.intersects(wkb_bbox(span_b).expanded(dist))) {
+                            res[i] = 0u; continue;
                         }
-                        return out;
+                        res[i] = prep_a_dist(pa.get(), read_wkb(span_b).get(), dist) ? 1u : 0u;
                     }
+                    return out;
                 }
-
                 // B-const dist path
-                if (prep_b_dist) {
-                    bool eff_b = cache_b_dist.valid_for(cols[1]) ||
-                                 cols[1].is_effectively_const_bytes();
-                    if (eff_b) {
-                        if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
-                        if (!cache_b_dist.valid_for(cols[1])) cache_b_dist.rebuild(cols[1]);
-                        for (uint32_t i = 0; i < n; ++i) {
-                            if (cols[0].is_null(i)) { res[i] = 0u; continue; }
-                            auto   span_a = cols[0].get_bytes(i);
-                            double dist   = col_get_arg<double>(cols[2], i);
-                            if (!wkb_bbox(span_a).intersects(cache_b_dist.bbox.expanded(dist))) {
-                                res[i] = 0u; continue;
-                            }
-                            res[i] = prep_b_dist(cache_b_dist.prep.get(), read_wkb(span_a).get(), dist) ? 1u : 0u;
+                if (cols[1].is_effectively_const_bytes() && prep_b_dist) {
+                    if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
+                    auto span_b = cols[1].get_bytes(0);
+                    BBox  bbox_b = wkb_bbox(span_b);
+                    auto  geom_b = read_wkb(span_b);
+                    auto  pb     = PGF::prepare(geom_b.get());
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[0].is_null(i)) { res[i] = 0u; continue; }
+                        auto   span_a = cols[0].get_bytes(i);
+                        double dist   = col_get_arg<double>(cols[2], i);
+                        if (!wkb_bbox(span_a).intersects(bbox_b.expanded(dist))) {
+                            res[i] = 0u; continue;
                         }
-                        return out;
+                        res[i] = prep_b_dist(pb.get(), read_wkb(span_a).get(), dist) ? 1u : 0u;
                     }
+                    return out;
                 }
             }
 
@@ -557,13 +484,14 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 
 // 2-arg binary predicate with bbox shortcut + PreparedGeometry optimisation.
 #define CH_UDF_COL_BBOX2(name, bbox_op, early_ret)                               \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
+    __attribute__((export_name(#name)))                                          \
+    ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
         return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
             ch::bbox_op, early_ret, ch::prep_a_##name, ch::prep_b_##name);       \
     }
 
 // 3-arg predicate: (geom, geom, double) -> bool  with PreparedGeometry support.
+// Exported as name_col; CH_UDF_CANONICAL(name) provides the no-suffix alias.
 #define CH_UDF_COL_PRED3(name)                                                   \
     __attribute__((export_name(#name "_col")))                                   \
     ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
@@ -574,7 +502,14 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 
 // Generic columnar wrapper — all arg/return types deduced from name##_impl.
 #define CH_UDF_COL(name)                                                         \
-    __attribute__((export_name(#name "_col")))                                   \
-    ch::raw_buffer * name##_col(ch::raw_buffer * ptr, uint32_t num_rows) {       \
+    __attribute__((export_name(#name)))                                          \
+    ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
         return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
+    }
+
+// Canonical no-suffix alias for PRED3 functions that keep their _col export.
+#define CH_UDF_CANONICAL(name)                                                   \
+    __attribute__((export_name(#name)))                                          \
+    ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
+        return name##_col(ptr, num_rows);                                        \
     }

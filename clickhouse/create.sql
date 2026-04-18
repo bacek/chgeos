@@ -797,502 +797,624 @@ DETERMINISTIC
 SETTINGS serialization_format = 'RowBinary';
 
 -- ---------------------------------------------------------------------------
--- COLUMNAR_V1 variants (_col suffix)
--- Constants passed once (not N×), no RowBinary serialization overhead.
--- Use these for hot paths / analytical queries.
+-- st_dwithin_col: exact distance predicate (PreparedGeometry optimised).
+-- st_dwithin (canonical) expands to st_intersects+st_expand_mp for R-tree compat.
 -- ---------------------------------------------------------------------------
-
--- Predicates (2 geometry args)
-CREATE OR REPLACE FUNCTION st_contains_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_intersects_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_touches_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_within_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_crosses_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_overlaps_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_equals_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_covers_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_coveredby_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
-CREATE OR REPLACE FUNCTION st_containsproperly_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
--- st_disjoint: inverted bbox logic — pruning not safe
-CREATE OR REPLACE FUNCTION st_disjoint_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
--- st_dwithin: distance-based, bbox pruning NOT safe
 CREATE OR REPLACE FUNCTION st_dwithin_col
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String, dist Float64) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
--- Predicates (1 geometry arg) → UInt8
-CREATE OR REPLACE FUNCTION st_isvalid_col
+-- ---------------------------------------------------------------------------
+-- COLUMNAR_V1 — canonical names (no suffix)
+-- ---------------------------------------------------------------------------
+
+-- Predicates (2 geometry args) — COLUMNAR_V1, is_spatial_predicate = 1
+CREATE OR REPLACE FUNCTION st_contains
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS UInt8
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_intersects
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_touches
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_within
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_crosses
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_overlaps
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_equals
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_covers
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_coveredby
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+CREATE OR REPLACE FUNCTION st_containsproperly
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
+-- st_disjoint: inverted bbox logic — no spatial predicate flag
+CREATE OR REPLACE FUNCTION st_disjoint
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_isempty_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_issimple_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_isring_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
--- Scalar Int32 (1 geometry arg)
-CREATE OR REPLACE FUNCTION st_srid_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Int32
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_npoints_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Int32
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_numpoints_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Int32
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_numgeometries_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Int32
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_numinteriorrings_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Int32
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_nrings_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Int32
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_dimension_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Int32
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
--- String output (1 geometry arg)
-CREATE OR REPLACE FUNCTION st_astext_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS String
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_asewkt_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS String
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_geometrytype_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS String
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
-CREATE OR REPLACE FUNCTION st_isvalidreason_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS String
-ABI COLUMNAR_V1
-DETERMINISTIC;
-
--- String output (2 geometry args)
-CREATE OR REPLACE FUNCTION st_relate_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS String
-ABI COLUMNAR_V1
-DETERMINISTIC;
+CREATE OR REPLACE FUNCTION st_dwithin AS (a, b, dist) -> st_intersects_extent(a, st_expand(b, dist)) AND st_distance(a, b) < dist;
 
 -- Scalar Float64 (1 geometry arg)
-CREATE OR REPLACE FUNCTION st_x_col
+CREATE OR REPLACE FUNCTION st_x
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_y_col
+CREATE OR REPLACE FUNCTION st_y
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_z_col
+CREATE OR REPLACE FUNCTION st_z
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_area_col
+CREATE OR REPLACE FUNCTION st_area
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_length_col
+CREATE OR REPLACE FUNCTION st_length
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_perimeter_col
+CREATE OR REPLACE FUNCTION st_perimeter
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 -- Scalar Float64 (2 geometry args)
-CREATE OR REPLACE FUNCTION st_distance_col
+CREATE OR REPLACE FUNCTION st_distance
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_hausdorffdistance_col
+CREATE OR REPLACE FUNCTION st_hausdorffdistance
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_frechetdistance_col
+CREATE OR REPLACE FUNCTION st_frechetdistance
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Float64
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
--- Geometry output (2 geometry args)
-CREATE OR REPLACE FUNCTION st_intersection_col
+-- Scalar Int32 (1 geometry arg)
+CREATE OR REPLACE FUNCTION st_srid
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Int32
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_npoints
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Int32
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_numpoints
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Int32
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_numgeometries
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Int32
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_numinteriorrings
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Int32
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_nrings
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Int32
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_dimension
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Int32
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- Scalar UInt8 (1 geometry arg)
+CREATE OR REPLACE FUNCTION st_isvalid
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_isempty
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_issimple
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_isring
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- String output (1 geometry arg)
+CREATE OR REPLACE FUNCTION st_astext
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS String
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_asewkt
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS String
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_geometrytype
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS String
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_isvalidreason
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS String
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- String output (2 geometry args)
+CREATE OR REPLACE FUNCTION st_relate
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS String
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- Geometry output (2 geometry args) → Nullable(String)
+CREATE OR REPLACE FUNCTION st_intersection
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_union_col
+CREATE OR REPLACE FUNCTION st_union
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_difference_col
+CREATE OR REPLACE FUNCTION st_difference
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_makeline_col
+CREATE OR REPLACE FUNCTION st_makeline
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_symdifference_col
+CREATE OR REPLACE FUNCTION st_symdifference
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_collect_col
+CREATE OR REPLACE FUNCTION st_collect
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_closestpoint_col
+CREATE OR REPLACE FUNCTION st_closestpoint
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_shortestline_col
+CREATE OR REPLACE FUNCTION st_shortestline
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_sharedpaths_col
+CREATE OR REPLACE FUNCTION st_sharedpaths
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
--- Geometry output (1 geometry arg)
-CREATE OR REPLACE FUNCTION st_convexhull_col
+-- Geometry output (1 geometry arg) → Nullable(String)
+CREATE OR REPLACE FUNCTION st_convexhull
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_envelope_col
+CREATE OR REPLACE FUNCTION st_envelope
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_centroid_col
+CREATE OR REPLACE FUNCTION st_centroid
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_makevalid_col
+CREATE OR REPLACE FUNCTION st_makevalid
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_boundary_col
+CREATE OR REPLACE FUNCTION st_boundary
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_unaryunion_col
+CREATE OR REPLACE FUNCTION st_unaryunion
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_reverse_col
+CREATE OR REPLACE FUNCTION st_reverse
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_normalize_col
+CREATE OR REPLACE FUNCTION st_normalize
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_node_col
+CREATE OR REPLACE FUNCTION st_node
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_linmerge_col
+CREATE OR REPLACE FUNCTION st_linmerge
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_polygonize_col
+CREATE OR REPLACE FUNCTION st_polygonize
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_clusterintersecting_col
+CREATE OR REPLACE FUNCTION st_clusterintersecting
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_extent_col
+CREATE OR REPLACE FUNCTION st_extent
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
-CREATE OR REPLACE FUNCTION st_interiorpoint_col
+CREATE OR REPLACE FUNCTION st_interiorpoint
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (wkb String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_expand
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, units Float64) RETURNS Nullable(String)
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 -- ---------------------------------------------------------------------------
--- Canonical aliases (unsuffixed PostGIS-compatible names)
--- Points to _col (COLUMNAR_V1) when available, _mp otherwise.
+-- COLUMNAR_V1 — additional functions
+-- ---------------------------------------------------------------------------
+
+-- Scalar Float64 (densify variants)
+CREATE OR REPLACE FUNCTION st_hausdorffdistance_densify
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String, densify_frac Float64) RETURNS Float64
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_frechetdistance_densify
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String, densify_frac Float64) RETURNS Float64
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- Predicate (3 args)
+CREATE OR REPLACE FUNCTION st_relate_pattern
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String, pattern String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- I/O
+CREATE OR REPLACE FUNCTION geos_version
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS () RETURNS String
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_geomfromgeojson
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geojson String) RETURNS String
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- Geometry constructors → Nullable(String)
+CREATE OR REPLACE FUNCTION st_startpoint
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_endpoint
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_makebox2d
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (low_left String, up_right String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_geometryn
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, n Int32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_exteriorring
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_interiorringn
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, n Int32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_pointn
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, n Int32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_minimumboundingcircle
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_snap
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String, tolerance Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_offsetcurve
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, distance Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_delaunaytriangles
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, tolerance Float64, only_edges Int32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_voronoidiagram
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, tolerance Float64, only_edges Int32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_makepoint
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (x Float64, y Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_makepoint3d
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (x Float64, y Float64, z Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_makepolygon
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (shell String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_addpoint
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (line String, point String, pos Int32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_removepoint
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (line String, pos Int32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_setpoint
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (line String, pos Int32, point String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- Processing → Nullable(String)
+CREATE OR REPLACE FUNCTION st_buffer
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, radius Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_buffer_params
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, radius Float64, params String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_simplify
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, tolerance Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_segmentize
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, max_length Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_subdivide
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, max_vertices Int32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- Transforms → Nullable(String)
+CREATE OR REPLACE FUNCTION st_translate
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, dx Float64, dy Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_scale
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, xf Float64, yf Float64) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_setsrid
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, srid UInt32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_transform
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, srid UInt32) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_transform_proj
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String, pipeline String) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- ---------------------------------------------------------------------------
+-- Remaining aliases — no COLUMNAR_V1 implementation, delegate to _mp
 -- ---------------------------------------------------------------------------
 
 CREATE OR REPLACE FUNCTION geos_log_test AS (a, b) -> geos_log_test_mp(a, b);
 CREATE OR REPLACE FUNCTION geos_test_exception AS (a) -> geos_test_exception_mp(a);
-CREATE OR REPLACE FUNCTION geos_version AS () -> geos_version_mp();
-CREATE OR REPLACE FUNCTION st_addpoint AS (a, b, c) -> st_addpoint_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_area AS (a) -> st_area_col(a);
-CREATE OR REPLACE FUNCTION st_asewkt AS (a) -> st_asewkt_col(a);
-CREATE OR REPLACE FUNCTION st_astext AS (a) -> st_astext_col(a);
-CREATE OR REPLACE FUNCTION st_boundary AS (a) -> st_boundary_col(a);
-CREATE OR REPLACE FUNCTION st_buffer AS (a, b) -> st_buffer_mp(a, b);
-CREATE OR REPLACE FUNCTION st_buffer_params AS (a, b, c) -> st_buffer_params_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_centroid AS (a) -> st_centroid_col(a);
-CREATE OR REPLACE FUNCTION st_closestpoint AS (a, b) -> st_closestpoint_col(a, b);
-CREATE OR REPLACE FUNCTION st_clusterintersecting AS (a) -> st_clusterintersecting_col(a);
-CREATE OR REPLACE FUNCTION st_collect AS (a, b) -> st_collect_col(a, b);
 CREATE OR REPLACE FUNCTION st_collect_agg AS (a) -> st_collect_agg_mp(a);
-CREATE OR REPLACE FUNCTION st_contains AS (a, b) -> st_contains_col(a, b);
-CREATE OR REPLACE FUNCTION st_containsproperly AS (a, b) -> st_containsproperly_col(a, b);
-CREATE OR REPLACE FUNCTION st_convexhull AS (a) -> st_convexhull_col(a);
 CREATE OR REPLACE FUNCTION st_convexhull_agg AS (a) -> st_convexhull_agg_mp(a);
-CREATE OR REPLACE FUNCTION st_coveredby AS (a, b) -> st_coveredby_col(a, b);
-CREATE OR REPLACE FUNCTION st_covers AS (a, b) -> st_covers_col(a, b);
-CREATE OR REPLACE FUNCTION st_crosses AS (a, b) -> st_crosses_col(a, b);
-CREATE OR REPLACE FUNCTION st_delaunaytriangles AS (a, b, c) -> st_delaunaytriangles_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_difference AS (a, b) -> st_difference_col(a, b);
-CREATE OR REPLACE FUNCTION st_dimension AS (a) -> st_dimension_col(a);
-CREATE OR REPLACE FUNCTION st_disjoint AS (a, b) -> st_disjoint_col(a, b);
-CREATE OR REPLACE FUNCTION st_distance AS (a, b) -> st_distance_col(a, b);
-CREATE OR REPLACE FUNCTION st_dwithin AS (a, b, c) -> st_dwithin_col(a, b, c);
-CREATE OR REPLACE FUNCTION st_endpoint AS (a) -> st_endpoint_mp(a);
-CREATE OR REPLACE FUNCTION st_envelope AS (a) -> st_envelope_col(a);
-CREATE OR REPLACE FUNCTION st_equals AS (a, b) -> st_equals_col(a, b);
-CREATE OR REPLACE FUNCTION st_expand AS (a, b) -> st_expand_mp(a, b);
-CREATE OR REPLACE FUNCTION st_extent AS (a) -> st_extent_col(a);
 CREATE OR REPLACE FUNCTION st_extent_agg AS (a) -> st_extent_agg_mp(a);
-CREATE OR REPLACE FUNCTION st_exteriorring AS (a) -> st_exteriorring_mp(a);
-CREATE OR REPLACE FUNCTION st_frechetdistance AS (a, b) -> st_frechetdistance_col(a, b);
-CREATE OR REPLACE FUNCTION st_frechetdistance_densify AS (a, b, c) -> st_frechetdistance_densify_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_geometryn AS (a, b) -> st_geometryn_mp(a, b);
-CREATE OR REPLACE FUNCTION st_geometrytype AS (a) -> st_geometrytype_col(a);
 CREATE OR REPLACE FUNCTION st_geomfromchlinestring AS (a) -> st_geomfromchlinestring_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromchmultipolygon AS (a) -> st_geomfromchmultipolygon_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromchpoint AS (a) -> st_geomfromchpoint_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromchpolygon AS (a) -> st_geomfromchpolygon_mp(a);
-CREATE OR REPLACE FUNCTION st_geomfromgeojson AS (a) -> st_geomfromgeojson_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromtext AS (a) -> st_geomfromtext_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromwkb AS (a) -> st_geomfromwkb_mp(a);
-CREATE OR REPLACE FUNCTION st_hausdorffdistance AS (a, b) -> st_hausdorffdistance_col(a, b);
-CREATE OR REPLACE FUNCTION st_hausdorffdistance_densify AS (a, b, c) -> st_hausdorffdistance_densify_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_interiorpoint AS (a) -> st_interiorpoint_col(a);
-CREATE OR REPLACE FUNCTION st_interiorringn AS (a, b) -> st_interiorringn_mp(a, b);
-CREATE OR REPLACE FUNCTION st_intersection AS (a, b) -> st_intersection_col(a, b);
-CREATE OR REPLACE FUNCTION st_intersects AS (a, b) -> st_intersects_col(a, b);
 CREATE OR REPLACE FUNCTION st_intersects_extent AS (a, b) -> st_intersects_extent_mp(a, b);
-CREATE OR REPLACE FUNCTION st_isempty AS (a) -> st_isempty_col(a);
-CREATE OR REPLACE FUNCTION st_isring AS (a) -> st_isring_col(a);
-CREATE OR REPLACE FUNCTION st_issimple AS (a) -> st_issimple_col(a);
-CREATE OR REPLACE FUNCTION st_isvalid AS (a) -> st_isvalid_col(a);
-CREATE OR REPLACE FUNCTION st_isvalidreason AS (a) -> st_isvalidreason_col(a);
-CREATE OR REPLACE FUNCTION st_length AS (a) -> st_length_col(a);
-CREATE OR REPLACE FUNCTION st_linmerge AS (a) -> st_linmerge_col(a);
-CREATE OR REPLACE FUNCTION st_makebox2d AS (a, b) -> st_makebox2d_mp(a, b);
-CREATE OR REPLACE FUNCTION st_makeline AS (a, b) -> st_makeline_col(a, b);
 CREATE OR REPLACE FUNCTION st_makeline_agg AS (a) -> st_makeline_agg_mp(a);
-CREATE OR REPLACE FUNCTION st_makepoint AS (a, b) -> st_makepoint_mp(a, b);
-CREATE OR REPLACE FUNCTION st_makepoint3d AS (a, b, c) -> st_makepoint3d_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_makepolygon AS (a) -> st_makepolygon_mp(a);
-CREATE OR REPLACE FUNCTION st_makevalid AS (a) -> st_makevalid_col(a);
-CREATE OR REPLACE FUNCTION st_minimumboundingcircle AS (a) -> st_minimumboundingcircle_mp(a);
-CREATE OR REPLACE FUNCTION st_node AS (a) -> st_node_col(a);
-CREATE OR REPLACE FUNCTION st_normalize AS (a) -> st_normalize_col(a);
-CREATE OR REPLACE FUNCTION st_npoints AS (a) -> st_npoints_col(a);
-CREATE OR REPLACE FUNCTION st_nrings AS (a) -> st_nrings_col(a);
-CREATE OR REPLACE FUNCTION st_numgeometries AS (a) -> st_numgeometries_col(a);
-CREATE OR REPLACE FUNCTION st_numinteriorrings AS (a) -> st_numinteriorrings_col(a);
-CREATE OR REPLACE FUNCTION st_numpoints AS (a) -> st_numpoints_col(a);
-CREATE OR REPLACE FUNCTION st_offsetcurve AS (a, b) -> st_offsetcurve_mp(a, b);
-CREATE OR REPLACE FUNCTION st_overlaps AS (a, b) -> st_overlaps_col(a, b);
-CREATE OR REPLACE FUNCTION st_perimeter AS (a) -> st_perimeter_col(a);
-CREATE OR REPLACE FUNCTION st_pointn AS (a, b) -> st_pointn_mp(a, b);
-CREATE OR REPLACE FUNCTION st_polygonize AS (a) -> st_polygonize_col(a);
-CREATE OR REPLACE FUNCTION st_relate AS (a, b) -> st_relate_col(a, b);
-CREATE OR REPLACE FUNCTION st_relate_pattern AS (a, b, c) -> st_relate_pattern_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_removepoint AS (a, b) -> st_removepoint_mp(a, b);
-CREATE OR REPLACE FUNCTION st_reverse AS (a) -> st_reverse_col(a);
-CREATE OR REPLACE FUNCTION st_scale AS (a, b, c) -> st_scale_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_segmentize AS (a, b) -> st_segmentize_mp(a, b);
-CREATE OR REPLACE FUNCTION st_setpoint AS (a, b, c) -> st_setpoint_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_setsrid AS (a, b) -> st_setsrid_mp(a, b);
-CREATE OR REPLACE FUNCTION st_sharedpaths AS (a, b) -> st_sharedpaths_col(a, b);
-CREATE OR REPLACE FUNCTION st_shortestline AS (a, b) -> st_shortestline_col(a, b);
-CREATE OR REPLACE FUNCTION st_simplify AS (a, b) -> st_simplify_mp(a, b);
-CREATE OR REPLACE FUNCTION st_snap AS (a, b, c) -> st_snap_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_srid AS (a) -> st_srid_col(a);
-CREATE OR REPLACE FUNCTION st_startpoint AS (a) -> st_startpoint_mp(a);
-CREATE OR REPLACE FUNCTION st_subdivide AS (a, b) -> st_subdivide_mp(a, b);
-CREATE OR REPLACE FUNCTION st_symdifference AS (a, b) -> st_symdifference_col(a, b);
-CREATE OR REPLACE FUNCTION st_touches AS (a, b) -> st_touches_col(a, b);
-CREATE OR REPLACE FUNCTION st_transform AS (a, b) -> st_transform_mp(a, b);
-CREATE OR REPLACE FUNCTION st_transform_proj AS (a, b) -> st_transform_proj_mp(a, b);
-CREATE OR REPLACE FUNCTION st_translate AS (a, b, c) -> st_translate_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_unaryunion AS (a) -> st_unaryunion_col(a);
-CREATE OR REPLACE FUNCTION st_union AS (a, b) -> st_union_col(a, b);
 CREATE OR REPLACE FUNCTION st_union_agg AS (a) -> st_union_agg_mp(a);
-CREATE OR REPLACE FUNCTION st_voronoidiagram AS (a, b, c) -> st_voronoidiagram_mp(a, b, c);
-CREATE OR REPLACE FUNCTION st_within AS (a, b) -> st_within_col(a, b);
-CREATE OR REPLACE FUNCTION st_x AS (a) -> st_x_col(a);
-CREATE OR REPLACE FUNCTION st_y AS (a) -> st_y_col(a);
-CREATE OR REPLACE FUNCTION st_z AS (a) -> st_z_col(a);
