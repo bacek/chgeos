@@ -102,14 +102,30 @@ t "st_union_area"      "SELECT round(st_area(st_union(st_geomfromtext('POLYGON (
 t "st_difference"      "SELECT round(st_area(st_difference(st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))'), st_geomfromtext('POLYGON ((1 0, 2 0, 2 2, 1 2, 1 0))'))))"  "2"
 t "st_symdiff_area"    "SELECT round(st_area(st_symdifference(st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))'), st_geomfromtext('POLYGON ((1 0, 3 0, 3 2, 1 2, 1 0))'))))"  "4"
 
-# Aggregate
-t "st_union_agg"        "SELECT round(st_area(st_union_agg(geom))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))'))"  "2"
-t "st_collect_agg"      "SELECT st_numgeometries(st_collect_agg(geom)) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "2"
-t "st_collect_agg_nodissolve" "SELECT round(st_area(st_collect_agg(geom))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))'))"  "8"
-t "st_extent_agg"       "SELECT round(st_area(st_extent_agg(geom))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (3 4)'))"  "12"
-t "st_extent_agg_polys" "SELECT round(st_area(st_extent_agg(geom))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((3 0, 5 0, 5 2, 3 2, 3 0))'))"  "10"
-t "st_makeline_agg"     "SELECT st_astext(st_makeline_agg(geom)) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "LINESTRING (0 0, 1 0, 1 1)"
-t "st_convexhull_agg"   "SELECT round(st_area(st_convexhull_agg(geom)), 1) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (0 1)'))"  "0.5"
+# Aggregate — functions take Array(String); use groupArray() to collect rows
+t "st_union_agg"        "SELECT round(st_area(st_union_agg(groupArray(geom)))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))'))"  "2"
+t "st_collect_agg"      "SELECT st_numgeometries(st_collect_agg(groupArray(geom))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "2"
+t "st_collect_agg_nodissolve" "SELECT round(st_area(st_collect_agg(groupArray(geom)))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))'))"  "8"
+t "st_extent_agg"       "SELECT round(st_area(st_extent_agg(groupArray(geom)))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (3 4)'))"  "12"
+t "st_extent_agg_polys" "SELECT round(st_area(st_extent_agg(groupArray(geom)))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((3 0, 5 0, 5 2, 3 2, 3 0))'))"  "10"
+t "st_makeline_agg"     "SELECT st_astext(st_makeline_agg(groupArray(geom))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "LINESTRING (0 0, 1 0, 1 1)"
+t "st_convexhull_agg"   "SELECT round(st_area(st_convexhull_agg(groupArray(geom))), 1) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (0 1)'))"  "0.5"
+
+# COLUMNAR_V1 aggregate functions (COL_COMPLEX Array(String) input)
+# The canonical names (st_union_agg etc.) now route through COLUMNAR_V1.
+# Cross-check: COLUMNAR_V1 and _mp paths must agree.
+t "col_vs_mp_union_agg" \
+    "SELECT st_astext(st_union_agg(groupArray(wkb))) = st_astext(st_union_agg_mp(groupArray(wkb))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))') AS wkb UNION ALL SELECT st_geomfromtext('POLYGON ((2 2, 3 2, 3 3, 2 3, 2 2))'))" \
+    "1"
+t "col_extent_agg_bbox" \
+    "SELECT st_astext(st_extent_agg(groupArray(wkb))) FROM (SELECT st_geomfromtext('POINT (1 2)') AS wkb UNION ALL SELECT st_geomfromtext('POINT (4 6)') UNION ALL SELECT st_geomfromtext('POINT (-1 0)'))" \
+    "POLYGON ((-1 0, 4 0, 4 6, -1 6, -1 0))"
+t "col_collect_agg_types" \
+    "SELECT st_astext(st_collect_agg(groupArray(wkb))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS wkb UNION ALL SELECT st_geomfromtext('POINT (1 1)'))" \
+    "GEOMETRYCOLLECTION (POINT (0 0), POINT (1 1))"
+t "col_union_agg_single" \
+    "SELECT st_astext(st_union_agg(groupArray(wkb))) FROM (SELECT st_geomfromtext('POINT (3 7)') AS wkb)" \
+    "POINT (3 7)"
 
 # Multi-row batch
 t "batch_area_sum"     "SELECT sum(st_area(st_geomfromtext(wkt))) FROM (SELECT 'POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))' AS wkt UNION ALL SELECT 'POLYGON ((0 0, 2 0, 2 3, 0 3, 0 0))')"  "7"

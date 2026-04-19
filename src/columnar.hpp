@@ -62,9 +62,35 @@ enum ColType : uint32_t {
     COL_NULL_FIXED32= 5,
     COL_FIXED64     = 6,  // UInt64/Int64/Float64
     COL_NULL_FIXED64= 7,
+    // COL_COMPLEX: generic Array(T) / Tuple(T...) — type-guided recursive format.
+    // offsets_offset → uint32[N+1] outer offsets (for Array rows; 0 for Tuple/scalar).
+    // data_offset    → recursive data block (layout determined by C++/CH declared type).
+    // Recursive layout per type:
+    //   scalar T:           T[N]  (packed, fixed width)
+    //   String:             uint32[N+1] offsets + bytes (null-terminated per COL_BYTES)
+    //   vector<T> (Array):  uint32[N+1] outer_offsets → M total, then recursive(M, T)
+    //   pair/tuple (Tuple): recursive(N, T0) ++ recursive(N, T1) ++ ...  (columnar)
+    COL_COMPLEX     = 8,
 
     COL_IS_CONST    = 0x80u, // flag: 1 stored row, broadcast to num_rows
 };
+
+// ── Type traits for complex (Array/Tuple) C++ types ─────────────────────────
+
+template <typename T> struct is_vector_t      : std::false_type {};
+template <typename T> struct is_vector_t<std::vector<T>> : std::true_type {};
+template <typename T> inline constexpr bool is_vector_v = is_vector_t<T>::value;
+
+template <typename T> struct is_pair_t        : std::false_type {};
+template <typename A, typename B> struct is_pair_t<std::pair<A,B>> : std::true_type {};
+template <typename T> inline constexpr bool is_pair_v = is_pair_t<T>::value;
+
+template <typename T> struct is_tuple_t       : std::false_type {};
+template <typename... Ts> struct is_tuple_t<std::tuple<Ts...>> : std::true_type {};
+template <typename T> inline constexpr bool is_tuple_v = is_tuple_t<T>::value;
+
+template <typename T> inline constexpr bool is_complex_v =
+    is_vector_v<T> || is_pair_v<T> || is_tuple_v<T>;
 
 // ── Wire structs ──────────────────────────────────────────────────────────────
 
@@ -267,18 +293,197 @@ struct ColBytesWriter {
     }
 };
 
+// ── COL_COMPLEX output writer ─────────────────────────────────────────────────
+// write_complex_data<T>(out, n, get_val): appends N rows of type T to `out`.
+// get_val(i) → T; may be called twice per element for pair/tuple fields.
+// For vector<T>, pre-collects all rows before writing.
+
+template <typename T, typename GetVal>
+void write_complex_data(raw_buffer* out, uint32_t n, GetVal get_val) {
+    if constexpr (std::is_arithmetic_v<T> && !std::is_same_v<T, bool>) {
+        for (uint32_t i = 0; i < n; ++i) {
+            T v = get_val(i);
+            out->append(reinterpret_cast<const uint8_t*>(&v), sizeof(T));
+        }
+    } else if constexpr (std::is_same_v<T, std::string>) {
+        // Two-pass: offsets[n+1] + bytes (null-terminated)
+        std::vector<std::string> strs(n);
+        for (uint32_t i = 0; i < n; ++i) strs[i] = get_val(i);
+        std::vector<uint32_t> offs(n + 1u);
+        offs[0] = 0u;
+        for (uint32_t i = 0; i < n; ++i)
+            offs[i + 1u] = offs[i] + static_cast<uint32_t>(strs[i].size()) + 1u;
+        out->append(reinterpret_cast<const uint8_t*>(offs.data()), (n + 1u) * 4u);
+        for (uint32_t i = 0; i < n; ++i) {
+            out->append(reinterpret_cast<const uint8_t*>(strs[i].data()),
+                        static_cast<uint32_t>(strs[i].size()));
+            out->push_back(0u);
+        }
+    } else if constexpr (std::is_same_v<T, std::unique_ptr<geos::geom::Geometry>>) {
+        // Two-pass: collect WKBs, then offsets + bytes (null-terminated)
+        std::vector<std::vector<uint8_t>> wkbs(n);
+        for (uint32_t i = 0; i < n; ++i) {
+            auto g = get_val(i);
+            if (g) wkbs[i] = write_ewkb(g);
+        }
+        std::vector<uint32_t> offs(n + 1u);
+        offs[0] = 0u;
+        for (uint32_t i = 0; i < n; ++i)
+            offs[i + 1u] = offs[i] + static_cast<uint32_t>(wkbs[i].size()) + 1u;
+        out->append(reinterpret_cast<const uint8_t*>(offs.data()), (n + 1u) * 4u);
+        for (uint32_t i = 0; i < n; ++i) {
+            out->append(wkbs[i].data(), static_cast<uint32_t>(wkbs[i].size()));
+            out->push_back(0u);
+        }
+    } else if constexpr (is_vector_v<T>) {
+        using ElemT = typename T::value_type;
+        // Collect all rows, write outer offsets, flatten elements, recurse.
+        std::vector<T> rows(n);
+        for (uint32_t i = 0; i < n; ++i) rows[i] = get_val(i);
+        std::vector<uint32_t> outer_offs(n + 1u);
+        outer_offs[0] = 0u;
+        for (uint32_t i = 0; i < n; ++i)
+            outer_offs[i + 1u] = outer_offs[i] + static_cast<uint32_t>(rows[i].size());
+        uint32_t M = outer_offs[n];
+        out->append(reinterpret_cast<const uint8_t*>(outer_offs.data()), (n + 1u) * 4u);
+        std::vector<ElemT> flat;
+        flat.reserve(M);
+        for (uint32_t i = 0; i < n; ++i)
+            for (auto& elem : rows[i]) flat.push_back(std::move(elem));
+        write_complex_data<ElemT>(out, M,
+            [&](uint32_t j) -> const ElemT& { return flat[j]; });
+    } else if constexpr (is_pair_v<T>) {
+        using T1 = typename T::first_type;
+        using T2 = typename T::second_type;
+        write_complex_data<T1>(out, n, [&](uint32_t i) -> T1 { return get_val(i).first;  });
+        write_complex_data<T2>(out, n, [&](uint32_t i) -> T2 { return get_val(i).second; });
+    } else if constexpr (is_tuple_v<T>) {
+        [&]<size_t... I>(std::index_sequence<I...>) {
+            (write_complex_data<std::tuple_element_t<I, T>>(out, n,
+                [&](uint32_t i) -> std::tuple_element_t<I, T> {
+                    return std::get<I>(get_val(i));
+                }), ...);
+        }(std::make_index_sequence<std::tuple_size_v<T>>{});
+    }
+}
+
+// Write a single-column COL_COMPLEX output buffer from n invocations of get_val.
+template <typename Ret, typename GetVal>
+raw_buffer* write_complex_col(uint32_t n, GetVal get_val) {
+    raw_buffer* out = clickhouse_create_buffer(0);
+    out->resize(HEADER_BYTES + COL_DESC_BYTES);
+    uint8_t* p = out->data();
+    std::memcpy(p,     &n,  4);
+    const uint32_t one = 1u;
+    std::memcpy(p + 4, &one, 4);
+    ColDescriptor d{};
+    d.type        = static_cast<uint32_t>(COL_COMPLEX);
+    d.data_offset = HEADER_BYTES + COL_DESC_BYTES;
+    std::memcpy(p + HEADER_BYTES, &d, sizeof(d));
+
+    std::vector<Ret> vals(n);
+    for (uint32_t i = 0; i < n; ++i) vals[i] = get_val(i);
+    write_complex_data<Ret>(out, n,
+        [&](uint32_t i) -> const Ret& { return vals[i]; });
+
+    // Patch data_size (at byte offset 16 within ColDescriptor = HEADER_BYTES+16 in buf)
+    uint32_t data_size = out->size() - (HEADER_BYTES + COL_DESC_BYTES);
+    std::memcpy(out->data() + HEADER_BYTES + 16u, &data_size, 4u);
+    return out;
+}
+
+// ── COL_COMPLEX array reader ──────────────────────────────────────────────────
+// Reads one row of an Array(T) COL_COMPLEX column.
+// Wire layout (see COL_COMPLEX comment in ColType):
+//   col.offsets → uint32[row_count+1] outer offsets (cumulative element counts)
+//   col.data    → element data:
+//     Array(String/WKB): uint32[M_total+1] inner_offsets + bytes (null-terminated)
+//     Array(arithmetic): ElemT[M_total] packed
+
+template <typename ElemT>
+std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
+    uint32_t idx         = col.is_const ? 0u : row;
+    uint32_t outer_start = col.offsets[idx];
+    uint32_t outer_end   = col.offsets[idx + 1];
+    uint32_t M_total     = col.offsets[col.is_const ? 1u : col.row_count];
+    uint32_t count       = outer_end - outer_start;
+
+    std::vector<ElemT> result;
+    result.reserve(count);
+
+    if constexpr (std::is_same_v<ElemT, std::span<const uint8_t>> ||
+                  std::is_same_v<ElemT, std::unique_ptr<geos::geom::Geometry>>) {
+        // Array(String / WKB): data = [uint32[M_total+1] inner_offs][bytes]
+        const uint32_t* inner_offs = reinterpret_cast<const uint32_t*>(col.data);
+        const uint8_t*  chars      = col.data + (M_total + 1u) * sizeof(uint32_t);
+        for (uint32_t j = outer_start; j < outer_end; ++j) {
+            uint32_t s   = inner_offs[j];
+            uint32_t e   = inner_offs[j + 1];
+            uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;  // strip null term
+            std::span<const uint8_t> sp{chars + s, len};
+            if constexpr (std::is_same_v<ElemT, std::span<const uint8_t>>)
+                result.push_back(sp);
+            else
+                result.push_back(read_wkb(sp));
+        }
+    } else if constexpr (std::is_arithmetic_v<ElemT>) {
+        // Array(numeric): data = ElemT[M_total] packed
+        const ElemT* data_ptr = reinterpret_cast<const ElemT*>(col.data);
+        for (uint32_t j = outer_start; j < outer_end; ++j)
+            result.push_back(data_ptr[j]);
+    } else if constexpr (std::is_same_v<ElemT, std::string>) {
+        const uint32_t* inner_offs = reinterpret_cast<const uint32_t*>(col.data);
+        const uint8_t*  chars      = col.data + (M_total + 1u) * sizeof(uint32_t);
+        for (uint32_t j = outer_start; j < outer_end; ++j) {
+            uint32_t s   = inner_offs[j];
+            uint32_t e   = inner_offs[j + 1];
+            uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
+            result.push_back(std::string(reinterpret_cast<const char*>(chars + s), len));
+        }
+    }
+    return result;
+}
+
 // ── Input column accessor by type ─────────────────────────────────────────────
+
+// Read a fixed-width column value as type T, widening from narrower stored types.
+// CH passes integer literals as the smallest fitting type (e.g. UInt8 for `2`),
+// but the _impl function may declare a wider type (e.g. int32_t).  We check the
+// actual stored ColType and widen via static_cast.  For floating-point targets,
+// bytes are bit-cast directly (no numeric cast across float/int boundary).
+template <typename T>
+T col_get_fixed_widened(const ColView& col, uint32_t row) noexcept {
+    uint32_t idx = col.is_const ? 0u : row;
+    switch (col.base_type) {
+        case COL_FIXED8:
+        case COL_NULL_FIXED8: {
+            uint8_t v; std::memcpy(&v, col.data + idx, 1);
+            return static_cast<T>(v);
+        }
+        case COL_FIXED32:
+        case COL_NULL_FIXED32: {
+            uint32_t v; std::memcpy(&v, col.data + idx * 4u, 4u);
+            return static_cast<T>(v);
+        }
+        default: {
+            T v; std::memcpy(&v, col.data + idx * sizeof(T), sizeof(T));
+            return v;
+        }
+    }
+}
 
 template <typename T>
 T col_get_arg(const ColView& col, uint32_t row) {
-    if constexpr (std::is_same_v<T, std::span<const uint8_t>>) {
+    if constexpr (is_vector_v<T>) {
+        return col_get_complex_array<typename T::value_type>(col, row);
+    } else if constexpr (std::is_same_v<T, std::span<const uint8_t>>) {
         return col.get_bytes(row);
     } else if constexpr (std::is_same_v<T, double>) {
-        return col.get_fixed<double>(row);
+        return col_get_fixed_widened<double>(col, row);
     } else if constexpr (std::is_same_v<T, int32_t>) {
-        return col.get_fixed<int32_t>(row);
+        return col_get_fixed_widened<int32_t>(col, row);
     } else if constexpr (std::is_same_v<T, uint32_t>) {
-        return col.get_fixed<uint32_t>(row);
+        return col_get_fixed_widened<uint32_t>(col, row);
     } else if constexpr (std::is_same_v<T, std::string_view>) {
         auto s = col.get_bytes(row);
         return {reinterpret_cast<const char*>(s.data()), s.size()};
@@ -467,6 +672,12 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             }
             w.finish();
             return out;
+
+        // ── complex output: Array(T), Tuple(T...), pair, nested ──────────────
+        } else if constexpr (is_complex_v<Ret>) {
+            return write_complex_col<Ret>(n, [&](uint32_t i) -> Ret {
+                return any_null(i) ? Ret{} : invoke(i);
+            });
         }
 
     } catch (const std::exception& e) {

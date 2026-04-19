@@ -368,3 +368,143 @@ TEST(ColumnarPrepGeomDist, DWithinBboxMissShortCircuits) {
 
     EXPECT_EQ(got[0], 0u);
 }
+
+// ── COL_COMPLEX tests ─────────────────────────────────────────────────────────
+
+// Build a COL_COMPLEX Array(String) column (const, 1 row containing all WKBs).
+static ColData complex_array_string_col(const std::vector<ch::Vector>& wkbs) {
+    ColData col;
+    col.col_type = static_cast<uint32_t>(COL_COMPLEX) | static_cast<uint32_t>(COL_IS_CONST);
+
+    // outer_offsets: uint32[2] = {0, M}
+    uint32_t M = static_cast<uint32_t>(wkbs.size());
+    col.offsets = {0u, M};
+
+    // data = inner_offsets[M+1] + bytes (null-terminated)
+    std::vector<uint32_t> inner_offs(M + 1u);
+    inner_offs[0] = 0u;
+    std::vector<uint8_t> chars;
+    for (uint32_t j = 0; j < M; ++j) {
+        chars.insert(chars.end(), wkbs[j].begin(), wkbs[j].end());
+        chars.push_back(0u);
+        inner_offs[j + 1u] = static_cast<uint32_t>(chars.size());
+    }
+    // Flatten inner_offs + chars into col.data
+    col.data.resize((M + 1u) * sizeof(uint32_t) + chars.size());
+    std::memcpy(col.data.data(), inner_offs.data(), (M + 1u) * sizeof(uint32_t));
+    std::memcpy(col.data.data() + (M + 1u) * sizeof(uint32_t), chars.data(), chars.size());
+    return col;
+}
+
+// Read the geometry WKB from a COL_COMPLEX output buffer.
+// For a Geometry (nullable String) output, just reads the first (and only) non-null WKB.
+static std::string read_geom_col_wkt(raw_buffer* buf) {
+    // Output is COL_NULL_BYTES (existing Geometry path)
+    uint32_t num_rows;
+    std::memcpy(&num_rows, buf->data(), 4);
+    ColDescriptor d;
+    std::memcpy(&d, buf->data() + HEADER_BYTES, sizeof(d));
+    EXPECT_EQ(d.type & ~static_cast<uint32_t>(COL_IS_CONST),
+              static_cast<uint32_t>(COL_NULL_BYTES));
+    // Read first non-null row
+    const uint32_t* offs = reinterpret_cast<const uint32_t*>(buf->data() + d.offsets_offset);
+    const uint8_t*  data = buf->data() + d.data_offset;
+    for (uint32_t i = 0; i < num_rows; ++i) {
+        if (d.null_offset && buf->data()[d.null_offset + i]) continue;
+        uint32_t s   = offs[i];
+        uint32_t e   = offs[i + 1];
+        uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
+        auto g = read_wkb({data + s, len});
+        return geom2wkt(g);
+    }
+    return "";
+}
+
+// ── Test: COL_COMPLEX input → vector<unique_ptr<Geometry>> arg ───────────────
+
+// Simple 1-arg aggregate: st_union_agg_impl(vector<Geometry>) → Geometry.
+// We pass a COL_COMPLEX Array(String) column and verify the correct geometry union.
+TEST(ColComplex, AggInputArrayOfWkbs) {
+    // Union of two non-overlapping triangles → should produce a single geometry
+    auto tri1 = wkt2wkb("POLYGON ((0 0, 1 0, 0 1, 0 0))");
+    auto tri2 = wkt2wkb("POLYGON ((2 2, 3 2, 2 3, 2 2))");
+    const uint32_t n = 1;  // one "row" = one group
+
+    auto* buf = make_columnar(n, {
+        complex_array_string_col({tri1, tri2}),
+    });
+
+    raw_buffer* out = columnar_impl_wrapper(buf, n, ch::st_union_agg_impl);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+
+    // The result is a GEOMETRYCOLLECTION or MULTIPOLYGON of the two triangles
+    std::string wkt = read_geom_col_wkt(out);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+    EXPECT_FALSE(wkt.empty());
+    // Both triangles must appear in the result
+    EXPECT_NE(wkt.find("POLYGON"), std::string::npos);
+}
+
+// ── Test: COL_COMPLEX output → vector<pair<uint64_t,double>> ─────────────────
+
+// Trivial _impl that returns a vector of (index, value) pairs per row.
+static std::vector<std::pair<uint64_t, double>> pair_vec_impl(int32_t n) {
+    std::vector<std::pair<uint64_t, double>> result;
+    for (int32_t i = 0; i < n; ++i)
+        result.push_back({static_cast<uint64_t>(i), static_cast<double>(i) * 1.5});
+    return result;
+}
+
+static std::vector<std::pair<uint64_t, double>> read_pair_vec_row(raw_buffer* buf, uint32_t row) {
+    uint32_t num_rows;
+    std::memcpy(&num_rows, buf->data(), 4);
+    ColDescriptor d;
+    std::memcpy(&d, buf->data() + HEADER_BYTES, sizeof(d));
+    EXPECT_EQ(d.type, static_cast<uint32_t>(COL_COMPLEX));
+
+    const uint8_t* data = buf->data() + d.data_offset;
+    // Layout: uint32[num_rows+1] outer_offs + uint64[M] keys + float64[M] dists
+    const uint32_t* outer_offs = reinterpret_cast<const uint32_t*>(data);
+    uint32_t M = outer_offs[num_rows];
+    const uint64_t* keys  = reinterpret_cast<const uint64_t*>(data + (num_rows + 1u) * 4u);
+    const double*   dists = reinterpret_cast<const double*>(keys + M);
+
+    uint32_t start = outer_offs[row];
+    uint32_t end   = outer_offs[row + 1u];
+    std::vector<std::pair<uint64_t, double>> result;
+    for (uint32_t j = start; j < end; ++j)
+        result.push_back({keys[j], dists[j]});
+    return result;
+}
+
+TEST(ColComplex, OutputVectorOfPairs) {
+    // 3 rows: row 0 → 2 pairs, row 1 → 0 pairs, row 2 → 3 pairs
+    const uint32_t n = 3;
+    // Build a trivial input column (int32: counts per row)
+    std::vector<int32_t> counts = {2, 0, 3};
+    ColData count_col;
+    count_col.col_type = static_cast<uint32_t>(COL_FIXED32);
+    count_col.data.resize(n * 4u);
+    std::memcpy(count_col.data.data(), counts.data(), n * 4u);
+
+    auto* buf = make_columnar(n, {count_col});
+    raw_buffer* out = columnar_impl_wrapper(buf, n, pair_vec_impl);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+
+    // Row 0: 2 pairs → {(0,0.0),(1,1.5)}
+    auto row0 = read_pair_vec_row(out, 0);
+    ASSERT_EQ(row0.size(), 2u);
+    EXPECT_EQ(row0[0].first, 0u);   EXPECT_DOUBLE_EQ(row0[0].second, 0.0);
+    EXPECT_EQ(row0[1].first, 1u);   EXPECT_DOUBLE_EQ(row0[1].second, 1.5);
+
+    // Row 1: 0 pairs
+    auto row1 = read_pair_vec_row(out, 1);
+    EXPECT_TRUE(row1.empty());
+
+    // Row 2: 3 pairs → {(0,0.0),(1,1.5),(2,3.0)}
+    auto row2 = read_pair_vec_row(out, 2);
+    ASSERT_EQ(row2.size(), 3u);
+    EXPECT_EQ(row2[2].first, 2u);   EXPECT_DOUBLE_EQ(row2[2].second, 3.0);
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+}

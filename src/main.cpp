@@ -28,6 +28,12 @@ CH_UDF_RB_ONLY(st_collect_agg)
 CH_UDF_RB_ONLY(st_extent_agg)
 CH_UDF_RB_ONLY(st_makeline_agg)
 CH_UDF_RB_ONLY(st_convexhull_agg)
+// COLUMNAR_V1 variants (COL_COMPLEX input: Array(String) via groupArray())
+CH_UDF_COL(st_union_agg)
+CH_UDF_COL(st_collect_agg)
+CH_UDF_COL(st_extent_agg)
+CH_UDF_COL(st_makeline_agg)
+CH_UDF_COL(st_convexhull_agg)
 
 // ── RowBinary — scalar functions ──────────────────────────────────────────────
 // I/O

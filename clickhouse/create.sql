@@ -242,6 +242,13 @@ ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+--
+CREATE OR REPLACE FUNCTION st_intersects_extent_rb
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary', is_spatial_predicate = 1;
 
 CREATE OR REPLACE FUNCTION st_within_mp
 LANGUAGE WASM FROM 'chgeos'
@@ -717,6 +724,37 @@ ARGUMENTS (wkb String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'RowBinary';
+
+-- COLUMNAR_V1 variants of aggregate functions (COL_COMPLEX Array(String) input).
+CREATE OR REPLACE FUNCTION st_union_agg
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_collect_agg
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_extent_agg
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_makeline_agg
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+CREATE OR REPLACE FUNCTION st_convexhull_agg
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ABI COLUMNAR_V1
+DETERMINISTIC;
 
 -- ---------------------------------------------------------------------------
 -- Processing
@@ -1401,9 +1439,6 @@ DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION geos_log_test AS (a, b) -> geos_log_test_mp(a, b);
 CREATE OR REPLACE FUNCTION geos_test_exception AS (a) -> geos_test_exception_mp(a);
-CREATE OR REPLACE FUNCTION st_collect_agg AS (a) -> st_collect_agg_mp(a);
-CREATE OR REPLACE FUNCTION st_convexhull_agg AS (a) -> st_convexhull_agg_mp(a);
-CREATE OR REPLACE FUNCTION st_extent_agg AS (a) -> st_extent_agg_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromchlinestring AS (a) -> st_geomfromchlinestring_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromchmultipolygon AS (a) -> st_geomfromchmultipolygon_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromchpoint AS (a) -> st_geomfromchpoint_mp(a);
@@ -1411,5 +1446,3 @@ CREATE OR REPLACE FUNCTION st_geomfromchpolygon AS (a) -> st_geomfromchpolygon_m
 CREATE OR REPLACE FUNCTION st_geomfromtext AS (a) -> st_geomfromtext_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromwkb AS (a) -> st_geomfromwkb_mp(a);
 CREATE OR REPLACE FUNCTION st_intersects_extent AS (a, b) -> st_intersects_extent_mp(a, b);
-CREATE OR REPLACE FUNCTION st_makeline_agg AS (a) -> st_makeline_agg_mp(a);
-CREATE OR REPLACE FUNCTION st_union_agg AS (a) -> st_union_agg_mp(a);
