@@ -73,6 +73,10 @@ enum ColType : uint32_t {
     COL_COMPLEX     = 8,
 
     COL_IS_CONST    = 0x80u, // flag: 1 stored row, broadcast to num_rows
+    // COL_IS_REPEAT: column is cyclic with period R stored in offsets_offset.
+    // Row i maps to stored_row[i % R].  For string columns the R+1 wire offsets
+    // are embedded at the start of the data block (not at offsets_offset).
+    COL_IS_REPEAT   = 0x40u,
 };
 
 // ── Type traits for complex (Array/Tuple) C++ types ─────────────────────────
@@ -111,19 +115,27 @@ static constexpr uint32_t COL_DESC_BYTES = 20;  // sizeof ColDescriptor
 struct ColView {
     ColType         base_type;
     bool            is_const;
-    uint32_t        row_count;    // stored rows (1 if const)
+    uint32_t        period;       // COL_IS_REPEAT period R; 0 = not cyclic
+    uint32_t        row_count;    // stored rows (1 if const, R if repeat, N otherwise)
     const uint8_t*  null_map;     // nullable: null_map[i]!=0 → NULL; nullptr = non-nullable
     const uint32_t* offsets;      // start-based; nullptr for fixed-width
     const uint8_t*  data;
 
+    // Map logical row to stored row index.
+    uint32_t effective_row(uint32_t row) const noexcept {
+        if (is_const) return 0u;
+        if (period)   return row % period;
+        return row;
+    }
+
     bool is_null(uint32_t row) const noexcept {
         if (!null_map) return false;
-        return null_map[is_const ? 0u : row] != 0;
+        return null_map[effective_row(row)] != 0;
     }
 
     // For COL_BYTES/COL_NULL_BYTES — excludes the trailing null terminator.
     std::span<const uint8_t> get_bytes(uint32_t row) const noexcept {
-        uint32_t idx   = is_const ? 0u : row;
+        uint32_t idx   = effective_row(row);
         uint32_t start = offsets[idx];
         uint32_t end   = offsets[idx + 1];
         uint32_t len   = (end > start + 1) ? end - start - 1 : 0u;
@@ -132,28 +144,21 @@ struct ColView {
 
     template <typename T>
     T get_fixed(uint32_t row) const noexcept {
-        uint32_t idx = is_const ? 0u : row;
+        uint32_t idx = effective_row(row);
         T v;
         std::memcpy(&v, data + idx * sizeof(T), sizeof(T));
         return v;
     }
 
-    // True when every row in the batch carries identical bytes — covers the
-    // cross-join pattern where CH repeats the same zone WKB N times without
-    // setting COL_IS_CONST (which is only set for compile-time literals).
-    //
-    // Two-step check:
-    //  1. O(1): all rows have equal size  →  offsets[N] == N * offsets[1]
-    //  2. O(size): first and last rows have equal bytes  →  memcmp
-    // For real geometry data the size check alone rejects nearly all mixes;
-    // memcmp is a final guard.
+    // True when every logical row carries the same bytes.
+    // Covers: COL_IS_CONST, COL_IS_REPEAT with period==1, and the legacy
+    // cross-join pattern where CH repeats the same WKB N times without a flag.
     bool is_effectively_const_bytes() const noexcept {
-        if (is_const) return true;
+        if (is_const || period == 1u) return true;
         if (!offsets || row_count < 2) return false;
-        uint32_t elem_stride = offsets[1];           // bytes from row 0 start to row 1 start
-        if (elem_stride == 0) return false;           // empty column
-        if (offsets[row_count] != elem_stride * row_count) return false;  // unequal sizes
-        // Compare first row bytes with last row bytes (excluding null terminator).
+        uint32_t elem_stride = offsets[1];
+        if (elem_stride == 0) return false;
+        if (offsets[row_count] != elem_stride * row_count) return false;
         uint32_t wkb_len = elem_stride > 0 ? elem_stride - 1 : 0;
         uint32_t last_start = offsets[row_count - 1];
         return std::memcmp(data, data + last_start, wkb_len) == 0;
@@ -170,12 +175,28 @@ struct ColumnarBuf {
         ColDescriptor d;
         std::memcpy(&d, descs + i, sizeof(d));
         ColView v;
+        bool has_repeat = (d.type & COL_IS_REPEAT) != 0;
         v.is_const  = (d.type & COL_IS_CONST) != 0;
-        v.base_type = static_cast<ColType>(d.type & ~COL_IS_CONST);
-        v.row_count = v.is_const ? 1u : num_rows;
-        v.null_map  = d.null_offset    ? base + d.null_offset    : nullptr;
-        v.offsets   = d.offsets_offset ? reinterpret_cast<const uint32_t*>(base + d.offsets_offset) : nullptr;
-        v.data      = base + d.data_offset;
+        v.period    = has_repeat ? d.offsets_offset : 0u;
+        v.base_type = static_cast<ColType>(d.type & ~(COL_IS_CONST | COL_IS_REPEAT));
+        v.null_map  = d.null_offset ? base + d.null_offset : nullptr;
+
+        if (has_repeat) {
+            // offsets_offset carries the period R, not a byte offset.
+            // For string columns, the R+1 wire offsets are embedded at data_offset.
+            v.row_count = v.period;
+            v.data      = base + d.data_offset;
+            if (v.base_type == COL_BYTES || v.base_type == COL_NULL_BYTES) {
+                v.offsets = reinterpret_cast<const uint32_t*>(v.data);
+                v.data    = v.data + (v.period + 1u) * sizeof(uint32_t);
+            } else {
+                v.offsets = nullptr;
+            }
+        } else {
+            v.row_count = v.is_const ? 1u : num_rows;
+            v.offsets   = d.offsets_offset ? reinterpret_cast<const uint32_t*>(base + d.offsets_offset) : nullptr;
+            v.data      = base + d.data_offset;
+        }
         return v;
     }
 };
@@ -402,10 +423,10 @@ raw_buffer* write_complex_col(uint32_t n, GetVal get_val) {
 
 template <typename ElemT>
 std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
-    uint32_t idx         = col.is_const ? 0u : row;
+    uint32_t idx         = col.effective_row(row);
     uint32_t outer_start = col.offsets[idx];
     uint32_t outer_end   = col.offsets[idx + 1];
-    uint32_t M_total     = col.offsets[col.is_const ? 1u : col.row_count];
+    uint32_t M_total     = col.offsets[col.row_count];  // row_count = 1/R/N per mode
     uint32_t count       = outer_end - outer_start;
 
     std::vector<ElemT> result;
@@ -453,7 +474,7 @@ std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
 // bytes are bit-cast directly (no numeric cast across float/int boundary).
 template <typename T>
 T col_get_fixed_widened(const ColView& col, uint32_t row) noexcept {
-    uint32_t idx = col.is_const ? 0u : row;
+    uint32_t idx = col.effective_row(row);
     switch (col.base_type) {
         case COL_FIXED8:
         case COL_NULL_FIXED8: {
