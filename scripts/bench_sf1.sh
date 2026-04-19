@@ -61,7 +61,7 @@ run_once() {
 run() {
     local label="$1"; local query="$2"
     [[ -n "${QUERY_FILTER}" && "${label}" != "${QUERY_FILTER}" ]] && return 0
-    echo ${query}
+    # echo ${query}
     local times=() sum=0 min=999999 max=0 timed_out=0 errored=0 rows="?"
     for (( i=0; i<RUNS; i++ )); do
         local ms
@@ -200,12 +200,14 @@ run "Q7" \
  ${FUEL}"
 
 # q8: nearby pickup count per building (~500m)
-# JOIN syntax: R-tree built on trips (6M points, right side),
-# probed 20K times with building bbox expanded by 0.0045.
+# JOIN syntax: R-tree built on buildings (20K polygons, right side),
+# probed 6M times with trip bbox expanded by 0.0045.
+# TRIP on left → many batches → parallel probe across all threads.
+# st_dwithin is symmetric so results are identical to the reversed form.
 run "Q8" \
 "SELECT b.b_buildingkey, b.b_name, count() AS nearby_pickup_count
- FROM ${BUILDING} b
- JOIN ${TRIP} t ON st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
+ FROM ${TRIP} t
+ JOIN ${BUILDING} b ON st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
  GROUP BY b.b_buildingkey, b.b_name
  ORDER BY nearby_pickup_count DESC, b.b_buildingkey ASC
  ${FUEL}"
