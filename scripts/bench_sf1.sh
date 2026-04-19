@@ -243,10 +243,12 @@ run "Q10" \
  ${FUEL}"
 
 # q11: count cross-zone trips
+# Zones first (left side) so PreparedGeometry is built once per zone (~100×),
+# not once per trip block (~9200×). trip and dropoff_zone join onto that.
 run "Q11" \
 "SELECT count() AS cross_zone_trip_count
- FROM ${TRIP} t
- JOIN ${ZONE} pickup_zone  ON st_within(t.t_pickuploc,   pickup_zone.z_boundary)
+ FROM ${ZONE} pickup_zone
+ JOIN ${TRIP} t            ON st_within(t.t_pickuploc,  pickup_zone.z_boundary)
  JOIN ${ZONE} dropoff_zone ON st_within(t.t_dropoffloc, dropoff_zone.z_boundary)
  WHERE pickup_zone.z_zonekey != dropoff_zone.z_zonekey
  ${FUEL}"
