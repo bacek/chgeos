@@ -1,6 +1,7 @@
 #include <geos/version.h>
 
 #include "functions.hpp"
+#include "functions/knn.hpp"
 #include "rowbinary.hpp"
 #include "msgpack.hpp"
 #include "columnar.hpp"
@@ -253,5 +254,58 @@ CH_UDF_COL(st_setsrid)
 CH_UDF_COL(st_transform)
 CH_UDF_COL(st_transform_proj)
 
+// ── st_knn: k-nearest-neighbour spatial query ─────────────────────────────────
+// Manual export (not via CH_UDF_COL) because we need direct ColView access
+// to detect when candidates is const → build STRtree once per batch.
+//
+// Signature: st_knn(query String, candidates Array(String), k UInt32)
+//            → Array(Tuple(UInt64, Float64))
+// Returns k (index, distance) pairs sorted by distance ascending.
+// Index is 0-based into the candidates array.
+
+__attribute__((export_name("st_knn")))
+ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
+{
+    using KVPair   = std::pair<uint64_t, double>;
+    using KNNResult = std::vector<KVPair>;
+
+    auto cb = ch::parse_columnar(ptr);
+    uint32_t n     = cb.num_rows;
+    ch::ColView col_q = cb.col(0);   // String (WKB)
+    ch::ColView col_c = cb.col(1);   // Array(String) — COL_COMPLEX
+    ch::ColView col_k = cb.col(2);   // UInt32
+
+    uint32_t k = ch::col_get_fixed_widened<uint32_t>(col_k, 0);
+
+    if (k == 0 || n == 0)
+        return ch::write_complex_col<KNNResult>(n, [](uint32_t) -> KNNResult { return {}; });
+
+    ch::raw_buffer* out = nullptr;
+    try {
+        if (col_c.is_const) {
+            // Candidates same for every row → build STRtree once.
+            auto wkbs = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, 0);
+            ch::KNNIndex index(wkbs);
+
+            return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
+                if (col_q.is_null(row)) return {};
+                auto q = ch::read_wkb(col_q.get_bytes(row));
+                return index.query(q.get(), k);
+            });
+        } else {
+            // Candidates vary per row: brute-force.
+            return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
+                if (col_q.is_null(row)) return {};
+                auto q   = ch::read_wkb(col_q.get_bytes(row));
+                auto cands = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, row);
+                return ch::st_knn_brute(q.get(), cands, k);
+            });
+        }
+    } catch (const std::exception& e) {
+        if (out) clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        ch::panic(e.what());
+    }
+    __builtin_unreachable();
+}
 
 } // extern "C"

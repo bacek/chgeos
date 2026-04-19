@@ -1434,6 +1434,25 @@ ABI COLUMNAR_V1
 DETERMINISTIC;
 
 -- ---------------------------------------------------------------------------
+-- st_knn: k-nearest-neighbour spatial query
+-- ---------------------------------------------------------------------------
+-- Returns Array(Tuple(UInt64, Float64)): k (0-based index, distance) pairs
+-- from `candidates`, sorted by distance ascending.
+-- When `candidates` is a const column (scalar subquery), a GEOS STRtree is
+-- built once per batch and queried once per row.
+--
+-- Example:
+--   WITH all_bldgs AS (SELECT groupArray(b_boundary) AS arr FROM building)
+--   SELECT t_tripkey, st_knn(t_pickuploc, (SELECT arr FROM all_bldgs), 5)
+--   FROM trip
+
+CREATE OR REPLACE FUNCTION st_knn
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (query String, candidates Array(String), k UInt32) RETURNS Array(Tuple(UInt64, Float64))
+ABI COLUMNAR_V1
+DETERMINISTIC;
+
+-- ---------------------------------------------------------------------------
 -- Remaining aliases — no COLUMNAR_V1 implementation, delegate to _mp
 -- ---------------------------------------------------------------------------
 

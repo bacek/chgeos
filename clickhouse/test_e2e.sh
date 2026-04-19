@@ -25,7 +25,7 @@ fi
 WASM_BIN="${2:-${REPO_ROOT}/build_wasm/chgeos.wasm}"
 [[ -f "${WASM_BIN}" ]] || { echo "ERROR: WASM binary not found: ${WASM_BIN}"; exit 1; }
 
-CONFIG="${SCRIPT_DIR}/config-test.xml"
+CONFIG="${SCRIPT_DIR}/config-e2e.xml"
 CREATE_SQL="${SCRIPT_DIR}/create.sql"
 
 # ── Temporary data directory ───────────────────────────────────────────────────
@@ -126,6 +126,22 @@ t "col_collect_agg_types" \
 t "col_union_agg_single" \
     "SELECT st_astext(st_union_agg(groupArray(wkb))) FROM (SELECT st_geomfromtext('POINT (3 7)') AS wkb)" \
     "POINT (3 7)"
+
+# st_knn: k-nearest-neighbour
+# 3 candidate points at (0,0), (3,4), (10,0); query (1,0) with k=2
+# Distances: to (0,0)=1.0, to (3,4)=5.0, to (10,0)=9.0 → nearest 2: idx 0 (d=1), idx 1 (d=5)
+# Returns Array(Tuple(UInt64, Float64)); check: length=2, nearest index=0, distance=1.0
+t "st_knn_basic" \
+    "WITH cands AS (SELECT groupArray(g) AS arr FROM (SELECT st_makepoint(0.0,0.0) AS g UNION ALL SELECT st_makepoint(3.0,4.0) UNION ALL SELECT st_makepoint(10.0,0.0))), r AS (SELECT st_knn(st_makepoint(1.0,0.0), (SELECT arr FROM cands), 2) AS res) SELECT concat(toString(length(res)), ',', toString(arraySort(x -> x.1, res)[1].1), ',', toString(round(arraySort(x -> x.1, res)[1].2, 1))) FROM r" \
+    "2,0,1"
+# Single-element result — nearest to (1,1) from [(5,5),(0,0)] is idx 1 (0,0) at dist √2
+t "st_knn_k1" \
+    "WITH cands AS (SELECT groupArray(g) AS arr FROM (SELECT st_makepoint(5.0,5.0) AS g UNION ALL SELECT st_makepoint(0.0,0.0))) SELECT (st_knn(st_makepoint(1.0,1.0), (SELECT arr FROM cands), 1))[1].1" \
+    "1"
+# Empty candidates → empty result
+t "st_knn_empty" \
+    "SELECT length(st_knn(st_makepoint(0.0,0.0), (SELECT groupArray(g) FROM (SELECT st_makepoint(0.0,0.0) AS g LIMIT 0)), 3))" \
+    "0"
 
 # Multi-row batch
 t "batch_area_sum"     "SELECT sum(st_area(st_geomfromtext(wkt))) FROM (SELECT 'POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))' AS wkt UNION ALL SELECT 'POLYGON ((0 0, 2 0, 2 3, 0 3, 0 0))')"  "7"
