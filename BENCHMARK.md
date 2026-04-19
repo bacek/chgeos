@@ -10,6 +10,10 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 **DuckDB version:** v1.5.2  
 **Sedona version:** recorded 2026-04-19
 
+Note: it's running with CraneLift optimization disabled. CraneLift fix
+https://github.com/bytecodealliance/wasmtime/pull/12841 is not in ClickHouse
+yet. But it won't make _much_ difference. Probably.
+
 ---
 
 ## SF1 — 6 Million Trip Rows
