@@ -4,7 +4,7 @@ Comparison of chgeos (ClickHouse + GEOS WASM UDFs) against DuckDB spatial extens
 and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 
 **Hardware:** Apple M-series, 12 cores  
-**Dataset:** synthetic taxi trip data — SF1 = 6M trips, SF10 = 60M trips  
+**Dataset:** synthetic taxi trip data from https://github.com/apache/sedona-spatialbench — SF1 = 6M trips, SF10 = 60M trips. 
 **Timeout:** 120 s (chgeos, Sedona), 600 s (DuckDB SF10)  
 **chgeos version:** 2026-04-20 (after SpatialRTreeJoin heap-corruption fix)  
 **DuckDB version:** v1.5.2  
