@@ -9,7 +9,7 @@ This is my pet-project with `-Ofun` mentality.
 * I'm testing how far I can push Claude.
 * I'm (re-)learning low-level optimization I haven't done in 15+ years.
 * I'm extracting useful pieces out of this project into upstream projects. For example non-copy `std::span` handling in `msgpack23` and exceptions support in `wasmtime`. Also, general improvements of WASM UDF support in ClickHouse. Watch this space ;)
-* This is nowhere near any useful application. For many reasons. Especially because CH<->UDF interaction is very limited. Basically it's a one-way street at the moment and any "spatial aware" query engine that can use Parquet file metadata will be faster. Much faster. Order of magnitude faster.
+* ~~This is nowhere near any useful application. For many reasons. Especially because CH<->UDF interaction is very limited. Basically it's a one-way street at the moment and any "spatial aware" query engine that can use Parquet file metadata will be faster. Much faster. Order of magnitude faster.~~ See [CH_CHANGES.md](CH_CHANGES.md) and [BENCHMARK.md](BENCHMARK.md) 
 
 Having said that, I'm not saying it will never be useful.
 
@@ -50,32 +50,7 @@ ORDER BY area DESC;
 
 ## In-flight ClickHouse changes
 
-chgeos depends on ClickHouse patches that are not yet merged upstream. All of them live on the [`bacek/wasm`](https://github.com/bacek/ClickHouse/tree/bacek/wasm) branch of the ClickHouse fork.
-
-### WASM UDF core
-
-| Commit area | What it does |
-|---|---|
-| `DETERMINISTIC` keyword | Allows marking a WASM UDF as deterministic so ClickHouse can constant-fold calls with literal arguments |
-| WASM UDFs in `system.functions` | WASM-registered functions appear in `system.functions` with their argument types and return type |
-
-### WASM aggregate functions (UDAFs)
-
-| Commit area | What it does |
-|---|---|
-| `is_aggregate = 1` setting | New `SETTINGS` clause on `CREATE FUNCTION` that registers the WASM export as a true `GROUP BY` aggregate. ClickHouse accumulates argument rows per group and calls the WASM function once at finalize with `Array(T)`-wrapped arguments |
-| `addBatchSinglePlace` | Performance path for aggregate function batch insertion |
-| ROW_DIRECT + is_aggregate guard | Validates that `is_aggregate = 1` is rejected for `ABI ROW_DIRECT` (array arguments cannot be passed as scalar WASM values) |
-
-### GeoParquet / Iceberg spatial pruning
-
-| Commit area | What it does |
-|---|---|
-| `isSpatialPredicate()` | New virtual method on `IFunctionBase`; WASM UDFs set it via `SETTINGS is_spatial_predicate = 1`. Enables the query planner to recognise spatial filter functions |
-| Spatial filter pushdown | Plugs `isSpatialPredicate()` into the `KeyCondition` hyperrectangle pipeline so spatial predicates participate in Parquet row-group and page pruning |
-| GeoParquet page-level pruning | Reads `covering.bbox` column statistics from Parquet page index and skips pages whose bbox is disjoint from the query geometry |
-| GeoParquet row-group pruning | Reads `covering.bbox` min/max statistics from Parquet row-group metadata |
-| Iceberg manifest-level pruning | Reads `covering.bbox` column bounds from Iceberg manifests and prunes whole files before opening them |
+chgeos depends on ClickHouse patches that are not yet merged upstream, all on the [`bacek/wasm`](https://github.com/bacek/ClickHouse/tree/bacek/wasm) branch. The changes span four areas: WASM runtime extensions (UDAFs, `DETERMINISTIC` constant folding, dynamic block splitting), a columnar call ABI (COLUMNAR_V1), a spatial predicate join engine (SpatialRTreeJoin with R-tree indexing and query rewriting), and spatial pruning at the storage layer (GeoParquet row-group/page pruning, Iceberg manifest pruning, MergeTree skip index). See [CH_CHANGES.md](CH_CHANGES.md) for a detailed write-up.
 
 ## How it works
 
@@ -98,184 +73,12 @@ Canonical PostGIS-compatible function names (`st_contains`, `st_distance`, etc.)
 
 ## Functions
 
-> **WKB** columns are stored as `String` containing raw WKB bytes.
+PostGIS-compatible names and semantics throughout. The complete DDL is in [`clickhouse/create.sql`](clickhouse/create.sql).
 
-### Metadata
+Two additions beyond the standard PostGIS set:
 
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `geos_version` | — | `String` | GEOS version string |
-
-### I/O
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `st_geomfromtext` | `wkt String` | `WKB` | Parse WKT → WKB |
-| `st_geomfromwkb` | `wkb String` | `WKB` | Validate and round-trip WKB |
-| `st_geomfromgeojson` | `geojson String` | `WKB` | Parse GeoJSON → WKB |
-| `st_geomfromchpoint` | `pt Point` | `WKB` | ClickHouse `Point` → WKB |
-| `st_geomfromchlinestring` | `ls LineString` | `WKB` | ClickHouse `LineString` → WKB |
-| `st_geomfromchpolygon` | `poly Polygon` | `WKB` | ClickHouse `Polygon` → WKB |
-| `st_geomfromchmultipolygon` | `mp MultiPolygon` | `WKB` | ClickHouse `MultiPolygon` → WKB |
-| `st_astext` | `wkb String` | `String` | WKB → WKT |
-| `st_asewkt` | `wkb String` | `String` | WKB → EWKT (includes SRID) |
-
-### Accessors
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `st_x` | `wkb String` | `Float64` | X coordinate of a Point |
-| `st_y` | `wkb String` | `Float64` | Y coordinate of a Point |
-| `st_z` | `wkb String` | `Float64` | Z coordinate of a Point |
-| `st_srid` | `wkb String` | `Int32` | SRID |
-| `st_setsrid` | `wkb String, srid UInt32` | `WKB` | Set SRID |
-| `st_npoints` | `wkb String` | `Int32` | Number of vertices |
-| `st_numpoints` | `wkb String` | `Int32` | Number of points (LineString) |
-| `st_numgeometries` | `wkb String` | `Int32` | Number of sub-geometries |
-| `st_numinteriorrings` | `wkb String` | `Int32` | Number of interior rings (Polygon) |
-| `st_nrings` | `wkb String` | `Int32` | Total number of rings |
-| `st_dimension` | `wkb String` | `Int32` | Geometry dimension |
-| `st_geometrytype` | `wkb String` | `String` | Geometry type name |
-| `st_area` | `wkb String` | `Float64` | Area |
-| `st_length` | `wkb String` | `Float64` | Length |
-| `st_perimeter` | `wkb String` | `Float64` | Perimeter |
-| `st_isvalid` | `wkb String` | `UInt8` | Validity check |
-| `st_isvalidreason` | `wkb String` | `String` | Reason for invalidity |
-| `st_isempty` | `wkb String` | `UInt8` | Empty check |
-| `st_issimple` | `wkb String` | `UInt8` | Simplicity check |
-| `st_isring` | `wkb String` | `UInt8` | Ring check |
-
-### Constructors
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `st_makepoint` | `x Float64, y Float64` | `WKB` | Create a 2D Point |
-| `st_makepoint3d` | `x Float64, y Float64, z Float64` | `WKB` | Create a 3D Point |
-| `st_makeline` | `a String, b String` | `WKB` | Create a LineString from two points |
-| `st_makepolygon` | `shell String` | `WKB` | Create a Polygon from a ring |
-| `st_makebox2d` | `low_left String, up_right String` | `WKB` | Bounding box from two corner points |
-| `st_collect` | `a String, b String` | `WKB` | Collect into GeometryCollection |
-| `st_envelope` | `wkb String` | `WKB` | Bounding box polygon |
-| `st_extent` | `wkb String` | `WKB` | Bounding box polygon |
-| `st_expand` | `wkb String, units Float64` | `WKB` | Expand bounding box by distance |
-| `st_centroid` | `wkb String` | `WKB` | Centroid |
-| `st_interiorpoint` | `wkb String` | `WKB` | A point guaranteed to be inside |
-| `st_startpoint` | `wkb String` | `WKB` | First point of a LineString |
-| `st_endpoint` | `wkb String` | `WKB` | Last point of a LineString |
-| `st_pointn` | `wkb String, n Int32` | `WKB` | N-th point of a LineString |
-| `st_geometryn` | `wkb String, n Int32` | `WKB` | N-th sub-geometry |
-| `st_exteriorring` | `wkb String` | `WKB` | Exterior ring of a Polygon |
-| `st_interiorringn` | `wkb String, n Int32` | `WKB` | N-th interior ring of a Polygon |
-| `st_boundary` | `wkb String` | `WKB` | Boundary |
-| `st_convexhull` | `wkb String` | `WKB` | Convex hull |
-| `st_minimumboundingcircle` | `wkb String` | `WKB` | Minimum bounding circle |
-| `st_closestpoint` | `a String, b String` | `WKB` | Closest point on A to B |
-| `st_shortestline` | `a String, b String` | `WKB` | Shortest line between A and B |
-| `st_sharedpaths` | `a String, b String` | `WKB` | Shared paths between two lineal geometries |
-| `st_addpoint` | `line String, point String, pos Int32` | `WKB` | Add point to LineString at position |
-| `st_removepoint` | `line String, pos Int32` | `WKB` | Remove point from LineString |
-| `st_setpoint` | `line String, pos Int32, point String` | `WKB` | Replace point in LineString |
-
-### Predicates
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `st_contains` | `a String, b String` | `UInt8` | A contains B |
-| `st_containsproperly` | `a String, b String` | `UInt8` | A properly contains B |
-| `st_covers` | `a String, b String` | `UInt8` | A covers B |
-| `st_coveredby` | `a String, b String` | `UInt8` | A is covered by B |
-| `st_crosses` | `a String, b String` | `UInt8` | A and B cross |
-| `st_disjoint` | `a String, b String` | `UInt8` | A and B are disjoint |
-| `st_dwithin` | `a String, b String, dist Float64` | `UInt8` | A and B are within distance |
-| `st_equals` | `a String, b String` | `UInt8` | A and B are geometrically equal |
-| `st_intersects` | `a String, b String` | `UInt8` | A and B intersect |
-| `st_intersects_extent` | `a String, b String` | `UInt8` | Bounding boxes intersect (fast check) |
-| `st_overlaps` | `a String, b String` | `UInt8` | A and B overlap |
-| `st_touches` | `a String, b String` | `UInt8` | A and B touch |
-| `st_within` | `a String, b String` | `UInt8` | A is within B |
-| `st_relate` | `a String, b String` | `String` | DE-9IM relation matrix |
-| `st_relate_pattern` | `a String, b String, pattern String` | `UInt8` | Match DE-9IM pattern |
-| `st_distance` | `a String, b String` | `Float64` | Minimum distance |
-| `st_hausdorffdistance` | `a String, b String` | `Float64` | Hausdorff distance |
-| `st_hausdorffdistance_densify` | `a String, b String, densify_frac Float64` | `Float64` | Hausdorff distance with densification |
-| `st_frechetdistance` | `a String, b String` | `Float64` | Fréchet distance |
-| `st_frechetdistance_densify` | `a String, b String, densify_frac Float64` | `Float64` | Fréchet distance with densification |
-
-### Overlay
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `st_union` | `a String, b String` | `WKB` | Union |
-| `st_intersection` | `a String, b String` | `WKB` | Intersection |
-| `st_difference` | `a String, b String` | `WKB` | A minus B |
-| `st_symdifference` | `a String, b String` | `WKB` | Symmetric difference |
-| `st_unaryunion` | `wkb String` | `WKB` | Union all sub-geometries |
-| `st_clusterintersecting` | `wkb String` | `WKB` | Cluster intersecting geometries |
-
-### Aggregates
-
-True `GROUP BY` aggregates — ClickHouse accumulates rows per group and calls the WASM function once per group.
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `st_union_agg` | `wkb String` | `WKB` | Dissolving union of all geometries in a group |
-| `st_collect_agg` | `wkb String` | `WKB` | Collect into GeometryCollection (no dissolve) |
-| `st_extent_agg` | `wkb String` | `WKB` | Bounding box envelope of all geometries in a group |
-| `st_makeline_agg` | `wkb String` | `WKB` | Append all vertices in order into a LineString |
-| `st_convexhull_agg` | `wkb String` | `WKB` | Convex hull of all geometries in a group |
-
-### Processing
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `st_buffer` | `wkb String, radius Float64` | `WKB` | Buffer by radius |
-| `st_buffer_params` | `wkb String, radius Float64, params String` | `WKB` | Buffer with style options (see below) |
-| `st_simplify` | `wkb String, tolerance Float64` | `WKB` | Douglas-Peucker simplification |
-| `st_makevalid` | `wkb String` | `WKB` | Repair invalid geometry |
-| `st_normalize` | `wkb String` | `WKB` | Normalize geometry |
-| `st_reverse` | `wkb String` | `WKB` | Reverse vertex order |
-| `st_node` | `wkb String` | `WKB` | Add nodes at intersections |
-| `st_segmentize` | `wkb String, max_length Float64` | `WKB` | Densify by max segment length |
-| `st_subdivide` | `wkb String, max_vertices Int32` | `WKB` | Subdivide into smaller parts |
-| `st_snap` | `a String, b String, tolerance Float64` | `WKB` | Snap A to B within tolerance |
-| `st_offsetcurve` | `wkb String, distance Float64` | `WKB` | Offset curve |
-| `st_linmerge` | `wkb String` | `WKB` | Merge line segments |
-| `st_polygonize` | `wkb String` | `WKB` | Polygonize a set of lines |
-| `st_delaunaytriangles` | `wkb String, tolerance Float64, only_edges Int32` | `WKB` | Delaunay triangulation |
-| `st_voronoidiagram` | `wkb String, tolerance Float64, only_edges Int32` | `WKB` | Voronoi diagram |
-
-### Transforms
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `st_translate` | `wkb String, dx Float64, dy Float64` | `WKB` | Translate by offset |
-| `st_scale` | `wkb String, xf Float64, yf Float64` | `WKB` | Scale by factor |
-| `st_transform` | `wkb String, srid Int32` | `WKB` | CRS transform (PROJ 9 not linked — see Limitations) |
-| `st_transform_proj` | `wkb String, pipeline String` | `WKB` | PROJ pipeline transform (PROJ 9 not linked — see Limitations) |
-
-### `st_buffer_params` options
-
-Space-separated `key=value` tokens:
-
-| Key | Values |
-|---|---|
-| `endcap` | `round` (default), `flat`, `butt`, `square` |
-| `join` | `round` (default), `mitre`, `miter`, `bevel` |
-| `mitre_limit` / `miter_limit` | float |
-| `quad_segs` | integer (default 8) |
-| `side` | `left`, `right` |
-
-### Benchmarking
-
-These functions are exported from the WASM module for micro-benchmarking call overhead and parsing cost. They are not in `create.sql` — register them manually if needed.
-
-| Function | Arguments | Returns | Description |
-|---|---|---|---|
-| `geos_bench_noop` | `wkb String` | `UInt8` | MsgPack round-trip + WASM call overhead only, no parsing |
-| `geos_bench_noop_rb` | `wkb String` | `UInt8` | Same via CH-native `wkb()` serialization path |
-| `geos_bench_wkb_parse` | `wkb String` | `UInt8` | EWKB → GEOS parse cost only |
-| `geos_bench_envelope` | `wkb String` | `UInt8` | Fast WKB bbox extraction without GEOS allocation |
-| `geos_bench_intersects_nobbox` | `a String, b String` | `UInt8` | Full GEOS `st_intersects` with no bbox shortcut — raw GEOS cost |
+- **`st_intersects_extent`** — bounding-box-only intersection check with no GEOS parse. Use as a fast pre-filter in joins before applying a precise predicate.
+- **`st_knn`** — k-nearest-neighbour query: given a probe geometry and an array of candidate geometries, returns the `k` closest (index, distance) pairs. When the candidate array is constant, the GEOS STRtree index is built once per batch.
 
 ## Building
 
@@ -448,40 +251,6 @@ SELECT st_relate(
     st_geomfromtext('LINESTRING (0 2, 2 0)')
 );  -- '0F1FF0102' (crossing lines)
 ```
-
-## Architecture
-
-```
-src/
-├── main.cpp              # WASM exports: macro registrations for all three ABIs
-├── columnar.hpp          # COLUMNAR_V1 wire format, ColView, columnar_impl_wrapper
-├── rowbinary.hpp         # RowBinary wire format, rowbinary_impl_wrapper
-├── msgpack.hpp           # MsgPack wire format, impl_wrapper, registration macros
-├── mem.hpp / mem.cpp     # raw_buffer, clickhouse_create/destroy_buffer
-├── col_prep_op.hpp       # ColPrepOp / ColPrepDistOp type aliases
-├── functions.hpp         # Aggregator — includes all functions/* headers
-├── functions/
-│   ├── accessors.hpp     # st_x, st_y, st_z, st_centroid, st_area, st_npoints, st_srid, ...
-│   ├── predicates.hpp    # st_contains, st_intersects, ..., PreparedGeometry callbacks
-│   ├── constructors.hpp  # st_geomfromtext/wkb, st_extent, st_envelope, st_makebox2d, ...
-│   ├── transforms.hpp    # st_translate, st_scale, st_transform, st_transform_proj
-│   ├── overlay.hpp       # st_union, st_intersection, st_difference, aggregates, ...
-│   ├── processing.hpp    # st_buffer, st_simplify, st_subdivide, st_makevalid, ...
-│   ├── io.hpp            # st_astext, st_asewkt, st_geomfromgeojson, geos_version
-│   ├── ch_to_wkb.hpp     # st_geomfromchpoint/linestring/polygon/multipolygon
-│   └── bench.hpp         # geos_bench_* micro-benchmark helpers
-├── geom/
-│   ├── wkb.hpp           # read_wkb, write_ewkb, read_wkt, read_geojson
-│   ├── wkb_envelope.hpp  # wkb_bbox — fast bbox extraction without GEOS (inline)
-│   ├── filters.hpp       # TranslateFilter, ScaleFilter
-│   ├── subdivide.hpp     # subdivide_recursive
-│   └── chgeom.hpp        # ClickHouse native geometry type readers
-├── clickhouse.hpp        # Host ABI: log, panic, log_level
-├── clickhouse_types.hpp  # CH geometry type structs (Point, Ring, etc.)
-└── mem.hpp               # RawBuffer, clickhouse_create/destroy_buffer
-```
-
-**Wire formats:** The preferred path is COLUMNAR_V1 — `columnar_impl_wrapper` receives all N rows as typed columns, deduces arg/return types from the `_impl` function pointer, and dispatches output via `if constexpr`. MsgPack and RowBinary paths exist for aggregates and functions without a columnar variant. Geometry is passed as raw WKB bytes (`std::span<const uint8_t>`).
 
 ## Limitations
 
