@@ -54,7 +54,9 @@ extern "C" {
 __attribute__((export_name("clickhouse_create_buffer")))
 ch::raw_buffer *
 clickhouse_create_buffer(uint32_t size) {
-  return new (malloc(sizeof(ch::raw_buffer))) ch::raw_buffer(size);
+  void *p = malloc(sizeof(ch::raw_buffer));
+  if (!p) ch::panic("out of memory");
+  return new (p) ch::raw_buffer(size);
 }
 
 __attribute__((export_name("clickhouse_destroy_buffer")))
