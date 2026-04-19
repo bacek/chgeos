@@ -252,22 +252,25 @@ run "Q11" \
 # JOIN syntax: R-tree built on trips (6M points, right side),
 # probed 20K times with building bbox expanded by 0.05.
 run "Q12" \
-"
-SELECT
-   t.t_tripkey,
-   t.t_pickuploc,
-   nb.b_buildingkey,
-   nb.building_name,
-   nb.distance_to_building
-FROM ${TRIP} t
-        CROSS JOIN LATERAL (
-   SELECT
-       b.b_buildingkey,
-       b.b_name AS building_name,
-       ST_Distance(ST_GeomFromWKB(t.t_pickuploc), ST_GeomFromWKB(b.b_boundary)) AS distance_to_building
-   FROM ${BUILDING} b
-   ORDER BY distance_to_building
-       LIMIT 5
-) AS nb
-ORDER BY nb.distance_to_building, nb.b_buildingkey
-"
+"WITH
+     all_bldg AS (
+         SELECT groupArray(b_boundary) AS wkbs,
+                groupArray(b_buildingkey) AS keys,
+                groupArray(b_name) AS names
+         FROM ${BUILDING}
+     ),
+     knn_expanded AS (
+         SELECT t.t_tripkey, t.t_pickuploc,
+                nb.1 AS idx,
+                nb.2 AS dist
+         FROM ${TRIP} t
+         ARRAY JOIN st_knn(t.t_pickuploc,
+                           (SELECT wkbs FROM all_bldg), 5) AS nb
+     )
+ SELECT t_tripkey, t_pickuploc,
+        (SELECT keys FROM all_bldg)[idx + 1]  AS b_buildingkey,
+        (SELECT names FROM all_bldg)[idx + 1] AS building_name,
+        dist AS distance_to_building
+ FROM knn_expanded
+ ORDER BY distance_to_building ASC, b_buildingkey ASC
+ ${FUEL}"

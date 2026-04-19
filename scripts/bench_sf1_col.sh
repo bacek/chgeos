@@ -249,14 +249,25 @@ run "Q11" \
 
 # q12: 5 nearest buildings per trip (dwithin pre-filter + window rank)
 run "Q12" \
-"WITH candidates AS (
-     SELECT t.t_tripkey, t.t_pickuploc, b.b_buildingkey, b.b_name AS building_name,
-         st_distance_col(t.t_pickuploc, b.b_boundary) AS distance_to_building,
-         row_number() OVER (PARTITION BY t.t_tripkey ORDER BY st_distance_col(t.t_pickuploc, b.b_boundary)) AS rn
-     FROM ${TRIP} t CROSS JOIN ${BUILDING} b
-     WHERE st_dwithin_col(t.t_pickuploc, b.b_boundary, 0.05)
- )
- SELECT t_tripkey, t_pickuploc, b_buildingkey, building_name, distance_to_building
- FROM candidates WHERE rn <= 5
- ORDER BY distance_to_building, b_buildingkey
+"WITH
+     all_bldg AS (
+         SELECT groupArray(b_boundary) AS wkbs,
+                groupArray(b_buildingkey) AS keys,
+                groupArray(b_name) AS names
+         FROM ${BUILDING}
+     ),
+     knn_expanded AS (
+         SELECT t.t_tripkey, t.t_pickuploc,
+                nb.1 AS idx,
+                nb.2 AS dist
+         FROM ${TRIP} t
+         ARRAY JOIN st_knn(t.t_pickuploc,
+                           (SELECT wkbs FROM all_bldg), 5) AS nb
+     )
+ SELECT t_tripkey, t_pickuploc,
+        (SELECT keys FROM all_bldg)[idx + 1]  AS b_buildingkey,
+        (SELECT names FROM all_bldg)[idx + 1] AS building_name,
+        dist AS distance_to_building
+ FROM knn_expanded
+ ORDER BY distance_to_building ASC, b_buildingkey ASC
  ${FUEL}"
