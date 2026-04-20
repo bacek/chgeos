@@ -212,7 +212,6 @@ CH_UDF_COL(st_clusterintersecting)
 CH_UDF_COL(st_extent)
 CH_UDF_COL(st_interiorpoint)
 CH_UDF_COL(st_expand)
-CH_UDF_COL(st_intersects_extent)
 
 // ── COLUMNAR_V1 — additional functions ───────────────────────────────────────
 // Accessors (densify variants)
