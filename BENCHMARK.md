@@ -6,7 +6,7 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 **Hardware:** Apple M-series, 12 cores  
 **Dataset:** synthetic taxi trip data from https://github.com/apache/sedona-spatialbench — SF1 = 6M trips, SF10 = 60M trips. 
 **Timeout:** 120 s (chgeos, Sedona), 600 s (DuckDB SF10)  
-**chgeos version:** 2026-04-20 (after SpatialRTreeJoin heap-corruption fix)  
+**chgeos version:** 2026-04-20 (after SpatialRTreeJoin pre-spatial filter + heap-corruption fix)  
 **DuckDB version:** v1.5.2  
 **Sedona version:** recorded 2026-04-19
 
@@ -28,12 +28,12 @@ yet. But it won't make _much_ difference. Probably.
 | Q6    | Zone stats for bbox-intersect zones| 0.283 s  | 0.41 s  | 0.54 s  | chgeos   |
 | Q7    | Detour ratio (all trips)           | 4.71 s   | 3.74 s  | 1.59 s  | Sedona   |
 | Q8    | Nearby pickups per building        | 0.172 s  | 0.43 s  | 0.40 s  | chgeos   |
-| Q9    | Building conflation via IoU        | 0.644 s  | 0.03 s  | 0.29 s  | DuckDB   |
+| Q9    | Building conflation via IoU        | 0.028 s  | 0.03 s  | 0.29 s  | chgeos   |
 | Q10   | Zone avg duration/distance         | 8.20 s   | TIMEOUT | 4.63 s  | Sedona   |
 | Q11   | Cross-zone trip count              | 15.6 s   | TIMEOUT | 7.62 s  | Sedona   |
 | Q12   | 5 nearest buildings per trip (kNN) | 25.5 s   | TIMEOUT | 15.7 s  | Sedona   |
 
-**SF1 wins — chgeos: 5, DuckDB: 3, Sedona: 4**
+**SF1 wins — chgeos: 6, DuckDB: 2, Sedona: 4**
 
 ---
 
@@ -64,8 +64,11 @@ yet. But it won't make _much_ difference. Probably.
 spatial join. Sedona leads at both scales; chgeos and DuckDB are bottlenecked by the per-row
 geometry construction cost at this volume. DuckDB did not run Q7 at SF10.
 
-**Q9 (building IoU):** Self-join of ~20K buildings. DuckDB dominates at both scales.
-chgeos is 20× slower at SF1 (0.64 s vs 0.03 s), with the gap narrowing at SF10.
+**Q9 (building IoU):** Self-join of ~20K buildings. SpatialRTreeJoin now evaluates
+non-spatial ON conditions (e.g. `b1.id < b2.id`) as a pre-filter before the spatial
+predicate, cutting spatial evaluations from 20K (including self-pairs) to ~74.
+chgeos (0.028 s) is now marginally faster than DuckDB (0.03 s) at SF1, and 10× faster
+than Sedona (0.29 s). At SF10 DuckDB still leads (0.21 s vs 2.18 s).
 
 **Q10/Q11 at SF10:** chgeos uses the SF10 zone dataset (454K globally-scoped zones vs
 ~265 NYC zones at SF1). Joining 454K polygon zones against 60M trips is infeasible
