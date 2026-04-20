@@ -853,6 +853,13 @@ ABI COLUMNAR_V1
 DETERMINISTIC
 SETTINGS is_spatial_predicate = 1;
 
+CREATE OR REPLACE FUNCTION st_intersects_extent
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI COLUMNAR_V1
+DETERMINISTIC
+SETTINGS is_spatial_predicate = 1;
+
 CREATE OR REPLACE FUNCTION st_touches
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
@@ -1464,4 +1471,3 @@ CREATE OR REPLACE FUNCTION st_geomfromchpoint AS (a) -> st_geomfromchpoint_mp(a)
 CREATE OR REPLACE FUNCTION st_geomfromchpolygon AS (a) -> st_geomfromchpolygon_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromtext AS (a) -> st_geomfromtext_mp(a);
 CREATE OR REPLACE FUNCTION st_geomfromwkb AS (a) -> st_geomfromwkb_mp(a);
-CREATE OR REPLACE FUNCTION st_intersects_extent AS (a, b) -> st_intersects_extent_mp(a, b);
