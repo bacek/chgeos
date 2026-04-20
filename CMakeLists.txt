@@ -56,6 +56,7 @@ endif()
 target_link_libraries(chgeos PRIVATE geos)
 target_link_libraries(chgeos PRIVATE msgpack23)
 target_include_directories(chgeos PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/geos/capi)
+target_include_directories(chgeos PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/third-party/xxhash)
 
 if(CMAKE_CROSSCOMPILING)
   # Set properties to produce .wasm and configure linker flags

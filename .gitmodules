@@ -7,3 +7,6 @@
 [submodule "third-party/msgpack23"]
 	path = third-party/msgpack23
 	url = https://github.com/rwindegger/msgpack23.git
+[submodule "third-party/xxhash"]
+	path = third-party/xxhash
+	url = https://github.com/Cyan4973/xxHash
