@@ -42,6 +42,7 @@
 #include <utility>
 
 #include <geos/geom/prep/PreparedGeometryFactory.h>
+#include <geos/algorithm/locate/IndexedPointInAreaLocator.h>
 
 #include "clickhouse.hpp"
 #include "col_prep_op.hpp"
@@ -525,12 +526,15 @@ T col_get_arg(const ColView& col, uint32_t row) {
 template <typename Ret, typename... Args>
 raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                   Ret (*impl)(Args...),
-                                  BboxOp        bbox_op      = nullptr,
-                                  bool          early_ret    = false,
-                                  ColPrepOp     prep_a       = nullptr,
-                                  ColPrepOp     prep_b       = nullptr,
-                                  ColPrepDistOp prep_a_dist  = nullptr,
-                                  ColPrepDistOp prep_b_dist  = nullptr) {
+                                  BboxOp         bbox_op      = nullptr,
+                                  bool           early_ret    = false,
+                                  ColPrepOp      prep_a       = nullptr,
+                                  ColPrepOp      prep_b       = nullptr,
+                                  ColPrepDistOp  prep_a_dist  = nullptr,
+                                  ColPrepDistOp  prep_b_dist  = nullptr,
+                                  ColPrepPointOp prep_a_point = nullptr,  // A-const polygon, B varies as points
+                                  ColPrepPointOp prep_b_point = nullptr)  // B-const polygon, A varies as points
+{
     using PGF = geos::geom::prep::PreparedGeometryFactory;
 
     auto cb = parse_columnar(ptr);
@@ -569,6 +573,32 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     auto span_a = cols[0].get_bytes(0);
                     BBox  bbox_a = wkb_bbox(span_a);
                     auto  geom_a = read_wkb(span_a);
+
+                    // Point fast path: col(1) contains 2D WKB points — no per-row GEOS alloc.
+                    if (prep_a_point && n > 0 && !cols[1].is_null(0)) {
+                        auto s1 = cols[1].get_bytes(0);
+                        uint32_t pt_type = 0;
+                        if (s1.size() == 21 && s1[0] == 0x01) memcpy(&pt_type, s1.data() + 1, 4);
+                        auto gtype = geom_a->getGeometryTypeId();
+                        if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
+                                           || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
+                            using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
+                            IPIAL locator(*geom_a);
+                            for (uint32_t i = 0; i < n; ++i) {
+                                if (cols[1].is_null(i)) { res[i] = 0u; continue; }
+                                auto span_b = cols[1].get_bytes(i);
+                                double px, py;
+                                memcpy(&px, span_b.data() + 5, 8);
+                                memcpy(&py, span_b.data() + 13, 8);
+                                if (bbox_op && !bbox_op(bbox_a, BBox{px, py, px, py})) {
+                                    res[i] = early_ret ? 1u : 0u; continue;
+                                }
+                                res[i] = prep_a_point(&locator, px, py) ? 1u : 0u;
+                            }
+                            return out;
+                        }
+                    }
+
                     auto  pa     = PGF::prepare(geom_a.get());
                     for (uint32_t i = 0; i < n; ++i) {
                         if (cols[1].is_null(i)) { res[i] = 0u; continue; }
@@ -587,6 +617,32 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     auto span_b = cols[1].get_bytes(0);
                     BBox  bbox_b = wkb_bbox(span_b);
                     auto  geom_b = read_wkb(span_b);
+
+                    // Point fast path: col(0) contains 2D WKB points — no per-row GEOS alloc.
+                    if (prep_b_point && n > 0 && !cols[0].is_null(0)) {
+                        auto s0 = cols[0].get_bytes(0);
+                        uint32_t pt_type = 0;
+                        if (s0.size() == 21 && s0[0] == 0x01) memcpy(&pt_type, s0.data() + 1, 4);
+                        auto gtype = geom_b->getGeometryTypeId();
+                        if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
+                                           || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
+                            using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
+                            IPIAL locator(*geom_b);
+                            for (uint32_t i = 0; i < n; ++i) {
+                                if (cols[0].is_null(i)) { res[i] = 0u; continue; }
+                                auto span_a = cols[0].get_bytes(i);
+                                double px, py;
+                                memcpy(&px, span_a.data() + 5, 8);
+                                memcpy(&py, span_a.data() + 13, 8);
+                                if (bbox_op && !bbox_op(BBox{px, py, px, py}, bbox_b)) {
+                                    res[i] = early_ret ? 1u : 0u; continue;
+                                }
+                                res[i] = prep_b_point(&locator, px, py) ? 1u : 0u;
+                            }
+                            return out;
+                        }
+                    }
+
                     auto  pb     = PGF::prepare(geom_b.get());
                     for (uint32_t i = 0; i < n; ++i) {
                         if (cols[0].is_null(i)) { res[i] = 0u; continue; }
@@ -720,6 +776,17 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
     ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
         return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
             ch::bbox_op, early_ret, ch::prep_a_##name, ch::prep_b_##name);       \
+    }
+
+// Like CH_UDF_COL_BBOX2 but also registers ColPrepPointOp for 2D WKB point fast path.
+// Requires prep_a_pt_##name and prep_b_pt_##name defined in predicates.hpp.
+#define CH_UDF_COL_BBOX2_POINT(name, bbox_op, early_ret)                         \
+    __attribute__((export_name(#name)))                                          \
+    ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
+            ch::bbox_op, early_ret, ch::prep_a_##name, ch::prep_b_##name,        \
+            nullptr, nullptr,                                                     \
+            ch::prep_a_pt_##name, ch::prep_b_pt_##name);                         \
     }
 
 // 3-arg predicate: (geom, geom, double) -> bool  with PreparedGeometry support.

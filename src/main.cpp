@@ -149,16 +149,16 @@ CH_UDF_RB_FUNC(st_intersects_extent)  // keeps st_intersects_extent_rb export
 CH_UDF_RB_ONLY(st_dwithin)
 
 // ── COLUMNAR_V1 — predicates ──────────────────────────────────────────────────
-CH_UDF_COL_BBOX2(st_contains,        bbox_op_contains,   false)
-CH_UDF_COL_BBOX2(st_intersects,      bbox_op_intersects, false)
+CH_UDF_COL_BBOX2_POINT(st_contains,   bbox_op_contains,   false)
+CH_UDF_COL_BBOX2_POINT(st_intersects, bbox_op_intersects, false)
 CH_UDF_COL_BBOX2(st_touches,         bbox_op_intersects, false)
-CH_UDF_COL_BBOX2(st_within,          bbox_op_rcontains,  false)
+CH_UDF_COL_BBOX2_POINT(st_within,    bbox_op_rcontains,  false)
 CH_UDF_COL_BBOX2(st_crosses,         bbox_op_intersects, false)
 CH_UDF_COL_BBOX2(st_overlaps,        bbox_op_intersects, false)
 CH_UDF_COL_BBOX2(st_disjoint,        bbox_op_intersects, true)
 CH_UDF_COL_BBOX2(st_equals,          bbox_op_intersects, false)
-CH_UDF_COL_BBOX2(st_covers,          bbox_op_contains,   false)
-CH_UDF_COL_BBOX2(st_coveredby,       bbox_op_rcontains,  false)
+CH_UDF_COL_BBOX2_POINT(st_covers,    bbox_op_contains,   false)
+CH_UDF_COL_BBOX2_POINT(st_coveredby, bbox_op_rcontains,  false)
 CH_UDF_COL_BBOX2(st_containsproperly,bbox_op_contains,   false)
 CH_UDF_COL_PRED3(st_dwithin)
 

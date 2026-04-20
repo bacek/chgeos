@@ -175,4 +175,55 @@ constexpr ColPrepOp prep_a_st_equals =
 constexpr ColPrepOp prep_b_st_equals =
     +[](const PreparedGeometry* pb, const Geometry* a) { return pb->getGeometry().equals(a); };
 
+// ── ColPrepPointOp callbacks ──────────────────────────────────────────────────
+// Fast path: the varying column contains 2D WKB POINTs; the const column is a
+// polygon.  X,Y are extracted directly from raw WKB — no GEOS Geometry
+// allocation per row.  Naming: prep_a_pt = A-const polygon, B varies (points);
+//                              prep_b_pt = B-const polygon, A varies (points).
+
+using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
+
+// st_within(point, polygon): point strictly inside polygon → INTERIOR
+// Both directions use the same check: is the varying point inside the const polygon?
+constexpr ColPrepPointOp prep_b_pt_st_within =
+    +[](IPIAL* loc, double x, double y) {
+        geos::geom::CoordinateXY c(x, y);
+        return loc->locate(&c) == geos::geom::Location::INTERIOR;
+    };
+constexpr ColPrepPointOp prep_a_pt_st_within = prep_b_pt_st_within;
+
+// st_contains(polygon, point): point strictly inside polygon → INTERIOR
+constexpr ColPrepPointOp prep_a_pt_st_contains =
+    +[](IPIAL* loc, double x, double y) {
+        geos::geom::CoordinateXY c(x, y);
+        return loc->locate(&c) == geos::geom::Location::INTERIOR;
+    };
+constexpr ColPrepPointOp prep_b_pt_st_contains = nullptr;  // contains(point,polygon) skip
+
+// st_covers(polygon, point): point inside or on boundary → INTERIOR || BOUNDARY
+constexpr ColPrepPointOp prep_a_pt_st_covers =
+    +[](IPIAL* loc, double x, double y) {
+        geos::geom::CoordinateXY c(x, y);
+        auto l = loc->locate(&c);
+        return l == geos::geom::Location::INTERIOR || l == geos::geom::Location::BOUNDARY;
+    };
+constexpr ColPrepPointOp prep_b_pt_st_covers = nullptr;
+
+// st_coveredby(point, polygon): same as covers but roles swapped
+constexpr ColPrepPointOp prep_b_pt_st_coveredby =
+    +[](IPIAL* loc, double x, double y) {
+        geos::geom::CoordinateXY c(x, y);
+        auto l = loc->locate(&c);
+        return l == geos::geom::Location::INTERIOR || l == geos::geom::Location::BOUNDARY;
+    };
+constexpr ColPrepPointOp prep_a_pt_st_coveredby = nullptr;
+
+// st_intersects(point, polygon): not exterior
+constexpr ColPrepPointOp prep_b_pt_st_intersects =
+    +[](IPIAL* loc, double x, double y) {
+        geos::geom::CoordinateXY c(x, y);
+        return loc->locate(&c) != geos::geom::Location::EXTERIOR;
+    };
+constexpr ColPrepPointOp prep_a_pt_st_intersects = prep_b_pt_st_intersects;
+
 } // namespace ch
