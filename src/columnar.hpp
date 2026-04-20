@@ -33,6 +33,7 @@
 #include <array>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -154,7 +155,15 @@ struct ColView {
     // True when every logical row carries the same bytes.
     // Covers: COL_IS_CONST, COL_IS_REPEAT with period==1, and the legacy
     // cross-join pattern where CH repeats the same WKB N times without a flag.
-    bool is_effectively_const_bytes() const noexcept {
+    //
+    // total_rows: logical batch size for tracing (0 = silent).  When non-zero,
+    // logs period / row_count / total so callers can spot high-repeat columns
+    // (large total/period ratio) that might benefit from a small PreparedGeometry
+    // cache keyed by i % period.
+    bool is_effectively_const_bytes(uint32_t total_rows = 0) const noexcept {
+        if (total_rows > 0)
+            ch::log(std::format("is_effectively_const: is_const={} period={} row_count={} total={}",
+                is_const, period, row_count, total_rows));
         if (is_const || period == 1u) return true;
         if (!offsets || row_count < 2) return false;
         uint32_t elem_stride = offsets[1];
@@ -568,7 +577,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 
             if constexpr (nargs >= 2) {
                 // A-const fast path: prepare col(0) once, vary col(1)
-                if (cols[0].is_effectively_const_bytes() && prep_a) {
+                if (cols[0].is_effectively_const_bytes(n) && prep_a) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_a = cols[0].get_bytes(0);
                     BBox  bbox_a = wkb_bbox(span_a);
@@ -612,7 +621,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                 }
 
                 // B-const fast path: prepare col(1) once, vary col(0)
-                if (cols[1].is_effectively_const_bytes() && prep_b) {
+                if (cols[1].is_effectively_const_bytes(n) && prep_b) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_b = cols[1].get_bytes(0);
                     BBox  bbox_b = wkb_bbox(span_b);
@@ -660,7 +669,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             // col(0)=geom_a, col(1)=geom_b, col(2)=distance.
             if constexpr (nargs >= 3) {
                 // A-const dist path
-                if (cols[0].is_effectively_const_bytes() && prep_a_dist) {
+                if (cols[0].is_effectively_const_bytes(n) && prep_a_dist) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_a = cols[0].get_bytes(0);
                     BBox  bbox_a = wkb_bbox(span_a);
@@ -678,7 +687,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     return out;
                 }
                 // B-const dist path
-                if (cols[1].is_effectively_const_bytes() && prep_b_dist) {
+                if (cols[1].is_effectively_const_bytes(n) && prep_b_dist) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_b = cols[1].get_bytes(0);
                     BBox  bbox_b = wkb_bbox(span_b);
