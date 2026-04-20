@@ -49,12 +49,12 @@ yet. But it won't make _much_ difference. Probably.
 | Q6    | Zone stats for bbox-intersect zones| 1.62 s   | 4.66 s   | 4.82 s   | chgeos   |
 | Q7    | Detour ratio (all trips)           | 46.5 s   | —        | 39.3 s   | Sedona   |
 | Q8    | Nearby pickups per building        | 2.60 s   | 8.51 s   | 9.49 s   | chgeos   |
-| Q9    | Building conflation via IoU        | 2.18 s   | 0.21 s   | 0.41 s   | DuckDB   |
+| Q9    | Building conflation via IoU        | 0.104 s  | 0.21 s   | 0.41 s   | chgeos   |
 | Q10   | Zone avg duration/distance         | TIMEOUT  | —        | 72.3 s   | Sedona   |
 | Q11   | Cross-zone trip count              | OOM      | TIMEOUT  | 115 s    | Sedona   |
 | Q12   | 5 nearest buildings per trip (kNN) | TIMEOUT  | TIMEOUT  | —        | —        |
 
-**SF10 wins — chgeos: 7, DuckDB: 1, Sedona: 3, none: 1**
+**SF10 wins — chgeos: 8, DuckDB: 0, Sedona: 3, none: 1**
 
 ---
 
@@ -67,8 +67,8 @@ geometry construction cost at this volume. DuckDB did not run Q7 at SF10.
 **Q9 (building IoU):** Self-join of ~20K buildings. SpatialRTreeJoin now evaluates
 non-spatial ON conditions (e.g. `b1.id < b2.id`) as a pre-filter before the spatial
 predicate, cutting spatial evaluations from 20K (including self-pairs) to ~74.
-chgeos (0.028 s) is now marginally faster than DuckDB (0.03 s) at SF1, and 10× faster
-than Sedona (0.29 s). At SF10 DuckDB still leads (0.21 s vs 2.18 s).
+chgeos leads at both scales: 0.028 s at SF1 (vs DuckDB 0.03 s, Sedona 0.29 s) and
+0.104 s at SF10 (vs DuckDB 0.21 s, Sedona 0.41 s).
 
 **Q10/Q11 at SF10:** chgeos uses the SF10 zone dataset (454K globally-scoped zones vs
 ~265 NYC zones at SF1). Joining 454K polygon zones against 60M trips is infeasible
