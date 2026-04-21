@@ -86,26 +86,26 @@
     },
     {
       "engine": "sedona",
-      "version": "recorded 2026-04-19",
+      "version": "0.3.0",
       "scale_factor": 1,
       "results": [
-        { "query": "q1",  "time_seconds": 0.36,  "status": "success" },
-        { "query": "q2",  "time_seconds": 0.42,  "status": "success" },
-        { "query": "q3",  "time_seconds": 0.43,  "status": "success" },
+        { "query": "q1",  "time_seconds": 0.42,  "status": "success" },
+        { "query": "q2",  "time_seconds": 0.57,  "status": "success" },
+        { "query": "q3",  "time_seconds": 0.45,  "status": "success" },
         { "query": "q4",  "time_seconds": 0.59,  "status": "success" },
-        { "query": "q5",  "time_seconds": 1.63,  "status": "success" },
-        { "query": "q6",  "time_seconds": 0.54,  "status": "success" },
-        { "query": "q7",  "time_seconds": 1.59,  "status": "success" },
-        { "query": "q8",  "time_seconds": 0.40,  "status": "success" },
-        { "query": "q9",  "time_seconds": 0.29,  "status": "success" },
-        { "query": "q10", "time_seconds": 4.63,  "status": "success" },
-        { "query": "q11", "time_seconds": 7.62,  "status": "success" },
-        { "query": "q12", "time_seconds": 15.7,  "status": "success" }
+        { "query": "q5",  "time_seconds": 1.67,  "status": "success" },
+        { "query": "q6",  "time_seconds": 0.53,  "status": "success" },
+        { "query": "q7",  "time_seconds": 1.56,  "status": "success" },
+        { "query": "q8",  "time_seconds": 0.42,  "status": "success" },
+        { "query": "q9",  "time_seconds": 0.30,  "status": "success" },
+        { "query": "q10", "time_seconds": 4.28,  "status": "success" },
+        { "query": "q11", "time_seconds": 7.05,  "status": "success" },
+        { "query": "q12", "time_seconds": 13.71, "status": "success" }
       ]
     },
     {
       "engine": "sedona",
-      "version": "recorded 2026-04-21",
+      "version": "0.3.0",
       "scale_factor": 10,
       "results": [
         { "query": "q1",  "time_seconds": 0.74,  "status": "success" },
