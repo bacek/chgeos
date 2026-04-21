@@ -10,18 +10,18 @@
       "version": "2026-04-21",
       "scale_factor": 1,
       "results": [
-        { "query": "q1",  "time_seconds": 0.119, "status": "success" },
-        { "query": "q2",  "time_seconds": 0.084, "status": "success" },
-        { "query": "q3",  "time_seconds": 0.116, "status": "success" },
-        { "query": "q4",  "time_seconds": 0.546, "status": "success" },
-        { "query": "q5",  "time_seconds": 1.660, "status": "success" },
-        { "query": "q6",  "time_seconds": 0.335, "status": "success" },
-        { "query": "q7",  "time_seconds": 4.81,  "status": "success" },
-        { "query": "q8",  "time_seconds": 0.268, "status": "success" },
-        { "query": "q9",  "time_seconds": 0.027, "status": "success" },
-        { "query": "q10", "time_seconds": 5.52,  "status": "success" },
-        { "query": "q11", "time_seconds": 12.73, "status": "success" },
-        { "query": "q12", "time_seconds": 6.65,  "status": "success" }
+        { "query": "q1",  "time_seconds": 0.096, "status": "success" },
+        { "query": "q2",  "time_seconds": 0.060, "status": "success" },
+        { "query": "q3",  "time_seconds": 0.087, "status": "success" },
+        { "query": "q4",  "time_seconds": 0.443, "status": "success" },
+        { "query": "q5",  "time_seconds": 1.582, "status": "success" },
+        { "query": "q6",  "time_seconds": 0.322, "status": "success" },
+        { "query": "q7",  "time_seconds": 4.302, "status": "success" },
+        { "query": "q8",  "time_seconds": 0.243, "status": "success" },
+        { "query": "q9",  "time_seconds": 0.024, "status": "success" },
+        { "query": "q10", "time_seconds": 3.722, "status": "success" },
+        { "query": "q11", "time_seconds": 8.534, "status": "success" },
+        { "query": "q12", "time_seconds": 7.447, "status": "success" }
       ]
     },
     {
@@ -29,18 +29,18 @@
       "version": "2026-04-21",
       "scale_factor": 10,
       "results": [
-        { "query": "q1",  "time_seconds": 0.713, "status": "success" },
-        { "query": "q2",  "time_seconds": 0.688, "status": "success" },
-        { "query": "q3",  "time_seconds": 0.582, "status": "success" },
-        { "query": "q4",  "time_seconds": 0.915, "status": "success" },
-        { "query": "q5",  "time_seconds": 20.17, "status": "success" },
-        { "query": "q6",  "time_seconds": 1.845, "status": "success" },
-        { "query": "q7",  "time_seconds": 47.69, "status": "success" },
-        { "query": "q8",  "time_seconds": 2.978, "status": "success" },
-        { "query": "q9",  "time_seconds": 0.124, "status": "success" },
-        { "query": "q10", "time_seconds": 46.60, "status": "success" },
-        { "query": "q11", "time_seconds": 84.64, "status": "success" },
-        { "query": "q12", "time_seconds": 76.6,  "status": "success" }
+        { "query": "q1",  "time_seconds": 0.614, "status": "success" },
+        { "query": "q2",  "time_seconds": 0.404, "status": "success" },
+        { "query": "q3",  "time_seconds": 0.504, "status": "success" },
+        { "query": "q4",  "time_seconds": 0.909, "status": "success" },
+        { "query": "q5",  "time_seconds": 20.12, "status": "success" },
+        { "query": "q6",  "time_seconds": 1.666, "status": "success" },
+        { "query": "q7",  "time_seconds": 44.01, "status": "success" },
+        { "query": "q8",  "time_seconds": 2.805, "status": "success" },
+        { "query": "q9",  "time_seconds": 0.110, "status": "success" },
+        { "query": "q10", "time_seconds": 34.29, "status": "success" },
+        { "query": "q11", "time_seconds": 57.97, "status": "success" },
+        { "query": "q12", "time_seconds": 90.38, "status": "success" }
       ]
     },
     {
