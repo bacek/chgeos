@@ -8,7 +8,7 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 **Timeout:** 300 s (chgeos), 120 s (Sedona), 600 s (DuckDB SF10)  
 **chgeos version:** 2026-04-21 (centroid k-d tree kNN; joinBlock batch-candidates rewrite)  
 **DuckDB version:** v1.5.2  
-**Sedona version:** recorded 2026-04-19
+**Sedona version:** recorded 2026-04-21 (SF1: 2026-04-19)
 
 Note: it's running with CraneLift optimization disabled. CraneLift fix
 https://github.com/bytecodealliance/wasmtime/pull/12841 is not in ClickHouse
@@ -45,20 +45,20 @@ yet. But it won't make _much_ difference. Probably.
 
 | Query | Description                        | chgeos   | DuckDB   | Sedona   | Winner   |
 |-------|------------------------------------|----------|----------|----------|----------|
-| Q1    | Point-in-radius filter             | 0.713 s  | 2.15 s   | 3.06 s   | chgeos   |
-| Q2    | Count trips in county polygon      | 0.688 s  | 3.20 s   | 3.83 s   | chgeos   |
-| Q3    | Monthly stats in bbox+buffer       | 0.582 s  | 3.10 s   | 5.70 s   | chgeos   |
-| Q4    | Zone distribution (top-1000 tips)  | 0.915 s  | 1.22 s   | 1.67 s   | chgeos   |
-| Q5    | Convex hull area per customer/month| 20.17 s  | 508 s    | 108 s    | chgeos   |
-| Q6    | Zone stats for bbox-intersect zones| 1.845 s  | 4.66 s   | 4.82 s   | chgeos   |
-| Q7    | Detour ratio (all trips)           | 47.69 s  | —        | 39.3 s   | Sedona   |
-| Q8    | Nearby pickups per building        | 2.978 s  | 8.51 s   | 9.49 s   | chgeos   |
-| Q9    | Building conflation via IoU        | 0.124 s  | 0.21 s   | 0.41 s   | chgeos   |
-| Q10   | Zone avg duration/distance         | 46.60 s  | —        | 72.3 s   | chgeos   |
-| Q11   | Cross-zone trip count              | 84.64 s  | TIMEOUT  | 115 s    | chgeos   |
-| Q12   | 5 nearest buildings per trip (kNN) | 76.6 s   | TIMEOUT  | —        | chgeos   |
+| Q1    | Point-in-radius filter             | 0.713 s  | 2.15 s   | 0.74 s   | chgeos   |
+| Q2    | Count trips in county polygon      | 0.688 s  | 3.20 s   | 0.99 s   | chgeos   |
+| Q3    | Monthly stats in bbox+buffer       | 0.582 s  | 3.10 s   | 1.15 s   | chgeos   |
+| Q4    | Zone distribution (top-1000 tips)  | 0.915 s  | 1.22 s   | 0.74 s   | Sedona   |
+| Q5    | Convex hull area per customer/month| 20.17 s  | 508 s    | 25.35 s  | chgeos   |
+| Q6    | Zone stats for bbox-intersect zones| 1.845 s  | 4.66 s   | 1.43 s   | Sedona   |
+| Q7    | Detour ratio (all trips)           | 47.69 s  | —        | 14.23 s  | Sedona   |
+| Q8    | Nearby pickups per building        | 2.978 s  | 8.51 s   | 1.67 s   | Sedona   |
+| Q9    | Building conflation via IoU        | 0.124 s  | 0.21 s   | 0.36 s   | chgeos   |
+| Q10   | Zone avg duration/distance         | 46.60 s  | —        | 11.45 s  | Sedona   |
+| Q11   | Cross-zone trip count              | 84.64 s  | TIMEOUT  | 22.94 s  | Sedona   |
+| Q12   | 5 nearest buildings per trip (kNN) | 76.6 s   | TIMEOUT  | TIMEOUT  | chgeos   |
 
-**SF10 wins — chgeos: 11, DuckDB: 0, Sedona: 1**
+**SF10 wins — chgeos: 6, DuckDB: 0, Sedona: 6**
 
 ---
 
@@ -78,13 +78,14 @@ chgeos leads at both scales: 0.027 s at SF1 (vs DuckDB 0.03 s, Sedona 0.29 s) an
 bounding boxes that cover the entire trip dataset. SpatialRTreeJoin accumulates all R-tree
 candidates per joinBlock call and groups them by the side with fewer unique geometries,
 ensuring PreparedGeometry is built once per unique zone per block rather than once per flush.
-This brings Q10 from a crash to 46.6 s and Q11 from timeout to 84.6 s, both beating Sedona.
+This brings Q10 from a crash to 46.6 s and Q11 from timeout to 84.6 s. Sedona handles
+these queries significantly faster (11.45 s and 22.94 s respectively) at this scale.
 
 **Q12 (kNN):** The WASM st_knn function now uses a static 2-D centroid k-d tree
 (bbox centers, zero GEOS allocation) with branch-and-bound search instead of the
 previous expanding-envelope STRtree approach that scanned O(N) buildings per query
 on dense datasets. SF1: 27.25 s → 6.65 s (4×, beats Sedona 15.7 s). SF10: TIMEOUT
-→ 76.6 s. DuckDB times out at both scales; Sedona did not run Q12 at SF10.
+→ 76.6 s. DuckDB times out at both scales; Sedona also times out at SF10.
 
 **Q5 at SF10:** chgeos (20 s) is 5× faster than Sedona (108 s) and 25× faster than
 DuckDB (508 s). The `query_plan_execute_functions_after_sorting=0` hint is required to

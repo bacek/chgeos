@@ -105,21 +105,21 @@
     },
     {
       "engine": "sedona",
-      "version": "recorded 2026-04-19",
+      "version": "recorded 2026-04-21",
       "scale_factor": 10,
       "results": [
-        { "query": "q1",  "time_seconds": 3.06,  "status": "success" },
-        { "query": "q2",  "time_seconds": 3.83,  "status": "success" },
-        { "query": "q3",  "time_seconds": 5.70,  "status": "success" },
-        { "query": "q4",  "time_seconds": 1.67,  "status": "success" },
-        { "query": "q5",  "time_seconds": 108.0, "status": "success" },
-        { "query": "q6",  "time_seconds": 4.82,  "status": "success" },
-        { "query": "q7",  "time_seconds": 39.3,  "status": "success" },
-        { "query": "q8",  "time_seconds": 9.49,  "status": "success" },
-        { "query": "q9",  "time_seconds": 0.41,  "status": "success" },
-        { "query": "q10", "time_seconds": 72.3,  "status": "success" },
-        { "query": "q11", "time_seconds": 115.0, "status": "success" },
-        { "query": "q12", "time_seconds": null,   "status": "not_run" }
+        { "query": "q1",  "time_seconds": 0.74,  "status": "success" },
+        { "query": "q2",  "time_seconds": 0.99,  "status": "success" },
+        { "query": "q3",  "time_seconds": 1.15,  "status": "success" },
+        { "query": "q4",  "time_seconds": 0.74,  "status": "success" },
+        { "query": "q5",  "time_seconds": 25.35, "status": "success" },
+        { "query": "q6",  "time_seconds": 1.43,  "status": "success" },
+        { "query": "q7",  "time_seconds": 14.23, "status": "success" },
+        { "query": "q8",  "time_seconds": 1.67,  "status": "success" },
+        { "query": "q9",  "time_seconds": 0.36,  "status": "success" },
+        { "query": "q10", "time_seconds": 11.45, "status": "success" },
+        { "query": "q11", "time_seconds": 22.94, "status": "success" },
+        { "query": "q12", "time_seconds": null,   "status": "timeout" }
       ]
     }
   ]
