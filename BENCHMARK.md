@@ -71,8 +71,8 @@ geometry construction cost at this volume. DuckDB did not run Q7 at SF10.
 **Q9 (building IoU):** Self-join of ~20K buildings. SpatialRTreeJoin evaluates
 non-spatial ON conditions (e.g. `b1.id < b2.id`) as a pre-filter before the spatial
 predicate, cutting spatial evaluations from 20K (including self-pairs) to ~74.
-chgeos leads at both scales: 0.027 s at SF1 (vs DuckDB 0.03 s, Sedona 0.29 s) and
-0.124 s at SF10 (vs DuckDB 0.21 s, Sedona 0.41 s).
+chgeos leads at both scales: 0.027 s at SF1 (vs DuckDB 0.03 s, Sedona 0.30 s) and
+0.124 s at SF10 (vs DuckDB 0.21 s, Sedona 0.36 s).
 
 **Q10/Q11 at SF10:** The SF10 zone dataset contains 454K zones, many with globally-scoped
 bounding boxes that cover the entire trip dataset. SpatialRTreeJoin accumulates all R-tree
@@ -84,9 +84,9 @@ these queries significantly faster (11.45 s and 22.94 s respectively) at this sc
 **Q12 (kNN):** The WASM st_knn function now uses a static 2-D centroid k-d tree
 (bbox centers, zero GEOS allocation) with branch-and-bound search instead of the
 previous expanding-envelope STRtree approach that scanned O(N) buildings per query
-on dense datasets. SF1: 27.25 s → 6.65 s (4×, beats Sedona 15.7 s). SF10: TIMEOUT
+on dense datasets. SF1: 27.25 s → 6.65 s (4×, beats Sedona 13.71 s). SF10: TIMEOUT
 → 76.6 s. DuckDB times out at both scales; Sedona also times out at SF10.
 
-**Q5 at SF10:** chgeos (20 s) is 5× faster than Sedona (108 s) and 25× faster than
+**Q5 at SF10:** chgeos (20 s) is faster than Sedona (25.35 s) and 25× faster than
 DuckDB (508 s). The `query_plan_execute_functions_after_sorting=0` hint is required to
 keep the WASM convex hull running on parallel threads before the ORDER BY merge.
