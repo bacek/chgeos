@@ -18,6 +18,8 @@ yet. But it won't make _much_ difference. Probably.
 
 ## SF1 — 6 Million Trip Rows
 
+![SF1 benchmark](sf1.png)
+
 | Query | Description                        | chgeos   | DuckDB  | Sedona  | Winner   |
 |-------|------------------------------------|----------|---------|---------|----------|
 | Q1    | Point-in-radius filter             | 0.119 s  | 0.15 s  | 0.36 s  | chgeos   |
@@ -38,6 +40,8 @@ yet. But it won't make _much_ difference. Probably.
 ---
 
 ## SF10 — 60 Million Trip Rows
+
+![SF10 benchmark](sf10.png)
 
 | Query | Description                        | chgeos   | DuckDB   | Sedona   | Winner   |
 |-------|------------------------------------|----------|----------|----------|----------|
