@@ -5,7 +5,7 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 
 **Hardware:** Apple M-series, 12 cores  
 **Dataset:** synthetic taxi trip data from https://github.com/apache/sedona-spatialbench — SF1 = 6M trips, SF10 = 60M trips. 
-**Timeout:** 300 s (chgeos), 120 s (Sedona), 600 s (DuckDB SF10)  
+**Timeout:** 120 s (all engines)  
 **chgeos version:** 2026-04-21 (centroid k-d tree kNN; joinBlock batch-candidates rewrite)  
 **DuckDB version:** v1.5.2  
 **Sedona version:** 0.3.0 (recorded 2026-04-21)
@@ -45,16 +45,16 @@ yet. But it won't make _much_ difference. Probably.
 
 | Query | Description                        | chgeos   | DuckDB   | Sedona   | Winner   |
 |-------|------------------------------------|----------|----------|----------|----------|
-| Q1    | Point-in-radius filter             | 0.713 s  | 2.15 s   | 0.74 s   | chgeos   |
-| Q2    | Count trips in county polygon      | 0.688 s  | 3.20 s   | 0.99 s   | chgeos   |
-| Q3    | Monthly stats in bbox+buffer       | 0.582 s  | 3.10 s   | 1.15 s   | chgeos   |
-| Q4    | Zone distribution (top-1000 tips)  | 0.915 s  | 1.22 s   | 0.74 s   | Sedona   |
-| Q5    | Convex hull area per customer/month| 20.17 s  | 508 s    | 25.35 s  | chgeos   |
-| Q6    | Zone stats for bbox-intersect zones| 1.845 s  | 4.66 s   | 1.43 s   | Sedona   |
-| Q7    | Detour ratio (all trips)           | 47.69 s  | —        | 14.23 s  | Sedona   |
-| Q8    | Nearby pickups per building        | 2.978 s  | 8.51 s   | 1.67 s   | Sedona   |
-| Q9    | Building conflation via IoU        | 0.124 s  | 0.21 s   | 0.36 s   | chgeos   |
-| Q10   | Zone avg duration/distance         | 46.60 s  | —        | 11.45 s  | Sedona   |
+| Q1    | Point-in-radius filter             | 0.713 s  | 0.75 s   | 0.74 s   | chgeos   |
+| Q2    | Count trips in county polygon      | 0.688 s  | 1.02 s   | 0.99 s   | chgeos   |
+| Q3    | Monthly stats in bbox+buffer       | 0.582 s  | 0.92 s   | 1.15 s   | chgeos   |
+| Q4    | Zone distribution (top-1000 tips)  | 0.915 s  | 0.78 s   | 0.74 s   | Sedona   |
+| Q5    | Convex hull area per customer/month| 20.17 s  | 39.14 s  | 25.35 s  | chgeos   |
+| Q6    | Zone stats for bbox-intersect zones| 1.845 s  | 2.56 s   | 1.43 s   | Sedona   |
+| Q7    | Detour ratio (all trips)           | 47.69 s  | 40.07 s  | 14.23 s  | Sedona   |
+| Q8    | Nearby pickups per building        | 2.978 s  | 2.67 s   | 1.67 s   | Sedona   |
+| Q9    | Building conflation via IoU        | 0.124 s  | 0.14 s   | 0.36 s   | chgeos   |
+| Q10   | Zone avg duration/distance         | 46.60 s  | TIMEOUT  | 11.45 s  | Sedona   |
 | Q11   | Cross-zone trip count              | 84.64 s  | TIMEOUT  | 22.94 s  | Sedona   |
 | Q12   | 5 nearest buildings per trip (kNN) | 76.6 s   | TIMEOUT  | TIMEOUT  | chgeos   |
 
@@ -66,7 +66,7 @@ yet. But it won't make _much_ difference. Probably.
 
 **Q7 (detour ratio):** Scans all 6M/60M rows computing `st_length(st_makeline(...))` with no
 spatial join. Sedona leads at both scales; chgeos and DuckDB are bottlenecked by the per-row
-geometry construction cost at this volume. DuckDB did not run Q7 at SF10.
+geometry construction cost at this volume.
 
 **Q9 (building IoU):** Self-join of ~20K buildings. SpatialRTreeJoin evaluates
 non-spatial ON conditions (e.g. `b1.id < b2.id`) as a pre-filter before the spatial
@@ -87,6 +87,6 @@ previous expanding-envelope STRtree approach that scanned O(N) buildings per que
 on dense datasets. SF1: 27.25 s → 6.65 s (4×, beats Sedona 13.71 s). SF10: TIMEOUT
 → 76.6 s. DuckDB times out at both scales; Sedona also times out at SF10.
 
-**Q5 at SF10:** chgeos (20 s) is faster than Sedona (25.35 s) and 25× faster than
-DuckDB (508 s). The `query_plan_execute_functions_after_sorting=0` hint is required to
-keep the WASM convex hull running on parallel threads before the ORDER BY merge.
+**Q5 at SF10:** chgeos (20 s) leads; DuckDB (39 s) and Sedona (25 s) are both slower.
+The `query_plan_execute_functions_after_sorting=0` hint is required to keep the WASM
+convex hull running on parallel threads before the ORDER BY merge.

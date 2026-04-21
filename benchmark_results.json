@@ -2,10 +2,7 @@
   "benchmark": "spatialbench",
   "generated_at": "2026-04-21",
   "timeouts": {
-    "chgeos_seconds": 300,
-    "duckdb_sf1_seconds": 300,
-    "duckdb_sf10_seconds": 600,
-    "sedona_seconds": 120
+    "all_engines_seconds": 120
   },
   "results": [
     {
@@ -70,16 +67,16 @@
       "version": "1.5.2",
       "scale_factor": 10,
       "results": [
-        { "query": "q1",  "time_seconds": 2.15,  "status": "success" },
-        { "query": "q2",  "time_seconds": 3.20,  "status": "success" },
-        { "query": "q3",  "time_seconds": 3.10,  "status": "success" },
-        { "query": "q4",  "time_seconds": 1.22,  "status": "success" },
-        { "query": "q5",  "time_seconds": 508.0, "status": "success" },
-        { "query": "q6",  "time_seconds": 4.66,  "status": "success" },
-        { "query": "q7",  "time_seconds": null,   "status": "not_run" },
-        { "query": "q8",  "time_seconds": 8.51,  "status": "success" },
-        { "query": "q9",  "time_seconds": 0.21,  "status": "success" },
-        { "query": "q10", "time_seconds": null,   "status": "not_run" },
+        { "query": "q1",  "time_seconds": 0.75,  "status": "success" },
+        { "query": "q2",  "time_seconds": 1.02,  "status": "success" },
+        { "query": "q3",  "time_seconds": 0.92,  "status": "success" },
+        { "query": "q4",  "time_seconds": 0.78,  "status": "success" },
+        { "query": "q5",  "time_seconds": 39.14, "status": "success" },
+        { "query": "q6",  "time_seconds": 2.56,  "status": "success" },
+        { "query": "q7",  "time_seconds": 40.07, "status": "success" },
+        { "query": "q8",  "time_seconds": 2.67,  "status": "success" },
+        { "query": "q9",  "time_seconds": 0.14,  "status": "success" },
+        { "query": "q10", "time_seconds": null,   "status": "timeout" },
         { "query": "q11", "time_seconds": null,   "status": "timeout" },
         { "query": "q12", "time_seconds": null,   "status": "timeout" }
       ]
