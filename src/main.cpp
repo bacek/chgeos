@@ -283,14 +283,19 @@ ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
     ch::raw_buffer* out = nullptr;
     try {
         if (col_c.is_const) {
-            // Candidates same for every row → build STRtree once.
+            // Candidates same for every row → build centroid k-d tree once.
+            // CentroidKNNIndex uses wkb_bbox() centroids — zero GEOS allocation
+            // at build or query time.  O(log N) per query vs O(N) expanding-envelope.
             auto wkbs = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, 0);
-            ch::KNNIndex index(wkbs);
+            ch::CentroidKNNIndex index(wkbs);
 
             return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
                 if (col_q.is_null(row)) return {};
-                auto q = ch::read_wkb(col_q.get_bytes(row));
-                return index.query(q.get(), k);
+                // Extract X/Y from the query point WKB via wkb_bbox (no GEOS allocation).
+                // For a POINT the bbox is degenerate: xmin==xmax, ymin==ymax.
+                ch::BBox pt = ch::wkb_bbox(col_q.get_bytes(row));
+                if (pt.is_empty()) return {};
+                return index.query(pt.xmin, pt.ymin, k);
             });
         } else {
             // Candidates vary per row: brute-force.

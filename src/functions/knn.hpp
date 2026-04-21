@@ -1,29 +1,32 @@
 // K-nearest-neighbor (kNN) spatial query.
 //
-// KNNIndex: builds a GEOS TemplateSTRtree from a set of WKB-encoded candidate
-// geometries.  When the candidates column is COL_IS_CONST (e.g. from a scalar
-// subquery), the index is built once per batch and queried once per row.
+// CentroidKNNIndex: builds a static 2D k-d tree from the centroids of a set
+// of WKB-encoded candidate geometries.  Centroid is the bounding-box centre,
+// computed with wkb_bbox() — zero GEOS allocation at build or query time.
 //
-// Query algorithm: expanding-envelope search.
-//   1. Search the tree with an envelope expanded by radius r.
-//   2. Compute exact distance for each hit.
-//   3. If we have ≥ k hits and the k-th distance ≤ r, we have the true kNN.
-//   4. Otherwise expand r to the k-th exact distance and repeat.
-// This guarantees correctness because a geometry with actual distance d from
-// the query must have an envelope that intersects a search radius of d.
+// When the candidates column is COL_IS_CONST (e.g. from a scalar subquery),
+// the index is built once per batch and queried once per row.
+//
+// Query algorithm: branch-and-bound on the 2D k-d tree.
+//   1. Maintain a max-heap of the k best (dist², idx) pairs found so far.
+//   2. At each node, update the heap with the node's centroid distance.
+//   3. Recursively search the near subtree first, then the far subtree only
+//      if its minimum possible distance² is less than the current k-th best.
+// Expected node visits: O(k · N^(1/2)) for uniform 2D data; far better than
+// the O(N) worst case of the old expanding-envelope STRtree approach on dense
+// datasets where the radius must expand many times before finding k results.
 
 #pragma once
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <span>
 #include <utility>
 #include <vector>
 
-#include <geos/geom/Envelope.h>
-#include <geos/index/strtree/EnvelopeUtil.h>
-#include <geos/index/strtree/TemplateSTRtree.h>
-
 #include "../geom/wkb.hpp"
+#include "../geom/wkb_envelope.hpp"
 
 namespace ch {
 
@@ -48,84 +51,118 @@ st_knn_brute(const geos::geom::Geometry* q,
     return dists;
 }
 
-// STRtree-backed kNN index.  Built once from a set of candidate WKBs.
-class KNNIndex
+// Static 2D k-d tree over building centroids.
+// Build: O(N log²N) using std::nth_element at each level.
+// Query: O(log N) to O(√N) expected via branch-and-bound with a max-heap.
+class CentroidKNNIndex
 {
-    using Tree = geos::index::strtree::TemplateSTRtree<uint64_t>;
+    struct Point { double x, y; uint64_t idx; };
 
-    mutable Tree                                   tree_;
-    std::vector<std::unique_ptr<geos::geom::Geometry>> geoms_;
+    std::vector<Point> tree_; // partitioned in-place as an implicit k-d tree
 
-public:
-    explicit KNNIndex(const std::vector<std::span<const uint8_t>>& wkbs)
+    // Comparators for alternating split dimensions.
+    static bool cmp_x(const Point& a, const Point& b) { return a.x < b.x; }
+    static bool cmp_y(const Point& a, const Point& b) { return a.y < b.y; }
+
+    void build(size_t lo, size_t hi, int depth)
     {
-        geoms_.reserve(wkbs.size());
-        for (uint64_t i = 0; i < static_cast<uint64_t>(wkbs.size()); ++i)
-        {
-            auto g = read_wkb(wkbs[i]);
-            if (!g) continue;
-            tree_.insert(*g->getEnvelopeInternal(), i);
-            geoms_.push_back(std::move(g));
-        }
-        tree_.build();
+        if (hi <= lo + 1) return;
+        size_t mid = lo + (hi - lo) / 2;
+        std::nth_element(tree_.begin() + lo, tree_.begin() + mid,
+                         tree_.begin() + hi,
+                         depth % 2 == 0 ? cmp_x : cmp_y);
+        build(lo, mid, depth + 1);
+        build(mid + 1, hi, depth + 1);
     }
 
-    bool empty() const { return geoms_.empty(); }
+    // Max-heap comparator: highest d² at front so we can check/remove the worst.
+    static bool heap_cmp(const std::pair<double,uint64_t>& a,
+                         const std::pair<double,uint64_t>& b)
+    { return a.first < b.first; }
 
-    std::vector<std::pair<uint64_t, double>>
-    query(const geos::geom::Geometry* q, uint32_t k) const
+    void search(size_t lo, size_t hi, int depth,
+                double qx, double qy, uint32_t k,
+                std::vector<std::pair<double,uint64_t>>& heap) const
     {
-        if (geoms_.empty() || k == 0) return {};
+        if (hi <= lo) return;
 
-        const geos::geom::Envelope& q_env = *q->getEnvelopeInternal();
-        double r = 0.0;
+        size_t mid = lo + (hi - lo) / 2;
+        const Point& p = tree_[mid];
 
-        for (int attempt = 0; attempt < 64; ++attempt)
+        double dx = qx - p.x, dy = qy - p.y;
+        double d2 = dx * dx + dy * dy;
+
+        if (heap.size() < k)
         {
-            geos::geom::Envelope search = q_env;
-            if (r > 0.0) search.expandBy(r);
-
-            std::vector<std::pair<uint64_t, double>> found;
-            tree_.query(search, [&](uint64_t idx) {
-                double d = q->distance(geoms_[idx].get());
-                found.push_back({idx, d});
-            });
-
-            if (found.size() >= k)
-            {
-                uint32_t take = std::min(k, static_cast<uint32_t>(found.size()));
-                std::partial_sort(found.begin(), found.begin() + take, found.end(),
-                    [](const auto& a, const auto& b) { return a.second < b.second; });
-                double dk = found[k - 1].second;
-                if (dk <= r)
-                {
-                    // Search radius covers the k-th nearest → result is correct.
-                    found.resize(take);
-                    return found;
-                }
-                // Expand to exactly cover the k-th nearest distance.
-                r = dk;
-            }
-            else
-            {
-                // Too few candidates; double the radius.
-                r = (r == 0.0) ? 1e-10 : r * 2.0;
-            }
+            heap.emplace_back(d2, p.idx);
+            std::push_heap(heap.begin(), heap.end(), heap_cmp);
+        }
+        else if (d2 < heap.front().first)
+        {
+            std::pop_heap(heap.begin(), heap.end(), heap_cmp);
+            heap.back() = {d2, p.idx};
+            std::push_heap(heap.begin(), heap.end(), heap_cmp);
         }
 
-        // Fallback: return whatever we accumulated in the last iteration.
-        // (Shouldn't happen for non-pathological data.)
-        geos::geom::Envelope search = q_env;
-        search.expandBy(r);
-        std::vector<std::pair<uint64_t, double>> found;
-        tree_.query(search, [&](uint64_t idx) {
-            found.push_back({idx, q->distance(geoms_[idx].get())});
-        });
-        uint32_t take = std::min(k, static_cast<uint32_t>(found.size()));
-        std::partial_sort(found.begin(), found.begin() + take, found.end(),
-            [](const auto& a, const auto& b) { return a.second < b.second; });
-        found.resize(take);
-        return found;
+        // Choose near vs far subtree based on which side of the split qx/qy is on.
+        double split_delta = (depth % 2 == 0) ? dx : dy;
+        size_t near_lo, near_hi, far_lo, far_hi;
+        if (split_delta <= 0.0)
+        {
+            near_lo = lo;      near_hi = mid;
+            far_lo  = mid + 1; far_hi  = hi;
+        }
+        else
+        {
+            near_lo = mid + 1; near_hi = hi;
+            far_lo  = lo;      far_hi  = mid;
+        }
+
+        search(near_lo, near_hi, depth + 1, qx, qy, k, heap);
+
+        // Prune the far subtree if its closest possible point is already
+        // farther than the current k-th best distance².
+        double worst = (heap.size() < k)
+            ? std::numeric_limits<double>::infinity()
+            : heap.front().first;
+        if (split_delta * split_delta < worst)
+            search(far_lo, far_hi, depth + 1, qx, qy, k, heap);
+    }
+
+public:
+    explicit CentroidKNNIndex(const std::vector<std::span<const uint8_t>>& wkbs)
+    {
+        tree_.reserve(wkbs.size());
+        for (uint64_t i = 0; i < static_cast<uint64_t>(wkbs.size()); ++i)
+        {
+            BBox bb = wkb_bbox(wkbs[i]);
+            if (bb.is_empty()) continue;
+            tree_.push_back({(bb.xmin + bb.xmax) * 0.5,
+                             (bb.ymin + bb.ymax) * 0.5,
+                             i});
+        }
+        build(0, tree_.size(), 0);
+    }
+
+    bool empty() const { return tree_.empty(); }
+
+    // Returns k (idx, distance) pairs sorted by centroid distance ascending.
+    std::vector<std::pair<uint64_t, double>>
+    query(double qx, double qy, uint32_t k) const
+    {
+        if (empty() || k == 0) return {};
+
+        std::vector<std::pair<double,uint64_t>> heap;
+        heap.reserve(k);
+        search(0, tree_.size(), 0, qx, qy, k, heap);
+
+        std::vector<std::pair<uint64_t, double>> result;
+        result.reserve(heap.size());
+        for (const auto& [d2, idx] : heap)
+            result.emplace_back(idx, std::sqrt(d2));
+        std::sort(result.begin(), result.end(),
+                  [](const auto& a, const auto& b) { return a.second < b.second; });
+        return result;
     }
 };
 
