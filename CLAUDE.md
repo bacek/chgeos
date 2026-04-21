@@ -12,7 +12,7 @@ ninja -C build                   # build + link chgeos_tests
 ctest --output-on-failure -C build  # run all 261 tests
 
 # WASM build (Emscripten, pre-configured in build_wasm/)
-ninja -C build_wasm              # produces build_wasm/chgeos.wasm
+ninja -C build_wasm              # produces build_wasm/bin/chgeos.wasm
 ```
 
 ClickHouse binary: `../ClickHouse/build/programs/clickhouse`
@@ -35,19 +35,21 @@ Connect: `../ClickHouse/build/programs/clickhouse client --port 19000`
 
 ## Reloading chgeos.wasm after a build
 
+Use `scripts/reload.sh` (does all steps below automatically).
+
 Must drop all functions first — ClickHouse won't delete a module in use:
 
 ```bash
 CH="../ClickHouse/build/programs/clickhouse"
 # 1. Drop all registered functions
-grep -oE "^CREATE OR REPLACE FUNCTION [a-z_]+" clickhouse/create.sql \
+grep -oE "^CREATE OR REPLACE FUNCTION [a-z0-9_]+" clickhouse/create.sql \
   | sed 's/CREATE OR REPLACE FUNCTION /DROP FUNCTION IF EXISTS /' \
   | sed 's/$/ ;/' \
   | $CH client --port 19000 --multiquery
 # 2. Delete module
 $CH client --port 19000 --query "DELETE FROM system.webassembly_modules WHERE name='chgeos'"
 # 3. Copy WASM to user_files and insert
-cp build_wasm/chgeos.wasm tmp/data/user_files/chgeos.wasm
+cp build_wasm/bin/chgeos.wasm tmp/data/user_files/chgeos.wasm
 $CH client --port 19000 --query \
   "INSERT INTO system.webassembly_modules (name, code) VALUES ('chgeos', file('chgeos.wasm'))"
 # 4. Recreate all functions
