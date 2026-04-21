@@ -6,7 +6,7 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 **Hardware:** Apple M-series, 12 cores  
 **Dataset:** synthetic taxi trip data from https://github.com/apache/sedona-spatialbench — SF1 = 6M trips, SF10 = 60M trips. 
 **Timeout:** 300 s (chgeos), 120 s (Sedona), 600 s (DuckDB SF10)  
-**chgeos version:** 2026-04-21 (joinBlock batch-candidates rewrite; eliminates PreparedGeometry rebuild storm in multi-join queries)  
+**chgeos version:** 2026-04-21 (centroid k-d tree kNN; joinBlock batch-candidates rewrite)  
 **DuckDB version:** v1.5.2  
 **Sedona version:** recorded 2026-04-19
 
@@ -31,9 +31,9 @@ yet. But it won't make _much_ difference. Probably.
 | Q9    | Building conflation via IoU        | 0.027 s  | 0.03 s  | 0.29 s  | chgeos   |
 | Q10   | Zone avg duration/distance         | 5.52 s   | TIMEOUT | 4.63 s  | Sedona   |
 | Q11   | Cross-zone trip count              | 12.73 s  | TIMEOUT | 7.62 s  | Sedona   |
-| Q12   | 5 nearest buildings per trip (kNN) | 27.25 s  | TIMEOUT | 15.7 s  | Sedona   |
+| Q12   | 5 nearest buildings per trip (kNN) | 6.65 s   | TIMEOUT | 15.7 s  | chgeos   |
 
-**SF1 wins — chgeos: 6, DuckDB: 2, Sedona: 4**
+**SF1 wins — chgeos: 7, DuckDB: 2, Sedona: 3**
 
 ---
 
@@ -52,9 +52,9 @@ yet. But it won't make _much_ difference. Probably.
 | Q9    | Building conflation via IoU        | 0.124 s  | 0.21 s   | 0.41 s   | chgeos   |
 | Q10   | Zone avg duration/distance         | 46.60 s  | —        | 72.3 s   | chgeos   |
 | Q11   | Cross-zone trip count              | 84.64 s  | TIMEOUT  | 115 s    | chgeos   |
-| Q12   | 5 nearest buildings per trip (kNN) | TIMEOUT  | TIMEOUT  | —        | —        |
+| Q12   | 5 nearest buildings per trip (kNN) | 76.6 s   | TIMEOUT  | —        | chgeos   |
 
-**SF10 wins — chgeos: 10, DuckDB: 0, Sedona: 1, none: 1**
+**SF10 wins — chgeos: 11, DuckDB: 0, Sedona: 1**
 
 ---
 
@@ -76,10 +76,11 @@ candidates per joinBlock call and groups them by the side with fewer unique geom
 ensuring PreparedGeometry is built once per unique zone per block rather than once per flush.
 This brings Q10 from a crash to 46.6 s and Q11 from timeout to 84.6 s, both beating Sedona.
 
-**Q12 at SF10:** Global kNN over 60M trips × 20K buildings exceeds 300 s for both
-chgeos and DuckDB. Sedona did not run Q12. The WASM st_knn function uses an
-expanding-envelope STRtree search; replacing it with a centroid k-d tree (nanoflann)
-is the planned next optimization, targeting ~4–6 s at SF1.
+**Q12 (kNN):** The WASM st_knn function now uses a static 2-D centroid k-d tree
+(bbox centers, zero GEOS allocation) with branch-and-bound search instead of the
+previous expanding-envelope STRtree approach that scanned O(N) buildings per query
+on dense datasets. SF1: 27.25 s → 6.65 s (4×, beats Sedona 15.7 s). SF10: TIMEOUT
+→ 76.6 s. DuckDB times out at both scales; Sedona did not run Q12 at SF10.
 
 **Q5 at SF10:** chgeos (20 s) is 5× faster than Sedona (108 s) and 25× faster than
 DuckDB (508 s). The `query_plan_execute_functions_after_sorting=0` hint is required to
