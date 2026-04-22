@@ -6,7 +6,7 @@
     <http_port>18123</http_port>
     <path>/Users/bacek/src/chgeos/tmp/data</path>
     <user_files_path>/Users/bacek/src/chgeos/tmp/data/user_files</user_files_path>
-    <max_server_memory_usage_to_ram_ratio>0.5</max_server_memory_usage_to_ram_ratio>
+    <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
     <logger>
       <console>true</console>
     </logger>
