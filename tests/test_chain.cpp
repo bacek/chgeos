@@ -24,22 +24,16 @@ static bool chain_registered = [] {
     return true;
 }();
 
-// ── Chain buffer builder ──────────────────────────────────────────────────────
-// Produces: [n_funcs: u32][cstr names...][pad to 8B][COLUMNAR_V1 data]
+// ── Chain descriptor builder ──────────────────────────────────────────────────
+// Produces: [n_funcs: u32][cstr name_0]...[cstr name_n-1]
 
-static raw_buffer* make_chain_buf(const std::vector<std::string>& names,
-                                  raw_buffer*                      col_buf) {
-    // Compute header size.
-    size_t hdr = 4;  // n_funcs
-    for (auto& n : names) hdr += n.size() + 1;  // null-terminated
-    size_t padded = (hdr + 7u) & ~7u;
+static raw_buffer* make_chain_descriptor(const std::vector<std::string>& names) {
+    size_t sz = 4;  // n_funcs
+    for (auto& n : names) sz += n.size() + 1;
 
-    size_t col_size = col_buf->size();
-    raw_buffer* out = clickhouse_create_buffer(
-        static_cast<uint32_t>(padded + col_size));
-    out->resize(padded + col_size);
+    raw_buffer* out = clickhouse_create_buffer(static_cast<uint32_t>(sz));
+    out->resize(sz);
     uint8_t* p = out->data();
-    std::memset(p, 0, padded);  // zero-pad the header region
 
     uint32_t n = static_cast<uint32_t>(names.size());
     std::memcpy(p, &n, 4);
@@ -48,10 +42,6 @@ static raw_buffer* make_chain_buf(const std::vector<std::string>& names,
         std::memcpy(p, name.c_str(), name.size() + 1);
         p += name.size() + 1;
     }
-    // COLUMNAR_V1 data follows after padding.
-    uint8_t* base = out->data();
-    std::memcpy(base + padded, col_buf->data(), col_size);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
     return out;
 }
 
@@ -208,13 +198,14 @@ TEST(ChainExecute, MakelineLength_3_4_5) {
     auto p00 = wkt2wkb("POINT (0 0)");
     auto p34 = wkt2wkb("POINT (3 4)");
 
-    auto* col_buf = make_columnar(1, {
+    auto* col_buf  = make_columnar(1, {
         bytes_col(false, {p00}),
         bytes_col(false, {p34}),
     });
-    auto* buf = make_chain_buf({"st_makeline", "st_length"}, col_buf);
-    auto* out = chain_execute_impl(buf, 1);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    auto* chain = make_chain_descriptor({"st_makeline", "st_length"});
+    auto* out = chain_execute_impl(chain, col_buf, 1);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
 
     auto vals = read_f64_col(out, 1);
     EXPECT_DOUBLE_EQ(vals[0], 5.0);
@@ -230,9 +221,10 @@ TEST(ChainExecute, MakelineLength_MultiRow) {
         bytes_col(false, {p00, p00}),
         bytes_col(false, {p10, p03}),
     });
-    auto* buf = make_chain_buf({"st_makeline", "st_length"}, col_buf);
-    auto* out = chain_execute_impl(buf, 2);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    auto* chain = make_chain_descriptor({"st_makeline", "st_length"});
+    auto* out = chain_execute_impl(chain, col_buf, 2);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
 
     auto vals = read_f64_col(out, 2);
     EXPECT_DOUBLE_EQ(vals[0], 1.0);
@@ -248,9 +240,10 @@ TEST(ChainExecute, MakelineArea_IsZero) {
         bytes_col(false, {p00}),
         bytes_col(false, {p11}),
     });
-    auto* buf = make_chain_buf({"st_makeline", "st_area"}, col_buf);
-    auto* out = chain_execute_impl(buf, 1);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    auto* chain = make_chain_descriptor({"st_makeline", "st_area"});
+    auto* out = chain_execute_impl(chain, col_buf, 1);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
 
     auto vals = read_f64_col(out, 1);
     EXPECT_DOUBLE_EQ(vals[0], 0.0);
@@ -264,9 +257,10 @@ TEST(ChainExecute, MakelineAstext) {
         bytes_col(false, {p00}),
         bytes_col(false, {p10}),
     });
-    auto* buf = make_chain_buf({"st_makeline", "st_astext"}, col_buf);
-    auto* out = chain_execute_impl(buf, 1);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    auto* chain = make_chain_descriptor({"st_makeline", "st_astext"});
+    auto* out = chain_execute_impl(chain, col_buf, 1);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
 
     // Read from out manually before it's freed inside read_bytes_row.
     auto cb  = parse_columnar(out);
@@ -289,9 +283,10 @@ TEST(ChainExecute, MakelineConvexhullArea) {
         bytes_col(false, {p00}),
         bytes_col(false, {p11}),
     });
-    auto* buf = make_chain_buf({"st_makeline", "st_convexhull", "st_area"}, col_buf);
-    auto* out = chain_execute_impl(buf, 1);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    auto* chain = make_chain_descriptor({"st_makeline", "st_convexhull", "st_area"});
+    auto* out = chain_execute_impl(chain, col_buf, 1);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
 
     auto vals = read_f64_col(out, 1);
     EXPECT_DOUBLE_EQ(vals[0], 0.0);
@@ -306,9 +301,10 @@ TEST(ChainExecute, MakelineEnvelopeIsEmpty) {
         bytes_col(false, {p00}),
         bytes_col(false, {p11}),
     });
-    auto* buf = make_chain_buf({"st_makeline", "st_envelope", "st_isempty"}, col_buf);
-    auto* out = chain_execute_impl(buf, 1);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    auto* chain = make_chain_descriptor({"st_makeline", "st_envelope", "st_isempty"});
+    auto* out = chain_execute_impl(chain, col_buf, 1);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
 
     auto vals = read_bool_col(out, 1);
     EXPECT_EQ(vals[0], 0u);  // not empty
@@ -326,9 +322,10 @@ TEST(ChainExecute, NullInput_ProducesNaN) {
         null_bytes_col(false, {p00, p00}, {1, 0}),  // row 0 null, row 1 ok
         bytes_col(false, {p11, p11}),
     });
-    auto* buf = make_chain_buf({"st_makeline", "st_length"}, col_buf);
-    auto* out = chain_execute_impl(buf, 2);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+    auto* chain = make_chain_descriptor({"st_makeline", "st_length"});
+    auto* out = chain_execute_impl(chain, col_buf, 2);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
 
     auto vals = read_f64_col(out, 2);
     EXPECT_TRUE(std::isnan(vals[0]));

@@ -11,11 +11,10 @@
 //   1. Module: export clickhouse_can_chain_execute — CH skips all chain logic if absent.
 //   2. Function: register via CH_CHAIN_SOURCE / CH_CHAIN_XFORM / CH_CHAIN_SINK.
 //
-// Chain buffer layout (input to chain_execute):
-//   [uint32_t n_funcs]
-//   [cstr name_0] ... [cstr name_n-1]   — null-terminated, concatenated
-//   [padding to 8-byte boundary]
-//   [COLUMNAR_V1 data for the SOURCE function's WKB inputs]
+// clickhouse_chain_execute receives two separate buffers:
+//   chain_buf: [uint32_t n_funcs][cstr name_0]...[cstr name_n-1]
+//   row_buf:   standard COLUMNAR_V1 buffer (identical to what name_col receives)
+// clickhouse_can_chain_execute still uses chain_buf format only.
 
 #include <cstdint>
 #include <cstring>
@@ -154,47 +153,26 @@ raw_buffer* chain_sink_run(std::vector<GeomPtr> handles, uint32_t n) {
     }
 }
 
-// ── Chain header parsing ──────────────────────────────────────────────────────
+// ── Chain descriptor parsing ──────────────────────────────────────────────────
 
-struct ChainHeader {
-    std::vector<std::string> fn_names;
-    size_t                   data_offset;  // byte offset of COLUMNAR_V1 data in buf
-};
-
-inline ChainHeader parse_chain_header(const raw_buffer* buf) {
-    const uint8_t* base = buf->data();
-    const uint8_t* p    = base;
-
+// Parse function names from chain_buf: [n_funcs: u32][cstr name_0]...[cstr name_n-1]
+inline std::vector<std::string> parse_chain_names(const raw_buffer* chain_buf) {
+    const uint8_t* p = chain_buf->data();
     uint32_t n_funcs;
     std::memcpy(&n_funcs, p, 4);
     p += 4;
 
-    ChainHeader h;
-    h.fn_names.reserve(n_funcs);
+    std::vector<std::string> names;
+    names.reserve(n_funcs);
     for (uint32_t i = 0; i < n_funcs; ++i) {
         const char* s = reinterpret_cast<const char*>(p);
         size_t len = std::strlen(s);
-        h.fn_names.emplace_back(s, len);
+        names.emplace_back(s, len);
         p += len + 1;
     }
-
-    // Align to 8 bytes for COLUMNAR_V1 header.
-    size_t off = static_cast<size_t>(p - base);
-    off = (off + 7u) & ~7u;
-    h.data_offset = off;
-    return h;
+    return names;
 }
 
-// Parse a COLUMNAR_V1 buffer starting at an arbitrary byte offset within buf.
-inline ColumnarBuf parse_columnar_at(const raw_buffer* buf, size_t offset) {
-    const uint8_t* p = buf->data() + offset;
-    ColumnarBuf cb;
-    cb.base = p;
-    std::memcpy(&cb.num_rows, p,     4);
-    std::memcpy(&cb.num_cols, p + 4, 4);
-    cb.descs = reinterpret_cast<const ColDescriptor*>(p + HEADER_BYTES);
-    return cb;
-}
 
 // ── Chain validation ──────────────────────────────────────────────────────────
 // Checks: all names registered, role ordering is SOURCE → XFORM* → SINK.
@@ -213,21 +191,21 @@ inline bool validate_chain(const std::vector<std::string>& names) {
 
 // ── Chain execution ───────────────────────────────────────────────────────────
 
-inline raw_buffer* chain_execute_impl(raw_buffer* buf, uint32_t /*n*/) {
-    auto  header = parse_chain_header(buf);
-    auto  cb     = parse_columnar_at(buf, header.data_offset);
-    uint32_t n   = cb.num_rows;
-    auto& reg    = chain_registry();
+inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf, uint32_t /*n*/) {
+    auto fn_names = parse_chain_names(chain_buf);
+    auto cb       = parse_columnar(row_buf);
+    uint32_t n    = cb.num_rows;
+    auto& reg     = chain_registry();
 
     // SOURCE
-    auto handles = reg.at(header.fn_names[0]).as_source(cb, n);
+    auto handles = reg.at(fn_names[0]).as_source(cb, n);
 
     // XFORMs
-    for (size_t i = 1; i + 1 < header.fn_names.size(); ++i)
-        handles = reg.at(header.fn_names[i]).as_xform(std::move(handles));
+    for (size_t i = 1; i + 1 < fn_names.size(); ++i)
+        handles = reg.at(fn_names[i]).as_xform(std::move(handles));
 
     // SINK
-    return reg.at(header.fn_names.back()).as_sink(std::move(handles), n);
+    return reg.at(fn_names.back()).as_sink(std::move(handles), n);
 }
 
 } // namespace ch

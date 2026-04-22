@@ -1,3 +1,4 @@
+#include <format>
 #include <geos/version.h>
 
 #include "functions.hpp"
@@ -318,8 +319,13 @@ ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
 // Only functions listed here participate in chain_execute.  All others continue
 // to use their normal CH_UDF_COL path unchanged.
 
-// Runs before any export is called (WASM global constructors via __wasm_call_ctors).
-[[maybe_unused]] static bool chain_init = [] {
+// Populate chain registry — idempotent (checks if already done).
+// Called from chain_init (if __wasm_call_ctors runs) and clickhouse_module_init
+// (explicit CH call when ctors don't run automatically).
+static void populate_chain_registry() {
+    auto& reg = ch::chain_registry();
+    if (!reg.empty()) return;
+
     // SOURCE: reads WKB geometry columns from CH, produces GeomPtr vector.
     CH_CHAIN_SOURCE(st_makeline);
     CH_CHAIN_SOURCE(st_union);
@@ -349,10 +355,22 @@ ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
     CH_CHAIN_SINK(st_asewkt);
     CH_CHAIN_SINK(st_geometrytype);
 
+    ch::log(std::format("module_init: registered {} chain functions", reg.size()));
+}
+
+[[maybe_unused]] static bool chain_init = [] {
+    populate_chain_registry();
     return true;
 }();
 
 // ── CH interop chain exports ──────────────────────────────────────────────────
+// clickhouse_module_init: CH calls this once per compartment after instantiation
+// to ensure chain_registry is populated (WASM global ctors may not run automatically).
+__attribute__((export_name("clickhouse_module_init")))
+void clickhouse_module_init() {
+    populate_chain_registry();
+}
+
 // clickhouse_can_chain_execute: CH checks this on module load.
 // If this export is absent, CH disables chaining for the module entirely.
 //
@@ -360,6 +378,8 @@ ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
 // Returns 1 if the chain is supported, 0 if not.
 __attribute__((export_name("clickhouse_can_chain_execute")))
 int32_t clickhouse_can_chain_execute(ch::raw_buffer* names_buf, uint32_t n) {
+    populate_chain_registry();  // idempotent; ensures registry is ready in any compartment
+
     const uint8_t* p = names_buf->data();
     std::vector<std::string> names;
     names.reserve(n);
@@ -369,15 +389,27 @@ int32_t clickhouse_can_chain_execute(ch::raw_buffer* names_buf, uint32_t n) {
         names.emplace_back(s, len);
         p += len + 1;
     }
-    return ch::validate_chain(names) ? 1 : 0;
+
+    auto& reg = ch::chain_registry();
+    ch::log(std::format("can_chain_execute: registry_size={} n={}", reg.size(), n));
+    for (const auto& name : names) {
+        bool found = reg.count(name) > 0;
+        ch::log(std::format("can_chain_execute: name='{}' found={}", name, found));
+    }
+
+    bool ok = ch::validate_chain(names);
+    ch::log(std::format("can_chain_execute: result={}", ok ? 1 : 0));
+    return ok ? 1 : 0;
 }
 
-// clickhouse_chain_execute: execute a validated chain in a single WASM call.
-// buf layout: [n_funcs: u32][cstr names...][pad to 8B][COLUMNAR_V1 source data]
+// clickhouse_chain_execute(chain_buf, row_buf, n)
+//   chain_buf: [n_funcs: u32][cstr names...]
+//   row_buf:   standard COLUMNAR_V1 buffer (same format as name_col receives)
 __attribute__((export_name("clickhouse_chain_execute")))
-ch::raw_buffer* clickhouse_chain_execute(ch::raw_buffer* buf, uint32_t n) {
+ch::raw_buffer* clickhouse_chain_execute(ch::raw_buffer* chain_buf, ch::raw_buffer* row_buf, uint32_t n) {
+    populate_chain_registry();  // idempotent; ensures registry is ready in any compartment
     try {
-        return ch::chain_execute_impl(buf, n);
+        return ch::chain_execute_impl(chain_buf, row_buf, n);
     } catch (const std::exception& e) {
         ch::panic(e.what());
     }
