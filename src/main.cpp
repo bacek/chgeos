@@ -331,6 +331,11 @@ static void populate_chain_registry() {
     CH_CHAIN_SOURCE(st_union);
     CH_CHAIN_SOURCE(st_intersection);
     CH_CHAIN_SOURCE(st_difference);
+    CH_CHAIN_SOURCE(st_collect);
+    CH_CHAIN_SOURCE(st_symdifference);
+    CH_CHAIN_SOURCE(st_closestpoint);
+    CH_CHAIN_SOURCE(st_shortestline);
+    CH_CHAIN_SOURCE(st_makebox2d);
 
     // XFORM: GeomPtr → GeomPtr (unary transforms).
     CH_CHAIN_XFORM(st_convexhull);
@@ -342,6 +347,15 @@ static void populate_chain_registry() {
     CH_CHAIN_XFORM(st_unaryunion);
     CH_CHAIN_XFORM(st_makevalid);
     CH_CHAIN_XFORM(st_interiorpoint);
+    CH_CHAIN_XFORM(st_extent);
+    CH_CHAIN_XFORM(st_startpoint);
+    CH_CHAIN_XFORM(st_endpoint);
+    CH_CHAIN_XFORM(st_exteriorring);
+    CH_CHAIN_XFORM(st_minimumboundingcircle);
+    CH_CHAIN_XFORM(st_linmerge);
+    CH_CHAIN_XFORM(st_polygonize);
+    CH_CHAIN_XFORM(st_makepolygon);
+    CH_CHAIN_XFORM(st_clusterintersecting);
 
     // SINK: GeomPtr → scalar or bytes.
     CH_CHAIN_SINK(st_length);
@@ -354,6 +368,17 @@ static void populate_chain_registry() {
     CH_CHAIN_SINK(st_astext);
     CH_CHAIN_SINK(st_asewkt);
     CH_CHAIN_SINK(st_geometrytype);
+    CH_CHAIN_SINK(st_x);
+    CH_CHAIN_SINK(st_y);
+    CH_CHAIN_SINK(st_z);
+    CH_CHAIN_SINK(st_npoints);
+    CH_CHAIN_SINK(st_srid);
+    CH_CHAIN_SINK(st_numgeometries);
+    CH_CHAIN_SINK(st_numinteriorrings);
+    CH_CHAIN_SINK(st_dimension);
+    CH_CHAIN_SINK(st_numpoints);
+    CH_CHAIN_SINK(st_nrings);
+    CH_CHAIN_SINK(st_isvalidreason);
 
     ch::log(std::format("module_init: registered {} chain functions", reg.size()));
 }
