@@ -6,12 +6,9 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 **Hardware:** Apple M-series, 12 cores  
 **Dataset:** synthetic taxi trip data from https://github.com/apache/sedona-spatialbench — SF1 = 6M trips, SF10 = 60M trips. 
 **Timeout:** 120 s (all engines)  
-**chgeos version:** 2026-04-21 (CraneLift JIT; centroid k-d tree kNN; joinBlock batch-candidates rewrite)  
+**chgeos version:** 2026-04-21
 **DuckDB version:** v1.5.2  
 **Sedona version:** 0.3.0 (recorded 2026-04-21)
-
-CraneLift JIT is enabled (wasmtime v44.0.0 includes the aarch64 fix from
-https://github.com/bytecodealliance/wasmtime/pull/12841).
 
 ---
 
