@@ -17,6 +17,7 @@ static bool chain_registered = [] {
     CH_CHAIN_SOURCE(st_makeline);
     CH_CHAIN_XFORM(st_convexhull);
     CH_CHAIN_XFORM(st_envelope);
+    CH_CHAIN_XFORM_D(st_buffer);
     CH_CHAIN_SINK(st_length);
     CH_CHAIN_SINK(st_area);
     CH_CHAIN_SINK(st_astext);
@@ -105,6 +106,14 @@ static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
     return buf;
 }
 
+static ColData fixed64_col(double value) {
+    ColData col;
+    col.col_type = static_cast<uint32_t>(COL_FIXED64) | static_cast<uint32_t>(COL_IS_CONST);
+    col.data.resize(8);
+    std::memcpy(col.data.data(), &value, 8);
+    return col;
+}
+
 static ColData bytes_col(bool is_const, const std::vector<Vector>& wkbs) {
     ColData col;
     col.col_type = static_cast<uint32_t>(COL_BYTES)
@@ -183,8 +192,15 @@ TEST(ChainValidate, WrongRoleOrder_SinkFirst) {
     EXPECT_FALSE(validate_chain({"st_length", "st_makeline"}));
 }
 
-TEST(ChainValidate, WrongRoleOrder_XformFirst) {
-    EXPECT_FALSE(validate_chain({"st_convexhull", "st_length"}));
+// XFORM with as_source can head a chain (enables short chains where the SOURCE
+// is not chain-registered, e.g. st_collect_agg → st_convexhull → st_area).
+TEST(ChainValidate, XformWithSource_HeadsChain) {
+    EXPECT_TRUE(validate_chain({"st_convexhull", "st_length"}));
+}
+
+// XFORM without as_source (e.g. CH_CHAIN_XFORM_D) cannot head a chain.
+TEST(ChainValidate, XformWithoutSource_CannotHead) {
+    EXPECT_FALSE(validate_chain({"st_buffer", "st_length"}));
 }
 
 TEST(ChainValidate, UnknownFunction) {
@@ -330,4 +346,25 @@ TEST(ChainExecute, NullInput_ProducesNaN) {
     auto vals = read_f64_col(out, 2);
     EXPECT_TRUE(std::isnan(vals[0]));
     EXPECT_DOUBLE_EQ(vals[1], std::sqrt(2.0));
+}
+
+TEST(ChainExecute, BufferArea_ScalarXform) {
+    // st_area(st_buffer(st_makeline(A, B), r)):
+    // row_buf = [col_A, col_B, const_r].  The scalar goes in as COL_IS_CONST COL_FIXED64.
+    auto p00 = wkt2wkb("POINT (0 0)");
+    auto p10 = wkt2wkb("POINT (1 0)");
+
+    auto* col_buf = make_columnar(1, {
+        bytes_col(false, {p00}),   // col 0: geom A
+        bytes_col(false, {p10}),   // col 1: geom B
+        fixed64_col(0.5),          // col 2: buffer radius (COL_IS_CONST)
+    });
+    auto* chain = make_chain_descriptor({"st_makeline", "st_buffer", "st_area"});
+    auto* out = chain_execute_impl(chain, col_buf, 1);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
+
+    auto vals = read_f64_col(out, 1);
+    // Buffered linestring must have positive area.
+    EXPECT_GT(vals[0], 0.0);
 }

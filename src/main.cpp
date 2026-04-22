@@ -337,7 +337,7 @@ static void populate_chain_registry() {
     CH_CHAIN_SOURCE(st_shortestline);
     CH_CHAIN_SOURCE(st_makebox2d);
 
-    // XFORM: GeomPtr → GeomPtr (unary transforms).
+    // XFORM: GeomPtr → GeomPtr, no extra args.
     CH_CHAIN_XFORM(st_convexhull);
     CH_CHAIN_XFORM(st_boundary);
     CH_CHAIN_XFORM(st_envelope);
@@ -356,6 +356,13 @@ static void populate_chain_registry() {
     CH_CHAIN_XFORM(st_polygonize);
     CH_CHAIN_XFORM(st_makepolygon);
     CH_CHAIN_XFORM(st_clusterintersecting);
+
+    // XFORM with one double constant (radius, tolerance, distance, …).
+    CH_CHAIN_XFORM_D(st_buffer);
+    CH_CHAIN_XFORM_D(st_simplify);
+
+    // XFORM with two double constants (dx, dy).
+    CH_CHAIN_XFORM_DD(st_translate);
 
     // SINK: GeomPtr → scalar or bytes.
     CH_CHAIN_SINK(st_length);

@@ -21,6 +21,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -38,12 +39,13 @@ enum class ChainRole { SOURCE, XFORM, SINK };
 
 struct ChainFn {
     ChainRole role;
-    uint32_t  source_arity = 0;  // non-zero only for SOURCE
+    uint32_t  source_arity  = 0;  // non-zero only for SOURCE: geom cols consumed
+    uint32_t  n_scalar_cols = 0;  // non-zero only for XFORM: extra const cols in row_buf
 
     // SOURCE: reads source_arity WKB geometry columns from cb → vector of GeomPtr.
     std::function<std::vector<GeomPtr>(const ColumnarBuf&, uint32_t n)> as_source;
-    // XFORM: moves GeomPtr vector in, returns transformed GeomPtr vector.
-    std::function<std::vector<GeomPtr>(std::vector<GeomPtr>)>           as_xform;
+    // XFORM: moves GeomPtr vector in + scalar ColViews → transformed GeomPtr vector.
+    std::function<std::vector<GeomPtr>(std::vector<GeomPtr>, std::span<const ColView>)> as_xform;
     // SINK: consumes GeomPtr vector, allocates and returns the result raw_buffer.
     std::function<raw_buffer*(std::vector<GeomPtr>, uint32_t n)>        as_sink;
 };
@@ -81,7 +83,7 @@ std::vector<GeomPtr> chain_source_run(const ColumnarBuf& cb, uint32_t n) {
     return result;
 }
 
-// ── XFORM helper ──────────────────────────────────────────────────────────────
+// ── XFORM helpers ─────────────────────────────────────────────────────────────
 // Applies Impl to each non-null handle; nullptr propagates through.
 
 template <auto Impl>
@@ -89,6 +91,29 @@ std::vector<GeomPtr> chain_xform_run(std::vector<GeomPtr> handles) {
     for (auto& h : handles) {
         if (!h) continue;
         h = Impl(std::move(h));
+    }
+    return handles;
+}
+
+// Single double scalar.
+template <auto Impl>
+std::vector<GeomPtr> chain_xform_d_run(std::vector<GeomPtr> handles, const ColView& scalar) {
+    double d = col_get_fixed_widened<double>(scalar, 0);
+    for (auto& h : handles) {
+        if (!h) continue;
+        h = Impl(std::move(h), d);
+    }
+    return handles;
+}
+
+// Two double scalars.
+template <auto Impl>
+std::vector<GeomPtr> chain_xform_dd_run(std::vector<GeomPtr> handles, const ColView& s0, const ColView& s1) {
+    double d0 = col_get_fixed_widened<double>(s0, 0);
+    double d1 = col_get_fixed_widened<double>(s1, 0);
+    for (auto& h : handles) {
+        if (!h) continue;
+        h = Impl(std::move(h), d0, d1);
     }
     return handles;
 }
@@ -182,8 +207,12 @@ inline bool validate_chain(const std::vector<std::string>& names) {
     auto& reg = chain_registry();
     for (auto& name : names)
         if (!reg.count(name)) return false;
-    if (reg.at(names.front()).role != ChainRole::SOURCE) return false;
-    if (reg.at(names.back()).role  != ChainRole::SINK)   return false;
+    const auto& front = reg.at(names.front());
+    // Allow XFORM at front if it can also act as SOURCE (has as_source).
+    bool front_ok = (front.role == ChainRole::SOURCE) ||
+                    (front.role == ChainRole::XFORM && front.as_source);
+    if (!front_ok) return false;
+    if (reg.at(names.back()).role != ChainRole::SINK) return false;
     for (size_t i = 1; i + 1 < names.size(); ++i)
         if (reg.at(names[i]).role != ChainRole::XFORM) return false;
     return true;
@@ -197,12 +226,21 @@ inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf
     uint32_t n    = cb.num_rows;
     auto& reg     = chain_registry();
 
-    // SOURCE
-    auto handles = reg.at(fn_names[0]).as_source(cb, n);
+    // SOURCE (or XFORM acting as SOURCE): consumes source_arity geometry columns.
+    const auto& source = reg.at(fn_names[0]);
+    auto handles = source.as_source(cb, n);
+    uint32_t col_offset = source.source_arity;
 
-    // XFORMs
-    for (size_t i = 1; i + 1 < fn_names.size(); ++i)
-        handles = reg.at(fn_names[i]).as_xform(std::move(handles));
+    // XFORMs: each consumes n_scalar_cols const columns from row_buf.
+    for (size_t i = 1; i + 1 < fn_names.size(); ++i) {
+        const auto& fn = reg.at(fn_names[i]);
+        std::vector<ColView> scalars;
+        scalars.reserve(fn.n_scalar_cols);
+        for (uint32_t k = 0; k < fn.n_scalar_cols; ++k)
+            scalars.push_back(cb.col(col_offset + k));
+        handles = fn.as_xform(std::move(handles), scalars);
+        col_offset += fn.n_scalar_cols;
+    }
 
     // SINK
     return reg.at(fn_names.back()).as_sink(std::move(handles), n);
@@ -225,13 +263,43 @@ inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf
         }                                                                        \
     }
 
-#define CH_CHAIN_XFORM(name)                                                    \
-    ch::chain_registry()[#name] = ch::ChainFn{                                  \
-        .role = ch::ChainRole::XFORM,                                            \
-        .as_xform = [](std::vector<ch::GeomPtr> h)                              \
-                -> std::vector<ch::GeomPtr> {                                    \
-            return ch::chain_xform_run<ch::name##_impl>(std::move(h));          \
-        }                                                                        \
+// Zero-scalar XFORM: also registers as_source so it can head a chain when
+// its input comes from a non-chain WASM function (e.g. st_collect_agg).
+#define CH_CHAIN_XFORM(name)                                                         \
+    ch::chain_registry()[#name] = ch::ChainFn{                                       \
+        .role = ch::ChainRole::XFORM,                                                \
+        .source_arity = 1,                                                           \
+        .n_scalar_cols = 0,                                                          \
+        .as_source = [](const ch::ColumnarBuf& cb, uint32_t n)                       \
+                -> std::vector<ch::GeomPtr> {                                         \
+            return ch::chain_source_run<ch::name##_impl, 1>(cb, n);                  \
+        },                                                                            \
+        .as_xform = [](std::vector<ch::GeomPtr> h, std::span<const ch::ColView>)    \
+                -> std::vector<ch::GeomPtr> {                                         \
+            return ch::chain_xform_run<ch::name##_impl>(std::move(h));               \
+        }                                                                             \
+    }
+
+// XFORM with one double scalar constant in row_buf (e.g. st_buffer, st_simplify).
+#define CH_CHAIN_XFORM_D(name)                                                       \
+    ch::chain_registry()[#name] = ch::ChainFn{                                       \
+        .role = ch::ChainRole::XFORM,                                                \
+        .n_scalar_cols = 1,                                                          \
+        .as_xform = [](std::vector<ch::GeomPtr> h, std::span<const ch::ColView> s)  \
+                -> std::vector<ch::GeomPtr> {                                         \
+            return ch::chain_xform_d_run<ch::name##_impl>(std::move(h), s[0]);       \
+        }                                                                             \
+    }
+
+// XFORM with two double scalar constants in row_buf (e.g. st_translate, st_scale).
+#define CH_CHAIN_XFORM_DD(name)                                                      \
+    ch::chain_registry()[#name] = ch::ChainFn{                                       \
+        .role = ch::ChainRole::XFORM,                                                \
+        .n_scalar_cols = 2,                                                          \
+        .as_xform = [](std::vector<ch::GeomPtr> h, std::span<const ch::ColView> s)  \
+                -> std::vector<ch::GeomPtr> {                                         \
+            return ch::chain_xform_dd_run<ch::name##_impl>(std::move(h), s[0], s[1]); \
+        }                                                                             \
     }
 
 #define CH_CHAIN_SINK(name)                                                     \
