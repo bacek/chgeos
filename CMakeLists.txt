@@ -37,7 +37,9 @@ else()
   option(BUILD_TESTING "..." ON)
 endif()
 option(BUILD_EXAMPLES "..." OFF)
+set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 add_subdirectory(third-party/msgpack23 msgpack23)
+set(BUILD_TESTING ON CACHE BOOL "" FORCE)  # restore for our own tests
 
 add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/mem.cpp)
 

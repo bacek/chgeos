@@ -5,6 +5,7 @@
 #include "rowbinary.hpp"
 #include "msgpack.hpp"
 #include "columnar.hpp"
+#include "chain.hpp"
 
 extern "C" {
 
@@ -308,6 +309,76 @@ ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
         }
     } catch (const std::exception& e) {
         if (out) clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        ch::panic(e.what());
+    }
+    __builtin_unreachable();
+}
+
+// ── Chain function opt-in registrations ──────────────────────────────────────
+// Only functions listed here participate in chain_execute.  All others continue
+// to use their normal CH_UDF_COL path unchanged.
+
+// Runs before any export is called (WASM global constructors via __wasm_call_ctors).
+[[maybe_unused]] static bool chain_init = [] {
+    // SOURCE: reads WKB geometry columns from CH, produces GeomPtr vector.
+    CH_CHAIN_SOURCE(st_makeline);
+    CH_CHAIN_SOURCE(st_union);
+    CH_CHAIN_SOURCE(st_intersection);
+    CH_CHAIN_SOURCE(st_difference);
+
+    // XFORM: GeomPtr → GeomPtr (unary transforms).
+    CH_CHAIN_XFORM(st_convexhull);
+    CH_CHAIN_XFORM(st_boundary);
+    CH_CHAIN_XFORM(st_envelope);
+    CH_CHAIN_XFORM(st_centroid);
+    CH_CHAIN_XFORM(st_reverse);
+    CH_CHAIN_XFORM(st_normalize);
+    CH_CHAIN_XFORM(st_unaryunion);
+    CH_CHAIN_XFORM(st_makevalid);
+    CH_CHAIN_XFORM(st_interiorpoint);
+
+    // SINK: GeomPtr → scalar or bytes.
+    CH_CHAIN_SINK(st_length);
+    CH_CHAIN_SINK(st_area);
+    CH_CHAIN_SINK(st_perimeter);
+    CH_CHAIN_SINK(st_isvalid);
+    CH_CHAIN_SINK(st_isempty);
+    CH_CHAIN_SINK(st_issimple);
+    CH_CHAIN_SINK(st_isring);
+    CH_CHAIN_SINK(st_astext);
+    CH_CHAIN_SINK(st_asewkt);
+    CH_CHAIN_SINK(st_geometrytype);
+
+    return true;
+}();
+
+// ── CH interop chain exports ──────────────────────────────────────────────────
+// clickhouse_can_chain_execute: CH checks this on module load.
+// If this export is absent, CH disables chaining for the module entirely.
+//
+// names_buf: raw_buffer containing n null-terminated function names concatenated.
+// Returns 1 if the chain is supported, 0 if not.
+__attribute__((export_name("clickhouse_can_chain_execute")))
+int32_t clickhouse_can_chain_execute(ch::raw_buffer* names_buf, uint32_t n) {
+    const uint8_t* p = names_buf->data();
+    std::vector<std::string> names;
+    names.reserve(n);
+    for (uint32_t i = 0; i < n; ++i) {
+        const char* s = reinterpret_cast<const char*>(p);
+        size_t len = std::strlen(s);
+        names.emplace_back(s, len);
+        p += len + 1;
+    }
+    return ch::validate_chain(names) ? 1 : 0;
+}
+
+// clickhouse_chain_execute: execute a validated chain in a single WASM call.
+// buf layout: [n_funcs: u32][cstr names...][pad to 8B][COLUMNAR_V1 source data]
+__attribute__((export_name("clickhouse_chain_execute")))
+ch::raw_buffer* clickhouse_chain_execute(ch::raw_buffer* buf, uint32_t n) {
+    try {
+        return ch::chain_execute_impl(buf, n);
+    } catch (const std::exception& e) {
         ch::panic(e.what());
     }
     __builtin_unreachable();

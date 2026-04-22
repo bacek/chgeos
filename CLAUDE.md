@@ -18,6 +18,8 @@ ninja -C build_wasm              # produces build_wasm/bin/chgeos.wasm
 ClickHouse binary: `../ClickHouse/build/programs/clickhouse`
 (sibling directory, built from source)
 
+Inspect WASM exports: `wasm-tools dump build_wasm/bin/chgeos.wasm | grep <name>`
+
 LSP shows many false-positive errors for GEOS/CH headers — ignore them. The real compiler is always the source of truth.
 
 ## Running ClickHouse server
