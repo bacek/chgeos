@@ -27,15 +27,25 @@ LSP shows many false-positive errors for GEOS/CH headers — ignore them. The re
 Already running as a background process:
 ```
 ../ClickHouse/build/programs/clickhouse server \
-  --config clickhouse/config-test.xml \
-  --tcp_port=19000 --http_port=18123 \
-  --path=tmp/data \
-  --user_files_path=tmp/data/user_files
+  --config-file=clickhouse/config-test.xml \
+  2>/tmp/ch-server.log &
 ```
+
+After starting, wait for it to finish loading (WASM module takes ~40s):
+```bash
+for i in $(seq 1 60); do
+  ../ClickHouse/build/programs/clickhouse client --port 19000 --query "SELECT 1" 2>/dev/null && echo "ready" && break
+  sleep 1
+done
+```
+
+Logs: `tail -f /tmp/ch-server.log`
 
 Connect: `../ClickHouse/build/programs/clickhouse client --port 19000`
 
 ## Reloading chgeos.wasm after a build
+
+Only needed when the **WASM binary changes** (`ninja -C build_wasm`). For pure ClickHouse C++ changes, just restart the CH server — no WASM reload required.
 
 Use `scripts/reload.sh` (does all steps below automatically).
 
@@ -65,16 +75,20 @@ Note: `system.webassembly_functions` does not exist. Use `system.functions WHERE
 SF1 data: `/Users/bacek/src/spatial-bench/sf1/` (6M trip rows)
 
 ```bash
-# MsgPack path
 BENCH_RUNS=5 ./scripts/bench_sf1.sh ../ClickHouse/build/programs/clickhouse \
-  /Users/bacek/src/spatial-bench/sf1 Q1
-
-# COLUMNAR_V1 path
-BENCH_RUNS=5 ./scripts/bench_sf1_col.sh ../ClickHouse/build/programs/clickhouse \
   /Users/bacek/src/spatial-bench/sf1 Q1
 ```
 
 Optional third argument filters to a single query (Q1, Q3, etc.).
+
+For manual ad-hoc queries, run the CH client from the data directory so that
+`file('trip.parquet')` resolves correctly:
+
+```bash
+CH=~/src/ClickHouse/build/programs/clickhouse
+cd /Users/bacek/src/spatial-bench/sf1   # or sf10
+$CH client --port 19000 --query "SELECT count() FROM file('trip.parquet', Parquet)"
+```
 
 Reference numbers after PreparedGeometry optimization (April 2026, 6M rows):
 | Variant | Q1 avg | Q3 avg |
