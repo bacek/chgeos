@@ -161,3 +161,26 @@ A new index type `spatial_bbox` can be declared on a geometry column (stored as 
 MergeTree table. At index build time, the granule's bounding box is accumulated over all
 rows. At query time, granules whose recorded bbox doesn't intersect the spatial filter's
 geometry are skipped, reducing the number of rows read by the storage engine.
+
+---
+
+## 5. WASM Function Chain Fusion
+
+A new query plan pass (`WasmChainFusionPass`) detects consecutive WASM scalar UDF calls
+where the output of one function feeds directly into the input of the next, and fuses them
+into a single host↔WASM boundary crossing.
+
+**Motivation.** Each WASM call boundary requires serializing the output of one function
+into a ClickHouse column (WKB bytes for geometry), then deserializing it as input to the
+next. For geometry-heavy pipelines (e.g. `st_length(st_makeline(a, b))`) this doubles the
+WKB encoding work and allocates an intermediate column that is immediately consumed.
+
+**Mechanism.** Functions declare that they support chaining by implementing
+`can_chain_execute(names, n)` in WASM — returning 1 means the WASM module can execute the
+named sequence in a single invocation without exporting intermediate results. The pass
+detects linear chains in the expression DAG where all intermediate results are single-use
+WASM outputs, replaces the chain with a single `WasmChain` function node that carries the
+fused export name, and registers a corresponding WASM binding via the chain ABI.
+
+**Results.** Q7 (`st_length(st_makeline(...))` over 6M rows): 2.5 s → fused from 4.5 s
+(−44 %). Q5 (`st_area(st_convexhull(...))` per group): 1.54 s → fused from 1.84 s (−16 %).
