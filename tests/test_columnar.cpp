@@ -1,6 +1,10 @@
 #include <gtest/gtest.h>
 #include <cstring>
+#include <optional>
 #include <vector>
+
+#include <geos/geom/LineString.h>
+#include <geos/geom/Point.h>
 
 #include "helpers.hpp"
 #include "columnar.hpp"
@@ -507,4 +511,234 @@ TEST(ColComplex, OutputVectorOfPairs) {
     EXPECT_EQ(row2[2].first, 2u);   EXPECT_DOUBLE_EQ(row2[2].second, 3.0);
 
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+}
+
+// ── COL_VARIANT geometry decode tests ────────────────────────────────────────
+//
+// Geo discriminators (CH DataTypeCustomGeo.cpp order): 0=Point, 1=LineString,
+//   2=Polygon, 3=MultiPolygon, 4=Ring, 5=MultiLineString
+//
+// Helpers build a single-column COLUMNAR_V1 buffer with one COL_VARIANT column.
+
+// Build a COL_VARIANT buffer containing only Point sub-variants.
+// Each entry is {x, y} or nullopt for a NULL row.
+static raw_buffer* make_variant_point_buf(
+    const std::vector<std::optional<std::pair<double, double>>>& pts)
+{
+    uint32_t N = static_cast<uint32_t>(pts.size());
+    uint32_t M = 0;  // non-null point count
+    for (auto& p : pts) if (p) ++M;
+
+    std::vector<uint8_t> discs(N);
+    std::vector<uint32_t> row_offs(N, 0u);
+    std::vector<double> xs, ys;
+    uint32_t sub_idx = 0;
+    for (uint32_t i = 0; i < N; ++i) {
+        if (pts[i]) {
+            discs[i] = 0;  // Point discriminator
+            row_offs[i] = sub_idx++;
+            xs.push_back(pts[i]->first);
+            ys.push_back(pts[i]->second);
+        } else {
+            discs[i] = 0xFFu;  // NULL
+        }
+    }
+
+    // Compute absolute offsets in the buffer.
+    uint32_t pos = HEADER_BYTES + COL_DESC_BYTES;
+
+    uint32_t disc_off = pos;
+    pos += N;
+    pos = (pos + 3u) & ~3u;  // align to 4
+
+    uint32_t offs_off = pos;
+    pos += N * 4u;
+
+    uint32_t data_off = pos;  // variant header
+    // Header: uint32 K + K×{disc(1)+pad(3)+ColDescriptor(20)}
+    uint32_t k = (M > 0u) ? 1u : 0u;
+    uint32_t hdr_bytes = 4u + k * (4u + COL_DESC_BYTES);
+    uint32_t sub_data_off = data_off + hdr_bytes;
+    uint32_t sub_data_sz  = M * 16u;  // x[M] + y[M]
+    uint32_t total        = sub_data_off + sub_data_sz;
+
+    auto* buf = clickhouse_create_buffer(total);
+    buf->resize(total);
+    uint8_t* p = buf->data();
+    std::memset(p, 0, total);
+
+    // BufHeader
+    std::memcpy(p, &N, 4);
+    uint32_t one = 1;
+    std::memcpy(p + 4, &one, 4);
+
+    // ColDescriptor
+    ColDescriptor d{};
+    d.type           = static_cast<uint32_t>(COL_VARIANT);
+    d.null_offset    = disc_off;
+    d.offsets_offset = offs_off;
+    d.data_offset    = data_off;
+    d.data_size      = hdr_bytes + sub_data_sz;
+    std::memcpy(p + HEADER_BYTES, &d, COL_DESC_BYTES);
+
+    // Discriminators and row offsets
+    std::memcpy(p + disc_off, discs.data(), N);
+    std::memcpy(p + offs_off, row_offs.data(), N * 4u);
+
+    if (M > 0u) {
+        // Variant header: K=1
+        std::memcpy(p + data_off, &k, 4u);
+        // Record: disc=0, pad, inner_desc
+        p[data_off + 4u] = 0u;  // global discriminator = Point
+        ColDescriptor inner{};
+        inner.type           = static_cast<uint32_t>(COL_COMPLEX);
+        inner.null_offset    = M;  // sub_rows
+        inner.offsets_offset = 0u;  // Tuple has no outer offsets
+        inner.data_offset    = sub_data_off;
+        inner.data_size      = sub_data_sz;
+        std::memcpy(p + data_off + 4u + 4u, &inner, COL_DESC_BYTES);
+        // Sub-col data: x[M] then y[M]
+        std::memcpy(p + sub_data_off, xs.data(), M * 8u);
+        std::memcpy(p + sub_data_off + M * 8u, ys.data(), M * 8u);
+    }
+    return buf;
+}
+
+// Build a COL_VARIANT buffer containing only LineString sub-variants (disc=1).
+// Each entry is a list of {x,y} vertices, or nullopt for NULL.
+static raw_buffer* make_variant_linestring_buf(
+    const std::vector<std::optional<std::vector<std::pair<double, double>>>>& lines)
+{
+    uint32_t N = static_cast<uint32_t>(lines.size());
+
+    // Collect non-null entries and build outer_offsets[M+1] and flattened x/y.
+    std::vector<uint32_t> outer_offs;
+    std::vector<double> xs, ys;
+    uint32_t M = 0;
+    outer_offs.push_back(0u);
+    for (auto& ln : lines)
+        if (ln) {
+            ++M;
+            for (auto& v : *ln) { xs.push_back(v.first); ys.push_back(v.second); }
+            outer_offs.push_back(static_cast<uint32_t>(xs.size()));
+        }
+
+    std::vector<uint8_t> discs(N);
+    std::vector<uint32_t> row_offs(N, 0u);
+    uint32_t sub_idx = 0;
+    for (uint32_t i = 0; i < N; ++i) {
+        if (lines[i]) { discs[i] = 1u; row_offs[i] = sub_idx++; }
+        else            discs[i] = 0xFFu;
+    }
+
+    const uint32_t V = static_cast<uint32_t>(xs.size());
+
+    uint32_t pos = HEADER_BYTES + COL_DESC_BYTES;
+    uint32_t disc_off = pos;  pos += N;
+    pos = (pos + 3u) & ~3u;
+    uint32_t offs_off = pos;  pos += N * 4u;
+    pos = (pos + 3u) & ~3u;
+    uint32_t data_off = pos;  // variant header
+    uint32_t k = (M > 0u) ? 1u : 0u;
+    uint32_t hdr_bytes     = 4u + k * (4u + COL_DESC_BYTES);
+    pos = data_off + hdr_bytes;
+    // Inner sub-col: Array(Tuple) → outer_offs[M+1] at offsets_off, x/y at data_abs
+    uint32_t inner_offs_off = pos;  pos += (M + 1u) * 4u;
+    pos = (pos + 3u) & ~3u;
+    uint32_t inner_data_off = pos;
+    uint32_t inner_data_sz  = V * 16u;  // x[V] + y[V]
+    pos += inner_data_sz;
+
+    auto* buf = clickhouse_create_buffer(pos);
+    buf->resize(pos);
+    uint8_t* p = buf->data();
+    std::memset(p, 0, pos);
+
+    std::memcpy(p, &N, 4);
+    uint32_t one = 1;
+    std::memcpy(p + 4, &one, 4);
+
+    ColDescriptor d{};
+    d.type           = static_cast<uint32_t>(COL_VARIANT);
+    d.null_offset    = disc_off;
+    d.offsets_offset = offs_off;
+    d.data_offset    = data_off;
+    d.data_size      = pos - data_off;
+    std::memcpy(p + HEADER_BYTES, &d, COL_DESC_BYTES);
+
+    std::memcpy(p + disc_off, discs.data(), N);
+    std::memcpy(p + offs_off, row_offs.data(), N * 4u);
+
+    if (M > 0u) {
+        std::memcpy(p + data_off, &k, 4u);
+        p[data_off + 4u] = 1u;  // global discriminator = LineString
+        ColDescriptor inner{};
+        inner.type           = static_cast<uint32_t>(COL_COMPLEX);
+        inner.null_offset    = M;
+        inner.offsets_offset = inner_offs_off;
+        inner.data_offset    = inner_data_off;
+        inner.data_size      = inner_data_sz;
+        std::memcpy(p + data_off + 4u + 4u, &inner, COL_DESC_BYTES);
+        std::memcpy(p + inner_offs_off, outer_offs.data(), (M + 1u) * 4u);
+        std::memcpy(p + inner_data_off, xs.data(), V * 8u);
+        std::memcpy(p + inner_data_off + V * 8u, ys.data(), V * 8u);
+    }
+    return buf;
+}
+
+TEST(ColumnarVariant, PointDecodeNullableRows) {
+    auto* buf = make_variant_point_buf({
+        std::make_optional(std::pair{1.0, 2.0}),
+        std::nullopt,
+        std::make_optional(std::pair{3.0, 4.0}),
+    });
+    auto cb  = parse_columnar(buf);
+    auto col = cb.col(0);
+    ASSERT_EQ(col.base_type, static_cast<ColType>(COL_VARIANT));
+
+    auto g0 = col_get_arg<std::unique_ptr<geos::geom::Geometry>>(col, 0);
+    ASSERT_NE(g0, nullptr);
+    ASSERT_EQ(g0->getGeometryTypeId(), geos::geom::GEOS_POINT);
+    const auto* pt0 = static_cast<const geos::geom::Point*>(g0.get());
+    EXPECT_DOUBLE_EQ(pt0->getX(), 1.0);
+    EXPECT_DOUBLE_EQ(pt0->getY(), 2.0);
+
+    auto g1 = col_get_arg<std::unique_ptr<geos::geom::Geometry>>(col, 1);
+    EXPECT_EQ(g1, nullptr);  // NULL row
+
+    auto g2 = col_get_arg<std::unique_ptr<geos::geom::Geometry>>(col, 2);
+    ASSERT_NE(g2, nullptr);
+    ASSERT_EQ(g2->getGeometryTypeId(), geos::geom::GEOS_POINT);
+    const auto* pt2 = static_cast<const geos::geom::Point*>(g2.get());
+    EXPECT_DOUBLE_EQ(pt2->getX(), 3.0);
+    EXPECT_DOUBLE_EQ(pt2->getY(), 4.0);
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+}
+
+TEST(ColumnarVariant, LineStringDecodeVertices) {
+    // Two rows: LineString[(0,0)→(1,1)], LineString[(2,2)→(3,3)→(4,4)]
+    auto* buf = make_variant_linestring_buf({
+        std::make_optional(std::vector<std::pair<double,double>>{{0.0,0.0},{1.0,1.0}}),
+        std::make_optional(std::vector<std::pair<double,double>>{{2.0,2.0},{3.0,3.0},{4.0,4.0}}),
+    });
+    auto cb  = parse_columnar(buf);
+    auto col = cb.col(0);
+    ASSERT_EQ(col.base_type, static_cast<ColType>(COL_VARIANT));
+
+    auto g0 = col_get_arg<std::unique_ptr<geos::geom::Geometry>>(col, 0);
+    ASSERT_NE(g0, nullptr);
+    ASSERT_EQ(g0->getGeometryTypeId(), geos::geom::GEOS_LINESTRING);
+    ASSERT_EQ(g0->getNumPoints(), 2u);
+    EXPECT_DOUBLE_EQ(g0->getCoordinates()->getAt(0).x, 0.0);
+    EXPECT_DOUBLE_EQ(g0->getCoordinates()->getAt(1).x, 1.0);
+
+    auto g1 = col_get_arg<std::unique_ptr<geos::geom::Geometry>>(col, 1);
+    ASSERT_NE(g1, nullptr);
+    ASSERT_EQ(g1->getGeometryTypeId(), geos::geom::GEOS_LINESTRING);
+    ASSERT_EQ(g1->getNumPoints(), 3u);
+    EXPECT_DOUBLE_EQ(g1->getCoordinates()->getAt(0).x, 2.0);
+    EXPECT_DOUBLE_EQ(g1->getCoordinates()->getAt(2).x, 4.0);
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 }

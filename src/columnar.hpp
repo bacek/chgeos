@@ -43,6 +43,14 @@
 
 #include <geos/geom/prep/PreparedGeometryFactory.h>
 #include <geos/algorithm/locate/IndexedPointInAreaLocator.h>
+#include <geos/geom/Coordinate.h>
+#include <geos/geom/CoordinateSequence.h>
+#include <geos/geom/GeometryFactory.h>
+#include <geos/geom/LinearRing.h>
+#include <geos/geom/LineString.h>
+#include <geos/geom/MultiLineString.h>
+#include <geos/geom/MultiPolygon.h>
+#include <geos/geom/Polygon.h>
 
 #include "clickhouse.hpp"
 #include "col_prep_op.hpp"
@@ -72,6 +80,7 @@ enum ColType : uint32_t {
     //   vector<T> (Array):  uint32[N+1] outer_offsets → M total, then recursive(M, T)
     //   pair/tuple (Tuple): recursive(N, T0) ++ recursive(N, T1) ++ ...  (columnar)
     COL_COMPLEX     = 8,
+    COL_VARIANT     = 9,  // Variant(...): disc[N] + row_offs[N] + header{K, records} + sub-data
 
     COL_IS_CONST    = 0x80u, // flag: 1 stored row, broadcast to num_rows
     // COL_IS_REPEAT: column is cyclic with period R stored in offsets_offset.
@@ -121,6 +130,7 @@ struct ColView {
     const uint8_t*  null_map;     // nullable: null_map[i]!=0 → NULL; nullptr = non-nullable
     const uint32_t* offsets;      // start-based; nullptr for fixed-width
     const uint8_t*  data;
+    const uint8_t*  base;         // buffer base — needed for COL_VARIANT absolute offset navigation
 
     // Map logical row to stored row index.
     uint32_t effective_row(uint32_t row) const noexcept {
@@ -198,6 +208,7 @@ struct ColumnarBuf {
             v.offsets   = d.offsets_offset ? reinterpret_cast<const uint32_t*>(base + d.offsets_offset) : nullptr;
             v.data      = base + d.data_offset;
         }
+        v.base = base;
         return v;
     }
 };
@@ -466,6 +477,146 @@ std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
     return result;
 }
 
+// ── COL_VARIANT geometry decoder ─────────────────────────────────────────────
+//
+// Geo-discriminator constants (CH DataTypeCustomGeo.cpp sort order):
+//   0=Point, 1=LineString, 2=Polygon, 3=MultiPolygon, 4=Ring, 5=MultiLineString
+//
+// For each sub-column:
+//   inner.null_offset = M (sub_row_count, stored by CH serializer)
+//   inner.offsets_offset = absolute position of outer uint32 offsets (0 for Tuple)
+//   inner.data_offset    = absolute position of element data
+//
+// Sub-column layouts (COL_COMPLEX recursive):
+//   Point            : Tuple → x[M] || y[M]
+//   LineString, Ring : Array(Tuple) → outer_offs[M+1] + x[V] || y[V]
+//   Polygon          : Array(Array(Tuple)) → ring_offs[M+1] + vert_offs[R+1] + x[V] || y[V]
+//   MultiPolygon     : Array(Array(Array(Tuple))) → poly_offs[M+1] + ring_offs[P+1] + vert_offs[R+1] + x[V] || y[V]
+//   MultiLineString  : Array(Array(Tuple)) — same wire layout as Polygon
+
+// Build a CoordinateSequence from x[V]||y[V] arrays, vertex range [vs, ve).
+inline std::unique_ptr<geos::geom::CoordinateSequence>
+make_cs(const double* x, const double* y, uint32_t vs, uint32_t ve) {
+    auto cs = std::make_unique<geos::geom::CoordinateSequence>();
+    cs->reserve(ve - vs);
+    for (uint32_t j = vs; j < ve; ++j)
+        cs->add(geos::geom::CoordinateXY{x[j], y[j]});
+    return cs;
+}
+
+inline std::unique_ptr<geos::geom::Geometry>
+col_get_variant_geom(const ColView& col, uint32_t row) {
+    using namespace geos::geom;
+    const GeometryFactory* factory = GeometryFactory::getDefaultInstance();
+
+    uint32_t eff = col.effective_row(row);
+
+    // null_map holds the discriminators array for COL_VARIANT (0xFF = NULL).
+    if (!col.null_map) return nullptr;
+    const uint8_t disc = col.null_map[eff];
+    if (disc == 0xFFu) return nullptr;
+
+    // Row offset within the sub-column for this row.
+    const uint32_t off = col.offsets[eff];
+
+    // Parse variant header at col.data: uint32 K + K×{disc(1)+pad(3)+ColDescriptor(20)}.
+    const uint8_t* hdr = col.data;
+    uint32_t k;
+    std::memcpy(&k, hdr, 4);
+
+    // Find the record matching this discriminator.
+    ColDescriptor inner{};
+    bool found = false;
+    const uint8_t* rp = hdr + 4u;
+    for (uint32_t ri = 0; ri < k; ++ri, rp += 4u + COL_DESC_BYTES) {
+        if (*rp == disc) {
+            std::memcpy(&inner, rp + 4u, COL_DESC_BYTES);
+            found = true;
+            break;
+        }
+    }
+    if (!found) return nullptr;
+
+    const uint32_t M = inner.null_offset;  // sub_row_count stored by CH serializer
+
+    switch (disc) {
+        case 0: {  // Point: Tuple(Float64, Float64) → x[M] || y[M]
+            const auto* x = reinterpret_cast<const double*>(col.base + inner.data_offset);
+            const auto* y = x + M;
+            return factory->createPoint(Coordinate{x[off], y[off]});
+        }
+        case 1:    // LineString: Array(Tuple(Float64, Float64))
+        case 4: {  // Ring: same wire format, different geometry type
+            const auto* lo = reinterpret_cast<const uint32_t*>(col.base + inner.offsets_offset);
+            const uint32_t V = lo[M];
+            const auto* x = reinterpret_cast<const double*>(col.base + inner.data_offset);
+            const auto* y = x + V;
+            auto cs = make_cs(x, y, lo[off], lo[off + 1]);
+            if (disc == 4)
+                return factory->createLinearRing(std::move(cs));
+            return factory->createLineString(std::move(cs));
+        }
+        case 2: {  // Polygon: Array(Array(Tuple)) — first ring=exterior, rest=holes
+            const auto* ring_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.offsets_offset);
+            const uint32_t R     = ring_lo[M];
+            const auto* vert_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.data_offset);
+            const uint32_t V     = vert_lo[R];
+            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (R + 1u) * 4u);
+            const auto* y        = x + V;
+            const uint32_t rs    = ring_lo[off];
+            const uint32_t re    = ring_lo[off + 1];
+            auto exterior = factory->createLinearRing(make_cs(x, y, vert_lo[rs], vert_lo[rs + 1]));
+            std::vector<std::unique_ptr<LinearRing>> holes;
+            holes.reserve(re - rs - 1u);
+            for (uint32_t r = rs + 1u; r < re; ++r)
+                holes.push_back(factory->createLinearRing(make_cs(x, y, vert_lo[r], vert_lo[r + 1])));
+            return factory->createPolygon(std::move(exterior), std::move(holes));
+        }
+        case 3: {  // MultiPolygon: Array(Array(Array(Tuple)))
+            const auto* poly_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.offsets_offset);
+            const uint32_t P     = poly_lo[M];
+            const auto* ring_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.data_offset);
+            const uint32_t R     = ring_lo[P];
+            const auto* vert_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.data_offset + (P + 1u) * 4u);
+            const uint32_t V     = vert_lo[R];
+            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (P + 1u) * 4u + (R + 1u) * 4u);
+            const auto* y        = x + V;
+            const uint32_t ps    = poly_lo[off];
+            const uint32_t pe    = poly_lo[off + 1];
+            std::vector<std::unique_ptr<Polygon>> polys;
+            polys.reserve(pe - ps);
+            for (uint32_t p = ps; p < pe; ++p) {
+                const uint32_t rs = ring_lo[p];
+                const uint32_t re = ring_lo[p + 1];
+                auto ext = factory->createLinearRing(make_cs(x, y, vert_lo[rs], vert_lo[rs + 1]));
+                std::vector<std::unique_ptr<LinearRing>> holes;
+                holes.reserve(re - rs - 1u);
+                for (uint32_t r = rs + 1u; r < re; ++r)
+                    holes.push_back(factory->createLinearRing(make_cs(x, y, vert_lo[r], vert_lo[r + 1])));
+                polys.push_back(factory->createPolygon(std::move(ext), std::move(holes)));
+            }
+            return factory->createMultiPolygon(std::move(polys));
+        }
+        case 5: {  // MultiLineString: Array(Array(Tuple)) — same wire layout as Polygon
+            const auto* line_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.offsets_offset);
+            const uint32_t R     = line_lo[M];
+            const auto* vert_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.data_offset);
+            const uint32_t V     = vert_lo[R];
+            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (R + 1u) * 4u);
+            const auto* y        = x + V;
+            const uint32_t ls_s  = line_lo[off];
+            const uint32_t ls_e  = line_lo[off + 1];
+            std::vector<std::unique_ptr<LineString>> lines;
+            lines.reserve(ls_e - ls_s);
+            for (uint32_t r = ls_s; r < ls_e; ++r)
+                lines.push_back(factory->createLineString(make_cs(x, y, vert_lo[r], vert_lo[r + 1])));
+            return factory->createMultiLineString(std::move(lines));
+        }
+        default:
+            return nullptr;
+    }
+}
+
 // ── Input column accessor by type ─────────────────────────────────────────────
 
 // Read a fixed-width column value as type T, widening from narrower stored types.
@@ -510,6 +661,8 @@ T col_get_arg(const ColView& col, uint32_t row) {
         auto s = col.get_bytes(row);
         return {reinterpret_cast<const char*>(s.data()), s.size()};
     } else if constexpr (std::is_same_v<T, std::unique_ptr<geos::geom::Geometry>>) {
+        if (col.base_type == COL_VARIANT)
+            return col_get_variant_geom(col, row);
         return read_wkb(col.get_bytes(row));
     }
 }
