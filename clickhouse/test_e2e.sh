@@ -22,7 +22,7 @@ if [[ -z "${CLICKHOUSE_BIN}" ]]; then
 fi
 [[ -x "${CLICKHOUSE_BIN}" ]] || { echo "ERROR: clickhouse binary not found"; exit 1; }
 
-WASM_BIN="${2:-${REPO_ROOT}/build_wasm/chgeos.wasm}"
+WASM_BIN="${2:-${REPO_ROOT}/build_wasm/bin/chgeos.wasm}"
 [[ -f "${WASM_BIN}" ]] || { echo "ERROR: WASM binary not found: ${WASM_BIN}"; exit 1; }
 
 CONFIG="${SCRIPT_DIR}/config-e2e.xml"
@@ -209,6 +209,76 @@ t "st_unaryunion"      "SELECT round(st_area(st_unaryunion(st_geomfromtext('GEOM
 # Clustering (regression for O(n²) → STRtree rewrite)
 t "st_cluster_disjoint"    "SELECT st_numgeometries(st_clusterintersecting(st_geomfromtext('GEOMETRYCOLLECTION (POINT (0 0), POINT (10 10))')))"  "2"
 t "st_cluster_intersects"  "SELECT st_numgeometries(st_clusterintersecting(st_geomfromtext('GEOMETRYCOLLECTION (POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0)), POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1)))')))"  "1"
+
+# ── Native CH geometry type inputs (COL_VARIANT — Phase 3) ───────────────────
+# Each test uses a CH native geo type constructor (::Point, ::LineString, etc.)
+# and passes it directly to a COLUMNAR_V1 function, exercising col_get_variant_geom
+# for each discriminator.  CH implicitly coerces named geo types to Geometry.
+
+# Point (discriminator 0)
+t "native_point_x" \
+    "SELECT st_x((1.0, 2.0)::Point)" \
+    "1"
+t "native_point_y" \
+    "SELECT st_y((3.0, 5.0)::Point)" \
+    "5"
+
+# LineString (discriminator 1) — 3-4-5 right triangle, then 3-point line
+t "native_linestring_length" \
+    "SELECT st_length([(0.0, 0.0), (3.0, 4.0)]::LineString)" \
+    "5"
+t "native_linestring_npoints" \
+    "SELECT st_npoints([(0.0, 0.0), (1.0, 0.0), (2.0, 0.0)]::LineString)" \
+    "3"
+
+# Polygon (discriminator 2) — unit square
+t "native_polygon_area" \
+    "SELECT st_area([[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]]::Polygon)" \
+    "1"
+t "native_polygon_perimeter" \
+    "SELECT st_perimeter([[(0.0, 0.0), (2.0, 0.0), (2.0, 2.0), (0.0, 2.0), (0.0, 0.0)]]::Polygon)" \
+    "8"
+
+# MultiPolygon (discriminator 3) — two unit squares
+t "native_multipolygon_numgeom" \
+    "SELECT st_numgeometries([[[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]], [[(5.0, 5.0), (6.0, 5.0), (6.0, 6.0), (5.0, 6.0), (5.0, 5.0)]]]::MultiPolygon)" \
+    "2"
+
+# Ring (discriminator 4)
+t "native_ring_npoints" \
+    "SELECT st_npoints([(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]::Ring)" \
+    "5"
+
+# MultiLineString (discriminator 5) — two segments
+t "native_multilinestring_numgeom" \
+    "SELECT st_numgeometries([[(0.0, 0.0), (1.0, 1.0)], [(2.0, 2.0), (3.0, 3.0)]]::MultiLineString)" \
+    "2"
+
+# Mixed-type predicate overloads: (String, Geometry) and (Geometry, String)
+t "native_pred_wkb_geo" \
+    "SELECT st_contains(st_geomfromtext('POLYGON ((0 0, 3 0, 3 3, 0 3, 0 0))'), (1.0, 1.0)::Point)" \
+    "1"
+t "native_pred_geo_wkb" \
+    "SELECT st_contains([[(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0), (0.0, 0.0)]]::Polygon, st_geomfromtext('POINT (1 1)'))" \
+    "1"
+
+# Both-Geometry predicate
+t "native_pred_geo_geo" \
+    "SELECT st_contains([[(0.0, 0.0), (3.0, 0.0), (3.0, 3.0), (0.0, 3.0), (0.0, 0.0)]]::Polygon, (1.0, 1.0)::Point)" \
+    "1"
+
+# Multi-row batch: exercises non-const COL_VARIANT columns
+t "native_multirow_area_sum" \
+    "SELECT sum(st_area(geo)) FROM (SELECT [[(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0), (0.0, 0.0)]]::Polygon AS geo UNION ALL SELECT [[(0.0, 0.0), (2.0, 0.0), (2.0, 3.0), (0.0, 3.0), (0.0, 0.0)]]::Polygon)" \
+    "7"
+
+# Cross-check: native type produces same result as WKB path
+t "native_cross_check_area" \
+    "SELECT st_area([[(0.0, 0.0), (2.0, 0.0), (2.0, 3.0), (0.0, 3.0), (0.0, 0.0)]]::Polygon) = st_area(st_geomfromtext('POLYGON ((0 0, 2 0, 2 3, 0 3, 0 0))'))" \
+    "1"
+t "native_cross_check_length" \
+    "SELECT st_length([(0.0, 0.0), (3.0, 4.0)]::LineString) = st_length(st_geomfromtext('LINESTRING (0 0, 3 4)'))" \
+    "1"
 
 # ── Run create.sql + all queries in one clickhouse-local call ─────────────────
 

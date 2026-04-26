@@ -335,7 +335,7 @@ TEST(ChainExecute, NullInput_ProducesNaN) {
 
     // col[0] has a null at row 0.
     auto* col_buf = make_columnar(2, {
-        null_bytes_col(false, {p00, p00}, {1, 0}),  // row 0 null, row 1 ok
+        null_bytes_col(false, {p00, p00}, {0xFFu, 0}),  // row 0 null, row 1 ok
         bytes_col(false, {p11, p11}),
     });
     auto* chain = make_chain_descriptor({"st_makeline", "st_length"});

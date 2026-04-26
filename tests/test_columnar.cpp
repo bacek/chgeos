@@ -85,7 +85,7 @@ static ColData bytes_col(bool is_const, const std::vector<ch::Vector>& wkbs) {
     return col;
 }
 
-// Nullable variable-length column (null_map[i] != 0 → NULL).
+// Nullable variable-length column (null_map[i] == 0xFF → NULL).
 static ColData null_bytes_col(bool is_const,
                               const std::vector<ch::Vector>& wkbs,
                               const std::vector<uint8_t>& nulls) {
@@ -209,7 +209,7 @@ TEST(ColumnarPrepGeom, ConstColNull_AllResultsZero) {
     const uint32_t n = 3;
 
     auto* buf = make_columnar(n, {
-        null_bytes_col(true, {dummy_wkb}, {1u}),   // const + null
+        null_bytes_col(true, {dummy_wkb}, {0xFFu}),   // const + null
         bytes_col(false, {pt, pt, pt}),
     });
     auto got = read_bool_col(
@@ -230,7 +230,7 @@ TEST(ColumnarPrepGeom, VariableColNullRow_YieldsZero) {
 
     auto* buf = make_columnar(n, {
         bytes_col(true, {poly}),
-        null_bytes_col(false, {pt_in, pt_dummy, pt_in}, {0u, 1u, 0u}),  // row 1 is NULL
+        null_bytes_col(false, {pt_in, pt_dummy, pt_in}, {0u, 0xFFu, 0u}),  // row 1 is NULL
     });
     auto got = read_bool_col(
         columnar_impl_wrapper(buf, n, st_contains_impl,
@@ -337,7 +337,7 @@ TEST(ColumnarPrepGeomDist, DWithinConstColNull_AllResultsZero) {
 
     // const A is null → all rows must be 0
     auto* buf = make_columnar(n, {
-        null_bytes_col(true, {dummy_wkb}, {1u}),
+        null_bytes_col(true, {dummy_wkb}, {0xFFu}),
         bytes_col(false, {pt, pt}),
         fixed64_col(true, {kDist}),
     });
@@ -515,8 +515,8 @@ TEST(ColComplex, OutputVectorOfPairs) {
 
 // ── COL_VARIANT geometry decode tests ────────────────────────────────────────
 //
-// Geo discriminators (CH DataTypeCustomGeo.cpp order): 0=Point, 1=LineString,
-//   2=Polygon, 3=MultiPolygon, 4=Ring, 5=MultiLineString
+// Geo discriminators (CH global alphabetical order): 0=LineString, 1=MultiLineString,
+//   2=MultiPolygon, 3=Point, 4=Polygon, 5=Ring
 //
 // Helpers build a single-column COLUMNAR_V1 buffer with one COL_VARIANT column.
 
@@ -535,7 +535,7 @@ static raw_buffer* make_variant_point_buf(
     uint32_t sub_idx = 0;
     for (uint32_t i = 0; i < N; ++i) {
         if (pts[i]) {
-            discs[i] = 0;  // Point discriminator
+            discs[i] = 3;  // Point global discriminator
             row_offs[i] = sub_idx++;
             xs.push_back(pts[i]->first);
             ys.push_back(pts[i]->second);
@@ -589,7 +589,7 @@ static raw_buffer* make_variant_point_buf(
         // Variant header: K=1
         std::memcpy(p + data_off, &k, 4u);
         // Record: disc=0, pad, inner_desc
-        p[data_off + 4u] = 0u;  // global discriminator = Point
+        p[data_off + 4u] = 3u;  // global discriminator = Point
         ColDescriptor inner{};
         inner.type           = static_cast<uint32_t>(COL_COMPLEX);
         inner.null_offset    = M;  // sub_rows
@@ -604,7 +604,7 @@ static raw_buffer* make_variant_point_buf(
     return buf;
 }
 
-// Build a COL_VARIANT buffer containing only LineString sub-variants (disc=1).
+// Build a COL_VARIANT buffer containing only LineString sub-variants (disc=0).
 // Each entry is a list of {x,y} vertices, or nullopt for NULL.
 static raw_buffer* make_variant_linestring_buf(
     const std::vector<std::optional<std::vector<std::pair<double, double>>>>& lines)
@@ -627,7 +627,7 @@ static raw_buffer* make_variant_linestring_buf(
     std::vector<uint32_t> row_offs(N, 0u);
     uint32_t sub_idx = 0;
     for (uint32_t i = 0; i < N; ++i) {
-        if (lines[i]) { discs[i] = 1u; row_offs[i] = sub_idx++; }
+        if (lines[i]) { discs[i] = 0u; row_offs[i] = sub_idx++; }
         else            discs[i] = 0xFFu;
     }
 
@@ -671,7 +671,7 @@ static raw_buffer* make_variant_linestring_buf(
 
     if (M > 0u) {
         std::memcpy(p + data_off, &k, 4u);
-        p[data_off + 4u] = 1u;  // global discriminator = LineString
+        p[data_off + 4u] = 0u;  // global discriminator = LineString
         ColDescriptor inner{};
         inner.type           = static_cast<uint32_t>(COL_COMPLEX);
         inner.null_offset    = M;

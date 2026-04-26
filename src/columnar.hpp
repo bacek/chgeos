@@ -141,7 +141,7 @@ struct ColView {
 
     bool is_null(uint32_t row) const noexcept {
         if (!null_map) return false;
-        return null_map[effective_row(row)] != 0;
+        return null_map[effective_row(row)] == 0xFFu;
     }
 
     // For COL_BYTES/COL_NULL_BYTES — excludes the trailing null terminator.
@@ -539,24 +539,26 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
 
     const uint32_t M = inner.null_offset;  // sub_row_count stored by CH serializer
 
+    // CH global discriminator order is alphabetical by type name:
+    // 0=LineString, 1=MultiLineString, 2=MultiPolygon, 3=Point, 4=Polygon, 5=Ring
     switch (disc) {
-        case 0: {  // Point: Tuple(Float64, Float64) → x[M] || y[M]
+        case 3: {  // Point: Tuple(Float64, Float64) → x[M] || y[M]
             const auto* x = reinterpret_cast<const double*>(col.base + inner.data_offset);
             const auto* y = x + M;
             return factory->createPoint(Coordinate{x[off], y[off]});
         }
-        case 1:    // LineString: Array(Tuple(Float64, Float64))
-        case 4: {  // Ring: same wire format, different geometry type
+        case 0:    // LineString: Array(Tuple(Float64, Float64))
+        case 5: {  // Ring: same wire format, different geometry type
             const auto* lo = reinterpret_cast<const uint32_t*>(col.base + inner.offsets_offset);
             const uint32_t V = lo[M];
             const auto* x = reinterpret_cast<const double*>(col.base + inner.data_offset);
             const auto* y = x + V;
             auto cs = make_cs(x, y, lo[off], lo[off + 1]);
-            if (disc == 4)
+            if (disc == 5)
                 return factory->createLinearRing(std::move(cs));
             return factory->createLineString(std::move(cs));
         }
-        case 2: {  // Polygon: Array(Array(Tuple)) — first ring=exterior, rest=holes
+        case 4: {  // Polygon: Array(Array(Tuple)) — first ring=exterior, rest=holes
             const auto* ring_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.offsets_offset);
             const uint32_t R     = ring_lo[M];
             const auto* vert_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.data_offset);
@@ -572,7 +574,7 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
                 holes.push_back(factory->createLinearRing(make_cs(x, y, vert_lo[r], vert_lo[r + 1])));
             return factory->createPolygon(std::move(exterior), std::move(holes));
         }
-        case 3: {  // MultiPolygon: Array(Array(Array(Tuple)))
+        case 2: {  // MultiPolygon: Array(Array(Array(Tuple)))
             const auto* poly_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.offsets_offset);
             const uint32_t P     = poly_lo[M];
             const auto* ring_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.data_offset);
@@ -597,7 +599,7 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
             }
             return factory->createMultiPolygon(std::move(polys));
         }
-        case 5: {  // MultiLineString: Array(Array(Tuple)) — same wire layout as Polygon
+        case 1: {  // MultiLineString: Array(Array(Tuple)) — same wire layout as Polygon
             const auto* line_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.offsets_offset);
             const uint32_t R     = line_lo[M];
             const auto* vert_lo  = reinterpret_cast<const uint32_t*>(col.base + inner.data_offset);
@@ -719,9 +721,15 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             col_write_fixed_header<uint8_t>(out, n, COL_FIXED8);
             uint8_t* res = out->data() + HEADER_BYTES + COL_DESC_BYTES;
 
+            // COL_VARIANT columns can't be read via get_bytes(); all fast paths that
+            // call get_bytes() or wkb_bbox() must be skipped when any arg is a Variant.
+            bool has_variant = false;
+            for (size_t j = 0; j < nargs; ++j)
+                if (cols[j].base_type == COL_VARIANT) { has_variant = true; break; }
+
             if constexpr (nargs >= 2) {
                 // A-const fast path: prepare col(0) once, vary col(1)
-                if (cols[0].is_effectively_const_bytes() && prep_a) {
+                if (!has_variant && cols[0].is_effectively_const_bytes() && prep_a) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_a = cols[0].get_bytes(0);
                     BBox  bbox_a = wkb_bbox(span_a);
@@ -765,7 +773,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                 }
 
                 // B-const fast path: prepare col(1) once, vary col(0)
-                if (cols[1].is_effectively_const_bytes() && prep_b) {
+                if (!has_variant && cols[1].is_effectively_const_bytes() && prep_b) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_b = cols[1].get_bytes(0);
                     BBox  bbox_b = wkb_bbox(span_b);
@@ -813,7 +821,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             // col(0)=geom_a, col(1)=geom_b, col(2)=distance.
             if constexpr (nargs >= 3) {
                 // A-const dist path
-                if (cols[0].is_effectively_const_bytes() && prep_a_dist) {
+                if (!has_variant && cols[0].is_effectively_const_bytes() && prep_a_dist) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_a = cols[0].get_bytes(0);
                     BBox  bbox_a = wkb_bbox(span_a);
@@ -831,7 +839,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     return out;
                 }
                 // B-const dist path
-                if (cols[1].is_effectively_const_bytes() && prep_b_dist) {
+                if (!has_variant && cols[1].is_effectively_const_bytes() && prep_b_dist) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_b = cols[1].get_bytes(0);
                     BBox  bbox_b = wkb_bbox(span_b);
@@ -854,8 +862,9 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             for (uint32_t i = 0; i < n; ++i) {
                 if (any_null(i)) { res[i] = 0u; continue; }
                 if constexpr (nargs >= 2) {
-                    if (bbox_op && !bbox_op(wkb_bbox(cols[0].get_bytes(i)),
-                                            wkb_bbox(cols[1].get_bytes(i)))) {
+                    if (bbox_op && !has_variant &&
+                        !bbox_op(wkb_bbox(cols[0].get_bytes(i)),
+                                 wkb_bbox(cols[1].get_bytes(i)))) {
                         res[i] = early_ret ? 1u : 0u; continue;
                     }
                 }
