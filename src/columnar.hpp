@@ -34,12 +34,14 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include <geos/geom/prep/PreparedGeometryFactory.h>
 #include <geos/algorithm/locate/IndexedPointInAreaLocator.h>
@@ -669,6 +671,61 @@ T col_get_arg(const ColView& col, uint32_t row) {
     }
 }
 
+// ── PreparedGeometry cache ─────────────────────────────────────────────────────
+// Caches parsed + prepared geometry across WASM calls, keyed by WKB content.
+// Eliminates redundant GEOS PreparedGeometry builds when the same large polygon
+// appears as a ColumnConst in many consecutive calls (e.g. repeated zone join).
+//
+// Uses a flat array with round-robin eviction to avoid unordered_map overhead
+// in 32-bit WASM (where unordered_map rehashing can overflow).
+
+struct CachedPrep {
+    size_t hash_key = 0;
+    size_t wkb_size = 0;
+    BBox   bbox     = {};
+    std::unique_ptr<geos::geom::Geometry>               geom;
+    std::unique_ptr<geos::geom::prep::PreparedGeometry> prepared;
+    std::unique_ptr<geos::algorithm::locate::IndexedPointInAreaLocator> ipial;
+};
+
+struct PrepGeomCache {
+    static constexpr size_t kSlots = 512;
+
+    CachedPrep slots[kSlots];
+    size_t     count     = 0;
+    size_t     evict_idx = 0;
+
+    CachedPrep* get(std::span<const uint8_t> span) {
+        if (span.empty()) return nullptr;
+        size_t h = std::hash<std::string_view>{}(
+            std::string_view(reinterpret_cast<const char*>(span.data()), span.size()));
+
+        for (size_t i = 0; i < count; ++i)
+            if (slots[i].hash_key == h && slots[i].wkb_size == span.size())
+                return &slots[i];
+
+        size_t idx = (count < kSlots) ? count++ : evict_idx;
+        evict_idx = (evict_idx + 1 < kSlots) ? evict_idx + 1 : 0;
+
+        auto& e = slots[idx];
+        // Reset in reverse dependency order: prepared/ipial reference geom
+        e.ipial.reset();
+        e.prepared.reset();
+        e.hash_key = h;
+        e.wkb_size = span.size();
+        e.bbox     = wkb_bbox(span);
+        e.geom     = read_wkb(span);
+        e.prepared = geos::geom::prep::PreparedGeometryFactory::prepare(e.geom.get());
+        auto gtype = e.geom->getGeometryTypeId();
+        if (gtype == geos::geom::GEOS_POLYGON || gtype == geos::geom::GEOS_MULTIPOLYGON)
+            e.ipial = std::make_unique<geos::algorithm::locate::IndexedPointInAreaLocator>(*e.geom);
+        return &e;
+    }
+};
+
+static PrepGeomCache g_prep_cache_a;
+static PrepGeomCache g_prep_cache_b;
+
 // ── Generic columnar wrapper ───────────────────────────────────────────────────
 // Mirrors rowbinary_impl_wrapper: takes a typed function pointer, deduces
 // argument and return types, dispatches column reads and output format.
@@ -690,14 +747,12 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                   ColPrepPointOp prep_a_point = nullptr,  // A-const polygon, B varies as points
                                   ColPrepPointOp prep_b_point = nullptr)  // B-const polygon, A varies as points
 {
-    using PGF = geos::geom::prep::PreparedGeometryFactory;
-
-    auto cb = parse_columnar(ptr);
-    uint32_t n = cb.num_rows;
+    auto cbuf = parse_columnar(ptr);
+    uint32_t n = cbuf.num_rows;
     constexpr size_t nargs = sizeof...(Args);
 
     std::array<ColView, nargs> cols;
-    for (size_t j = 0; j < nargs; ++j) cols[j] = cb.col(static_cast<uint32_t>(j));
+    for (size_t j = 0; j < nargs; ++j) cols[j] = cbuf.col(static_cast<uint32_t>(j));
 
     // Call impl with args read from each column for a given row.
     auto invoke = [&](uint32_t row) {
@@ -731,20 +786,15 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                 // A-const fast path: prepare col(0) once, vary col(1)
                 if (!has_variant && cols[0].is_effectively_const_bytes() && prep_a) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
-                    auto span_a = cols[0].get_bytes(0);
-                    BBox  bbox_a = wkb_bbox(span_a);
-                    auto  geom_a = read_wkb(span_a);
+                    auto* ca = g_prep_cache_a.get(cols[0].get_bytes(0));
+                    const BBox& bbox_a = ca->bbox;
 
                     // Point fast path: col(1) contains 2D WKB points — no per-row GEOS alloc.
-                    if (prep_a_point && n > 0 && !cols[1].is_null(0)) {
+                    if (prep_a_point && ca->ipial && n > 0 && !cols[1].is_null(0)) {
                         auto s1 = cols[1].get_bytes(0);
                         uint32_t pt_type = 0;
                         if (s1.size() == 21 && s1[0] == 0x01) memcpy(&pt_type, s1.data() + 1, 4);
-                        auto gtype = geom_a->getGeometryTypeId();
-                        if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
-                                           || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
-                            using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
-                            IPIAL locator(*geom_a);
+                        if (pt_type == 1u) {
                             for (uint32_t i = 0; i < n; ++i) {
                                 if (cols[1].is_null(i)) { res[i] = 0u; continue; }
                                 auto span_b = cols[1].get_bytes(i);
@@ -754,20 +804,20 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                 if (bbox_op && !bbox_op(bbox_a, BBox{px, py, px, py})) {
                                     res[i] = early_ret ? 1u : 0u; continue;
                                 }
-                                res[i] = prep_a_point(&locator, px, py) ? 1u : 0u;
+                                res[i] = prep_a_point(ca->ipial.get(), px, py) ? 1u : 0u;
                             }
                             return out;
                         }
                     }
 
-                    auto  pa     = PGF::prepare(geom_a.get());
+                    const auto* pa = ca->prepared.get();
                     for (uint32_t i = 0; i < n; ++i) {
                         if (cols[1].is_null(i)) { res[i] = 0u; continue; }
                         auto span_b = cols[1].get_bytes(i);
                         if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
                             res[i] = early_ret ? 1u : 0u; continue;
                         }
-                        res[i] = prep_a(pa.get(), read_wkb(span_b).get()) ? 1u : 0u;
+                        res[i] = prep_a(pa, read_wkb(span_b).get()) ? 1u : 0u;
                     }
                     return out;
                 }
@@ -775,20 +825,15 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                 // B-const fast path: prepare col(1) once, vary col(0)
                 if (!has_variant && cols[1].is_effectively_const_bytes() && prep_b) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
-                    auto span_b = cols[1].get_bytes(0);
-                    BBox  bbox_b = wkb_bbox(span_b);
-                    auto  geom_b = read_wkb(span_b);
+                    auto* cb = g_prep_cache_b.get(cols[1].get_bytes(0));
+                    const BBox& bbox_b = cb->bbox;
 
                     // Point fast path: col(0) contains 2D WKB points — no per-row GEOS alloc.
-                    if (prep_b_point && n > 0 && !cols[0].is_null(0)) {
+                    if (prep_b_point && cb->ipial && n > 0 && !cols[0].is_null(0)) {
                         auto s0 = cols[0].get_bytes(0);
                         uint32_t pt_type = 0;
                         if (s0.size() == 21 && s0[0] == 0x01) memcpy(&pt_type, s0.data() + 1, 4);
-                        auto gtype = geom_b->getGeometryTypeId();
-                        if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
-                                           || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
-                            using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
-                            IPIAL locator(*geom_b);
+                        if (pt_type == 1u) {
                             for (uint32_t i = 0; i < n; ++i) {
                                 if (cols[0].is_null(i)) { res[i] = 0u; continue; }
                                 auto span_a = cols[0].get_bytes(i);
@@ -798,20 +843,20 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                 if (bbox_op && !bbox_op(BBox{px, py, px, py}, bbox_b)) {
                                     res[i] = early_ret ? 1u : 0u; continue;
                                 }
-                                res[i] = prep_b_point(&locator, px, py) ? 1u : 0u;
+                                res[i] = prep_b_point(cb->ipial.get(), px, py) ? 1u : 0u;
                             }
                             return out;
                         }
                     }
 
-                    auto  pb     = PGF::prepare(geom_b.get());
+                    const auto* pb = cb->prepared.get();
                     for (uint32_t i = 0; i < n; ++i) {
                         if (cols[0].is_null(i)) { res[i] = 0u; continue; }
                         auto span_a = cols[0].get_bytes(i);
                         if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
                             res[i] = early_ret ? 1u : 0u; continue;
                         }
-                        res[i] = prep_b(pb.get(), read_wkb(span_a).get()) ? 1u : 0u;
+                        res[i] = prep_b(pb, read_wkb(span_a).get()) ? 1u : 0u;
                     }
                     return out;
                 }
@@ -823,10 +868,9 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                 // A-const dist path
                 if (!has_variant && cols[0].is_effectively_const_bytes() && prep_a_dist) {
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
-                    auto span_a = cols[0].get_bytes(0);
-                    BBox  bbox_a = wkb_bbox(span_a);
-                    auto  geom_a = read_wkb(span_a);
-                    auto  pa     = PGF::prepare(geom_a.get());
+                    auto* ca = g_prep_cache_a.get(cols[0].get_bytes(0));
+                    const BBox& bbox_a = ca->bbox;
+                    const auto* pa = ca->prepared.get();
                     for (uint32_t i = 0; i < n; ++i) {
                         if (cols[1].is_null(i)) { res[i] = 0u; continue; }
                         auto   span_b = cols[1].get_bytes(i);
@@ -834,17 +878,16 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                         if (!bbox_a.intersects(wkb_bbox(span_b).expanded(dist))) {
                             res[i] = 0u; continue;
                         }
-                        res[i] = prep_a_dist(pa.get(), read_wkb(span_b).get(), dist) ? 1u : 0u;
+                        res[i] = prep_a_dist(pa, read_wkb(span_b).get(), dist) ? 1u : 0u;
                     }
                     return out;
                 }
                 // B-const dist path
                 if (!has_variant && cols[1].is_effectively_const_bytes() && prep_b_dist) {
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
-                    auto span_b = cols[1].get_bytes(0);
-                    BBox  bbox_b = wkb_bbox(span_b);
-                    auto  geom_b = read_wkb(span_b);
-                    auto  pb     = PGF::prepare(geom_b.get());
+                    auto* cb = g_prep_cache_b.get(cols[1].get_bytes(0));
+                    const BBox& bbox_b = cb->bbox;
+                    const auto* pb = cb->prepared.get();
                     for (uint32_t i = 0; i < n; ++i) {
                         if (cols[0].is_null(i)) { res[i] = 0u; continue; }
                         auto   span_a = cols[0].get_bytes(i);
@@ -852,7 +895,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                         if (!wkb_bbox(span_a).intersects(bbox_b.expanded(dist))) {
                             res[i] = 0u; continue;
                         }
-                        res[i] = prep_b_dist(pb.get(), read_wkb(span_a).get(), dist) ? 1u : 0u;
+                        res[i] = prep_b_dist(pb, read_wkb(span_a).get(), dist) ? 1u : 0u;
                     }
                     return out;
                 }
