@@ -24,28 +24,24 @@ LSP shows many false-positive errors for GEOS/CH headers — ignore them. The re
 
 ## Running ClickHouse server
 
-Already running as a background process:
-```
-../ClickHouse/build/programs/clickhouse server \
-  --config-file=clickhouse/config-test.xml \
-  2>/tmp/ch-server.log &
+To restart the server (after rebuilding CH or when needed):
+```bash
+scripts/restart_ch.sh
 ```
 
-After starting, wait for it to finish loading (WASM module takes ~40s):
-```bash
-for i in $(seq 1 60); do
-  ../ClickHouse/build/programs/clickhouse client --port 19000 --query "SELECT 1" 2>/dev/null && echo "ready" && break
-  sleep 1
-done
-```
+This script handles everything: kills any running instance, starts a fresh server, and waits until it is ready. CH takes ~30s to start; always wait before connecting.
 
 Logs: `tail -f /tmp/ch-server.log`
 
 Connect: `../ClickHouse/build/programs/clickhouse client --port 19000`
 
+**Never chain clickhouse client calls in a single shell command** — each query must be a separate Bash invocation to avoid hangs.
+
 ## Reloading chgeos.wasm after a build
 
 Only needed when the **WASM binary changes** (`ninja -C build_wasm`). For pure ClickHouse C++ changes, just restart the CH server — no WASM reload required.
+
+**Always run `restart_ch.sh` to completion before `reload.sh`** — reload requires a live CH instance.
 
 Use `scripts/reload.sh` (does all steps below automatically).
 
@@ -70,31 +66,27 @@ $CH client --port 19000 --multiquery < clickhouse/create.sql
 
 Note: `system.webassembly_functions` does not exist. Use `system.functions WHERE origin != 'System'` to inspect registered UDFs.
 
+## Building ClickHouse
+
+Always build the full binary — never individual translation units:
+```bash
+ninja -C ../ClickHouse/build clickhouse
+```
+
 ## Benchmarks
 
-SF1 data: `/Users/bacek/src/spatial-bench/sf1/` (6M trip rows)
+SF1 data: `../spatial-bench/sf1/` (6M trip rows)
+
+Always use `scripts/bench_sf1.sh` — never `bench_sf1_col.sh` or `bench_sf1_mp.sh`.
 
 ```bash
 BENCH_RUNS=5 ./scripts/bench_sf1.sh ../ClickHouse/build/programs/clickhouse \
-  /Users/bacek/src/spatial-bench/sf1 Q1
+  ../spatial-bench/sf1 Q1
 ```
 
 Optional third argument filters to a single query (Q1, Q3, etc.).
 
-For manual ad-hoc queries, run the CH client from the data directory so that
-`file('trip.parquet')` resolves correctly:
-
-```bash
-CH=~/src/ClickHouse/build/programs/clickhouse
-cd /Users/bacek/src/spatial-bench/sf1   # or sf10
-$CH client --port 19000 --query "SELECT count() FROM file('trip.parquet', Parquet)"
-```
-
-Reference numbers after PreparedGeometry optimization (April 2026, 6M rows):
-| Variant | Q1 avg | Q3 avg |
-|---------|--------|--------|
-| msgpack | 293ms  | 355ms  |
-| col     | 113ms  | 101ms  |
+**Never run benchmark runs in parallel** — they interfere with each other's timing.
 
 ## Architecture
 
@@ -215,7 +207,7 @@ Adding a new function:
 
 ## Tests
 
-Native tests only (261 total). Test files in `tests/`:
+Native tests only (280 total). Test files in `tests/`:
 - `test_columnar.cpp` — COLUMNAR_V1 path: PreparedGeometry A/B-const + dist, null handling
 - `test_rowbinary.cpp` — RowBinary wire format
 - `test_predicates.cpp` — `_impl` functions directly
