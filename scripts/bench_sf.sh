@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
-# SF1 geospatial benchmark suite — "default" version.
+# Geospatial benchmark suite.
 #
 # Usage:
-#   ./scripts/bench_sf1.sh [path/to/clickhouse] [path/to/data/dir] [QUERY]
+#   ./scripts/bench_sf.sh [path/to/clickhouse] [sf1|sf10] [QUERY]
 #
+# SF (optional): scale factor — sf1 (default) or sf10.
 # QUERY (optional): run only the named query, e.g. Q1, Q7
 #
-# The data directory must contain:
-#   trip.parquet, zone.parquet, building.parquet, customer.parquet
+# Run scripts/link_bench_data.sh once beforehand to set up the symlinks.
 
 set -euo pipefail
 
@@ -16,8 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CH="${1:-$(command -v clickhouse 2>/dev/null)}"
 [[ -x "${CH}" ]] || { echo "ERROR: clickhouse binary not found; pass as first argument or put on PATH"; exit 1; }
 
-DATA_DIR="${2:?ERROR: data directory required as second argument}"
-[[ -d "${DATA_DIR}" ]] || { echo "ERROR: data directory '${DATA_DIR}' does not exist"; exit 1; }
+SF="${2:-sf1}"
+[[ "${SF}" == "sf1" || "${SF}" == "sf10" ]] || { echo "ERROR: scale factor must be sf1 or sf10, got '${SF}'"; exit 1; }
 
 QUERY_FILTER="${3:-}"
 
@@ -30,16 +30,10 @@ FUEL="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}"
 FUEL5="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}, query_plan_execute_functions_after_sorting=0"
 RUNS="${BENCH_RUNS:-5}"
 
-# ClickHouse server restricts file() to user_files_path; symlink data files there.
-USER_FILES="${CH_USER_FILES:-./tmp/data/user_files}"
-for _f in trip zone building customer; do
-    [[ -f "${DATA_DIR}/${_f}.parquet" ]] && ln -sf "${DATA_DIR}/${_f}.parquet" "${USER_FILES}/${_f}.parquet"
-done
-
-TRIP="file('trip.parquet', Parquet)"
-ZONE="file('zone.parquet', Parquet)"
-BUILDING="file('building.parquet', Parquet)"
-CUSTOMER="file('customer.parquet', Parquet)"
+TRIP="file('${SF}/trip.parquet', Parquet)"
+ZONE="file('${SF}/zone.parquet', Parquet)"
+BUILDING="file('${SF}/building.parquet', Parquet)"
+CUSTOMER="file('${SF}/customer.parquet', Parquet)"
 
 run_once() {
     local query="$1"
@@ -106,7 +100,7 @@ run() {
 }
 
 echo ""
-echo "Data dir: ${DATA_DIR}  (${RUNS} runs each)"
+echo "Scale factor: ${SF}  (${RUNS} runs each)"
 trip_count=$("${CH}" client --port "${PORT}" -q \
     "SELECT count() FROM ${TRIP}" 2>/dev/null || echo '?')
 echo "trip rows: ${trip_count}"
