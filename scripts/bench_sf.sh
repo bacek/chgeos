@@ -2,12 +2,14 @@
 # Geospatial benchmark suite.
 #
 # Usage:
-#   ./scripts/bench_sf.sh [path/to/clickhouse] [sf1|sf10] [QUERY]
+#   ./scripts/bench_sf.sh [path/to/clickhouse] [sf1|sf10] [--native] [QUERY]
 #
 # SF (optional): scale factor — sf1 (default) or sf10.
+# --native: read from native MergeTree tables (sf1.trip etc.) instead of parquet.
+#           Run scripts/import_sf.sh once beforehand to populate them.
 # QUERY (optional): run only the named query, e.g. Q1, Q7
 #
-# Run scripts/link_bench_data.sh once beforehand to set up the symlinks.
+# Without --native, run scripts/link_bench_data.sh once to set up parquet symlinks.
 
 set -euo pipefail
 
@@ -19,7 +21,15 @@ CH="${1:-$(command -v clickhouse 2>/dev/null)}"
 SF="${2:-sf1}"
 [[ "${SF}" == "sf1" || "${SF}" == "sf10" ]] || { echo "ERROR: scale factor must be sf1 or sf10, got '${SF}'"; exit 1; }
 
-QUERY_FILTER="${3:-}"
+NATIVE=0
+QUERY_FILTER=""
+for arg in "${@:3}"; do
+    if [[ "${arg}" == "--native" ]]; then
+        NATIVE=1
+    elif [[ -z "${QUERY_FILTER}" ]]; then
+        QUERY_FILTER="${arg}"
+    fi
+done
 
 PORT="${CH_PORT:-19000}"
 TIMEOUT="${BENCH_TIMEOUT:-120}"
@@ -30,10 +40,17 @@ FUEL="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}"
 FUEL5="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}, query_plan_execute_functions_after_sorting=0"
 RUNS="${BENCH_RUNS:-5}"
 
-TRIP="file('${SF}/trip.parquet', Parquet)"
-ZONE="file('${SF}/zone.parquet', Parquet)"
-BUILDING="file('${SF}/building.parquet', Parquet)"
-CUSTOMER="file('${SF}/customer.parquet', Parquet)"
+if (( NATIVE )); then
+    TRIP="${SF}.trip"
+    ZONE="${SF}.zone"
+    BUILDING="${SF}.building"
+    CUSTOMER="${SF}.customer"
+else
+    TRIP="file('${SF}/trip.parquet', Parquet)"
+    ZONE="file('${SF}/zone.parquet', Parquet)"
+    BUILDING="file('${SF}/building.parquet', Parquet)"
+    CUSTOMER="file('${SF}/customer.parquet', Parquet)"
+fi
 
 run_once() {
     local query="$1"
@@ -99,8 +116,9 @@ run() {
         "${label}" "${min}ms" "${avg}ms" "${max}ms" "${rows}"
 }
 
+FORMAT_LABEL="parquet"; (( NATIVE )) && FORMAT_LABEL="native" || true
 echo ""
-echo "Scale factor: ${SF}  (${RUNS} runs each)"
+echo "Scale factor: ${SF}  format: ${FORMAT_LABEL}  (${RUNS} runs each)"
 trip_count=$("${CH}" client --port "${PORT}" -q \
     "SELECT count() FROM ${TRIP}" 2>/dev/null || echo '?')
 echo "trip rows: ${trip_count}"
