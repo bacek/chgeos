@@ -77,20 +77,28 @@ ninja -C ../ClickHouse/build clickhouse
 
 Data: `../spatial-bench/sf1/` (6M rows) and `../spatial-bench/sf10/` (60M rows).
 
-Run once after cloning to symlink data into `tmp/data/user_files/`:
+Two data modes — run setup scripts once each:
 ```bash
-./scripts/link_bench_data.sh
+./scripts/link_bench_data.sh   # parquet mode: symlinks sf1/sf10 into user_files/
+./scripts/import_sf.sh ../ClickHouse/build/programs/clickhouse sf1   # native mode
+./scripts/import_sf.sh ../ClickHouse/build/programs/clickhouse sf10  # native mode
 ```
 
 Always use `scripts/bench_sf.sh` — never `bench_sf1_col.sh` or `bench_sf1_mp.sh`.
 
 ```bash
+# Parquet (reads via file() — default)
 BENCH_RUNS=5 ./scripts/bench_sf.sh ../ClickHouse/build/programs/clickhouse sf1 Q1
-BENCH_RUNS=5 ./scripts/bench_sf.sh ../ClickHouse/build/programs/clickhouse sf10
+
+# Native MergeTree tables (sf1.trip, sf1.zone, …)
+BENCH_RUNS=5 ./scripts/bench_sf.sh ../ClickHouse/build/programs/clickhouse sf1 --native Q1
+
+BENCH_RUNS=5 ./scripts/bench_sf.sh ../ClickHouse/build/programs/clickhouse sf10 --native
 ```
 
 Second argument is the scale factor (`sf1` or `sf10`, default `sf1`).
-Optional third argument filters to a single query (Q1, Q3, etc.).
+`--native` reads from MergeTree tables instead of parquet files.
+Optional query filter (Q1, Q3, …) can appear before or after `--native`.
 
 **Never run benchmark runs in parallel** — they interfere with each other's timing.
 
