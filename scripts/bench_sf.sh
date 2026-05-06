@@ -2,11 +2,12 @@
 # Geospatial benchmark suite.
 #
 # Usage:
-#   ./scripts/bench_sf.sh [path/to/clickhouse] [sf1|sf10] [--native] [QUERY]
+#   ./scripts/bench_sf.sh [path/to/clickhouse] [sf1|sf10] [--native] [--settings "key=val, key2=val2"] [QUERY]
 #
 # SF (optional): scale factor — sf1 (default) or sf10.
 # --native: read from native MergeTree tables (sf1.trip etc.) instead of parquet.
 #           Run scripts/import_sf.sh once beforehand to populate them.
+# --settings: comma-separated "key=value" pairs appended to SETTINGS clause of each query.
 # QUERY (optional): run only the named query, e.g. Q1, Q7
 #
 # Without --native, run scripts/link_bench_data.sh once to set up parquet symlinks.
@@ -23,21 +24,28 @@ SF="${2:-sf1}"
 
 NATIVE=0
 QUERY_FILTER=""
-for arg in "${@:3}"; do
+EXTRA_SETTINGS=""
+i=3
+while (( i <= $# )); do
+    arg="${!i}"
     if [[ "${arg}" == "--native" ]]; then
         NATIVE=1
+    elif [[ "${arg}" == "--settings" ]]; then
+        (( i++ )) || true
+        EXTRA_SETTINGS="${!i}"
     elif [[ -z "${QUERY_FILTER}" ]]; then
         QUERY_FILTER="${arg}"
     fi
+    (( i++ )) || true
 done
 
 PORT="${CH_PORT:-19000}"
 TIMEOUT="${BENCH_TIMEOUT:-120}"
-FUEL="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}"
+FUEL="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}${EXTRA_SETTINGS:+, ${EXTRA_SETTINGS}}"
 # Q5 needs query_plan_execute_functions_after_sorting=0 to force WASM to run in
 # parallel threads before the ORDER BY merge (otherwise CH defers it to
 # single-threaded post-sort, causing ~7× slowdown).
-FUEL5="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}, query_plan_execute_functions_after_sorting=0"
+FUEL5="SETTINGS webassembly_udf_max_fuel=0, max_execution_time=${TIMEOUT}, query_plan_execute_functions_after_sorting=0${EXTRA_SETTINGS:+, ${EXTRA_SETTINGS}}"
 RUNS="${BENCH_RUNS:-5}"
 
 if (( NATIVE )); then
