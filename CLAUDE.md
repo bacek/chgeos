@@ -84,21 +84,20 @@ Two data modes — run setup scripts once each:
 ./scripts/import_sf.sh ../ClickHouse/build/programs/clickhouse sf10  # native mode
 ```
 
-Always use `scripts/bench_sf.sh` — never `bench_sf1_col.sh` or `bench_sf1_mp.sh`.
+Always use `scripts/bench_sf.py` — never `bench_sf1_col.sh` or `bench_sf1_mp.sh`.
 
 ```bash
 # Parquet (reads via file() — default)
-BENCH_RUNS=5 ./scripts/bench_sf.sh ../ClickHouse/build/programs/clickhouse sf1 Q1
+python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf1 --runs 5 --query Q1
 
 # Native MergeTree tables (sf1.trip, sf1.zone, …)
-BENCH_RUNS=5 ./scripts/bench_sf.sh ../ClickHouse/build/programs/clickhouse sf1 --native Q1
+python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf1 --native --runs 5 --query Q1
 
-BENCH_RUNS=5 ./scripts/bench_sf.sh ../ClickHouse/build/programs/clickhouse sf10 --native
+python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf10 --native --runs 5
 ```
 
-Second argument is the scale factor (`sf1` or `sf10`, default `sf1`).
 `--native` reads from MergeTree tables instead of parquet files.
-Optional query filter (Q1, Q3, …) can appear before or after `--native`.
+`--query` filters to a single query (e.g. Q1, Q7).
 
 **Never run benchmark runs in parallel** — they interfere with each other's timing.
 
