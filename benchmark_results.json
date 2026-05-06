@@ -1,122 +1,402 @@
 {
-  "benchmark": "spatialbench",
-  "generated_at": "2026-04-23",
-  "timeouts": {
-    "all_engines_seconds": 120
-  },
+  "benchmark": "spatial-bench",
+  "generated_at": "2026-05-06",
+  "timeouts": 120.0,
   "results": [
     {
       "engine": "chgeos",
-      "version": "2026-04-23",
       "scale_factor": 1,
       "results": [
-        { "query": "q1",  "time_seconds": 0.099, "status": "success" },
-        { "query": "q2",  "time_seconds": 0.057, "status": "success" },
-        { "query": "q3",  "time_seconds": 0.093, "status": "success" },
-        { "query": "q4",  "time_seconds": 0.442, "status": "success" },
-        { "query": "q5",  "time_seconds": 1.503, "status": "success" },
-        { "query": "q6",  "time_seconds": 0.394, "status": "success" },
-        { "query": "q7",  "time_seconds": 2.379, "status": "success" },
-        { "query": "q8",  "time_seconds": 0.254, "status": "success" },
-        { "query": "q9",  "time_seconds": 0.026, "status": "success" },
-        { "query": "q10", "time_seconds": 3.957, "status": "success" },
-        { "query": "q11", "time_seconds": 9.320, "status": "success" },
-        { "query": "q12", "time_seconds": 7.936, "status": "success" }
+        {
+          "query": "q1",
+          "status": "success",
+          "time_seconds": 0.09
+        },
+        {
+          "query": "q2",
+          "status": "success",
+          "time_seconds": 0.074
+        },
+        {
+          "query": "q3",
+          "status": "success",
+          "time_seconds": 0.087
+        },
+        {
+          "query": "q4",
+          "status": "success",
+          "time_seconds": 0.612
+        },
+        {
+          "query": "q5",
+          "status": "success",
+          "time_seconds": 0.854
+        },
+        {
+          "query": "q6",
+          "status": "success",
+          "time_seconds": 0.82
+        },
+        {
+          "query": "q7",
+          "status": "success",
+          "time_seconds": 1.274
+        },
+        {
+          "query": "q8",
+          "status": "success",
+          "time_seconds": 0.146
+        },
+        {
+          "query": "q9",
+          "status": "success",
+          "time_seconds": 0.026
+        },
+        {
+          "query": "q10",
+          "status": "success",
+          "time_seconds": 3.961
+        },
+        {
+          "query": "q11",
+          "status": "success",
+          "time_seconds": 7.337
+        },
+        {
+          "query": "q12",
+          "status": "success",
+          "time_seconds": 10.431
+        }
       ]
     },
     {
       "engine": "chgeos",
-      "version": "2026-04-23",
       "scale_factor": 10,
       "results": [
-        { "query": "q1",  "time_seconds": 0.621, "status": "success" },
-        { "query": "q2",  "time_seconds": 0.485, "status": "success" },
-        { "query": "q3",  "time_seconds": 0.611, "status": "success" },
-        { "query": "q4",  "time_seconds": 1.045, "status": "success" },
-        { "query": "q5",  "time_seconds": 21.16, "status": "success" },
-        { "query": "q6",  "time_seconds": 1.698, "status": "success" },
-        { "query": "q7",  "time_seconds": 23.97, "status": "success" },
-        { "query": "q8",  "time_seconds": 2.845, "status": "success" },
-        { "query": "q9",  "time_seconds": 0.111, "status": "success" },
-        { "query": "q10", "time_seconds": 34.04, "status": "success" },
-        { "query": "q11", "time_seconds": 60.13, "status": "success" },
-        { "query": "q12", "time_seconds": 94.34, "status": "success" }
+        {
+          "query": "q1",
+          "status": "success",
+          "time_seconds": 0.548
+        },
+        {
+          "query": "q2",
+          "status": "success",
+          "time_seconds": 0.673
+        },
+        {
+          "query": "q3",
+          "status": "success",
+          "time_seconds": 0.511
+        },
+        {
+          "query": "q4",
+          "status": "success",
+          "time_seconds": 1.193
+        },
+        {
+          "query": "q5",
+          "status": "success",
+          "time_seconds": 10.366
+        },
+        {
+          "query": "q6",
+          "status": "success",
+          "time_seconds": 1.873
+        },
+        {
+          "query": "q7",
+          "status": "success",
+          "time_seconds": 11.899
+        },
+        {
+          "query": "q8",
+          "status": "success",
+          "time_seconds": 1.602
+        },
+        {
+          "query": "q9",
+          "status": "success",
+          "time_seconds": 0.103
+        },
+        {
+          "query": "q10",
+          "status": "success",
+          "time_seconds": 27.314
+        },
+        {
+          "query": "q11",
+          "status": "success",
+          "time_seconds": 43.646
+        },
+        {
+          "query": "q12",
+          "status": "success",
+          "time_seconds": 107.09
+        }
       ]
     },
     {
       "engine": "duckdb",
-      "version": "1.5.2",
       "scale_factor": 1,
       "results": [
-        { "query": "q1",  "time_seconds": 0.15,  "status": "success" },
-        { "query": "q2",  "time_seconds": 0.20,  "status": "success" },
-        { "query": "q3",  "time_seconds": 0.13,  "status": "success" },
-        { "query": "q4",  "time_seconds": 0.41,  "status": "success" },
-        { "query": "q5",  "time_seconds": 0.73,  "status": "success" },
-        { "query": "q6",  "time_seconds": 0.41,  "status": "success" },
-        { "query": "q7",  "time_seconds": 3.74,  "status": "success" },
-        { "query": "q8",  "time_seconds": 0.43,  "status": "success" },
-        { "query": "q9",  "time_seconds": 0.03,  "status": "success" },
-        { "query": "q10", "time_seconds": null,   "status": "timeout" },
-        { "query": "q11", "time_seconds": null,   "status": "timeout" },
-        { "query": "q12", "time_seconds": null,   "status": "timeout" }
+        {
+          "query": "q1",
+          "status": "success",
+          "time_seconds": 0.11
+        },
+        {
+          "query": "q2",
+          "status": "success",
+          "time_seconds": 0.2
+        },
+        {
+          "query": "q3",
+          "status": "success",
+          "time_seconds": 0.16
+        },
+        {
+          "query": "q4",
+          "status": "success",
+          "time_seconds": 0.67
+        },
+        {
+          "query": "q5",
+          "status": "success",
+          "time_seconds": 0.82
+        },
+        {
+          "query": "q6",
+          "status": "success",
+          "time_seconds": 0.97
+        },
+        {
+          "query": "q7",
+          "status": "success",
+          "time_seconds": 6.53
+        },
+        {
+          "query": "q8",
+          "status": "success",
+          "time_seconds": 0.46
+        },
+        {
+          "query": "q9",
+          "status": "success",
+          "time_seconds": 0.03
+        },
+        {
+          "query": "q10",
+          "status": "timeout",
+          "time_seconds": null
+        },
+        {
+          "query": "q11",
+          "status": "timeout",
+          "time_seconds": null
+        },
+        {
+          "query": "q12",
+          "status": "timeout",
+          "time_seconds": null
+        }
       ]
     },
     {
       "engine": "duckdb",
-      "version": "1.5.2",
       "scale_factor": 10,
       "results": [
-        { "query": "q1",  "time_seconds": 0.75,  "status": "success" },
-        { "query": "q2",  "time_seconds": 1.02,  "status": "success" },
-        { "query": "q3",  "time_seconds": 0.92,  "status": "success" },
-        { "query": "q4",  "time_seconds": 0.78,  "status": "success" },
-        { "query": "q5",  "time_seconds": 39.14, "status": "success" },
-        { "query": "q6",  "time_seconds": 2.56,  "status": "success" },
-        { "query": "q7",  "time_seconds": 40.07, "status": "success" },
-        { "query": "q8",  "time_seconds": 2.67,  "status": "success" },
-        { "query": "q9",  "time_seconds": 0.14,  "status": "success" },
-        { "query": "q10", "time_seconds": null,   "status": "timeout" },
-        { "query": "q11", "time_seconds": null,   "status": "timeout" },
-        { "query": "q12", "time_seconds": null,   "status": "timeout" }
+        {
+          "query": "q1",
+          "status": "success",
+          "time_seconds": 0.44
+        },
+        {
+          "query": "q2",
+          "status": "success",
+          "time_seconds": 0.7
+        },
+        {
+          "query": "q3",
+          "status": "success",
+          "time_seconds": 0.54
+        },
+        {
+          "query": "q4",
+          "status": "success",
+          "time_seconds": 1.08
+        },
+        {
+          "query": "q5",
+          "status": "success",
+          "time_seconds": 8.24
+        },
+        {
+          "query": "q6",
+          "status": "success",
+          "time_seconds": 1.95
+        },
+        {
+          "query": "q7",
+          "status": "success",
+          "time_seconds": 68.31
+        },
+        {
+          "query": "q8",
+          "status": "success",
+          "time_seconds": 2.19
+        },
+        {
+          "query": "q9",
+          "status": "success",
+          "time_seconds": 0.16
+        },
+        {
+          "query": "q10",
+          "status": "timeout",
+          "time_seconds": null
+        },
+        {
+          "query": "q11",
+          "status": "timeout",
+          "time_seconds": null
+        },
+        {
+          "query": "q12",
+          "status": "timeout",
+          "time_seconds": null
+        }
       ]
     },
     {
       "engine": "sedona",
-      "version": "0.3.0",
       "scale_factor": 1,
       "results": [
-        { "query": "q1",  "time_seconds": 0.42,  "status": "success" },
-        { "query": "q2",  "time_seconds": 0.57,  "status": "success" },
-        { "query": "q3",  "time_seconds": 0.45,  "status": "success" },
-        { "query": "q4",  "time_seconds": 0.59,  "status": "success" },
-        { "query": "q5",  "time_seconds": 1.67,  "status": "success" },
-        { "query": "q6",  "time_seconds": 0.53,  "status": "success" },
-        { "query": "q7",  "time_seconds": 1.56,  "status": "success" },
-        { "query": "q8",  "time_seconds": 0.42,  "status": "success" },
-        { "query": "q9",  "time_seconds": 0.30,  "status": "success" },
-        { "query": "q10", "time_seconds": 4.28,  "status": "success" },
-        { "query": "q11", "time_seconds": 7.05,  "status": "success" },
-        { "query": "q12", "time_seconds": 13.71, "status": "success" }
+        {
+          "query": "q1",
+          "status": "success",
+          "time_seconds": 0.43
+        },
+        {
+          "query": "q2",
+          "status": "success",
+          "time_seconds": 1.13
+        },
+        {
+          "query": "q3",
+          "status": "success",
+          "time_seconds": 0.5
+        },
+        {
+          "query": "q4",
+          "status": "success",
+          "time_seconds": 0.91
+        },
+        {
+          "query": "q5",
+          "status": "success",
+          "time_seconds": 2.0
+        },
+        {
+          "query": "q6",
+          "status": "success",
+          "time_seconds": 0.87
+        },
+        {
+          "query": "q7",
+          "status": "success",
+          "time_seconds": 2.35
+        },
+        {
+          "query": "q8",
+          "status": "success",
+          "time_seconds": 0.35
+        },
+        {
+          "query": "q9",
+          "status": "success",
+          "time_seconds": 0.24
+        },
+        {
+          "query": "q10",
+          "status": "success",
+          "time_seconds": 4.87
+        },
+        {
+          "query": "q11",
+          "status": "success",
+          "time_seconds": 7.82
+        },
+        {
+          "query": "q12",
+          "status": "success",
+          "time_seconds": 18.07
+        }
       ]
     },
     {
       "engine": "sedona",
-      "version": "0.3.0",
       "scale_factor": 10,
       "results": [
-        { "query": "q1",  "time_seconds": 0.74,  "status": "success" },
-        { "query": "q2",  "time_seconds": 0.99,  "status": "success" },
-        { "query": "q3",  "time_seconds": 1.15,  "status": "success" },
-        { "query": "q4",  "time_seconds": 0.74,  "status": "success" },
-        { "query": "q5",  "time_seconds": 25.35, "status": "success" },
-        { "query": "q6",  "time_seconds": 1.43,  "status": "success" },
-        { "query": "q7",  "time_seconds": 14.23, "status": "success" },
-        { "query": "q8",  "time_seconds": 1.67,  "status": "success" },
-        { "query": "q9",  "time_seconds": 0.36,  "status": "success" },
-        { "query": "q10", "time_seconds": 11.45, "status": "success" },
-        { "query": "q11", "time_seconds": 22.94, "status": "success" },
-        { "query": "q12", "time_seconds": null,   "status": "timeout" }
+        {
+          "query": "q1",
+          "status": "success",
+          "time_seconds": 0.94
+        },
+        {
+          "query": "q2",
+          "status": "success",
+          "time_seconds": 1.64
+        },
+        {
+          "query": "q3",
+          "status": "success",
+          "time_seconds": 1.43
+        },
+        {
+          "query": "q4",
+          "status": "success",
+          "time_seconds": 1.86
+        },
+        {
+          "query": "q5",
+          "status": "success",
+          "time_seconds": 42.43
+        },
+        {
+          "query": "q6",
+          "status": "success",
+          "time_seconds": 2.86
+        },
+        {
+          "query": "q7",
+          "status": "success",
+          "time_seconds": 42.28
+        },
+        {
+          "query": "q8",
+          "status": "success",
+          "time_seconds": 2.02
+        },
+        {
+          "query": "q9",
+          "status": "success",
+          "time_seconds": 0.37
+        },
+        {
+          "query": "q10",
+          "status": "success",
+          "time_seconds": 17.02
+        },
+        {
+          "query": "q11",
+          "status": "timeout",
+          "time_seconds": null
+        },
+        {
+          "query": "q12",
+          "status": "timeout",
+          "time_seconds": null
+        }
       ]
     }
   ]
