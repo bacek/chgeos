@@ -32,6 +32,8 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 
 **SF1 wins — chgeos: 11, DuckDB: 1, Sedona: 0**
 
+![SF1 benchmark](sf1.png)
+
 ---
 
 ## SF10 — 60 Million Trip Rows
@@ -52,6 +54,8 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 | Q12   | 5 nearest buildings per trip (kNN) | 107.090 s | TIMEOUT  | TIMEOUT  | chgeos   |
 
 **SF10 wins — chgeos: 8, DuckDB: 3, Sedona: 1**
+
+![SF10 benchmark](sf10.png)
 
 ---
 
