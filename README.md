@@ -80,6 +80,63 @@ Two additions beyond the standard PostGIS set:
 - **`st_intersects_extent`** — bounding-box-only intersection check with no GEOS parse. Use as a fast pre-filter in joins before applying a precise predicate.
 - **`st_knn`** — k-nearest-neighbour query: given a probe geometry and an array of candidate geometries, returns the `k` closest (index, distance) pairs. When the candidate array is constant, the GEOS STRtree index is built once per batch.
 
+## Benchmarks
+
+The benchmark suite (`scripts/bench_sf.py`) runs the 12 SpatialBench queries against ClickHouse with chgeos, using either Parquet files or native MergeTree tables.
+
+### Usage
+
+```bash
+# Full run (all 12 queries, 5 runs each)
+python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf1
+
+# Single query
+python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf1 --query Q7
+
+# Native MergeTree tables (run scripts/import_sf.sh first)
+python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf1 --native
+
+# JSON output (JSON Lines, one BenchmarkSuite per line)
+python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf1 --json --output sf1_results.json
+```
+
+### Arguments
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ch` | `clickhouse` on PATH | Path to ClickHouse binary |
+| `--sf` | `sf1` | Scale factor — `sf1` (6M rows) or `sf10` (60M rows) |
+| `--native` | off | Read from native MergeTree tables instead of Parquet |
+| `--runs` | 5 | Number of runs per query (averaged) |
+| `--timeout` | 120 | Per-query timeout in seconds |
+| `--settings` | — | Extra CH settings, e.g. `"query_max_memory_usage=100000000000"` |
+| `--query` | all | Run only this query (e.g. `Q1`, `Q7`) |
+| `--queries` | all | Comma-separated queries (e.g. `Q1,Q7`) |
+| `--json` | off | Write results to JSON Lines file |
+| `--output` | `<sf>/benchmark_results.json` | Output file path for `--json` |
+
+### JSON output format
+
+When `--json` is set, each run produces one JSON line per query set, matching the [SedonaDB `BenchmarkSuite`](https://github.com/Location3/spatialbench) format:
+
+```json
+{"engine": "chgeos", "version": "14b0f95", "scale_factor": 1.0,
+ "timestamp": "2026-05-06T12:00:00+00:00", "total_time": 45.23,
+ "results": [
+   {"query": "Q1", "time_seconds": 0.11, "row_count": 258, "status": "success", "error_message": null},
+   {"query": "Q7", "time_seconds": 4.80, "row_count": 6000000, "status": "success", "error_message": null},
+   {"query": "Q8", "time_seconds": 18.50, "row_count": null, "status": "timeout", "error_message": "Timeout after 120s"}
+ ]}
+```
+
+Fields:
+- `engine` — always `"chgeos"`
+- `version` — short git SHA of the chgeos commit used
+- `scale_factor` — `1.0` or `10.0`
+- `total_time` — sum of all successful `time_seconds` (seconds)
+- `results[].time_seconds` — average time across runs, in seconds (rounded to 2dp)
+- `results[].status` — `"success"`, `"error"`, or `"timeout"`
+
 ## Building
 
 ### Requirements

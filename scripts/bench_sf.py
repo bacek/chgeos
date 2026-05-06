@@ -9,15 +9,20 @@ SF (optional): scale factor — sf1 (default) or sf10.
           Run scripts/import_sf.sh once beforehand to populate them.
 --settings: comma-separated "key=value" pairs appended to SETTINGS clause of each query.
 QUERY (optional): run only the named query, e.g. Q1, Q7
+--json: write results to benchmark_results.json (JSON Lines, one BenchmarkSuite per line)
+--output: output file path for --json (default: <sf>/benchmark_results.json)
 
 Without --native, run scripts/link_bench_data.sh once to set up parquet symlinks.
 """
 
 import argparse
+import json
 import re
+import socket
 import subprocess
 import sys
 import os
+from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
 # Queries
@@ -212,6 +217,9 @@ Usage:
 --native: read from native MergeTree tables instead of parquet
 --settings: extra SETTINGS appended to each query
 --query: run only this query (e.g. Q1, Q7)
+--queries: comma-separated queries (e.g. Q1,Q7)
+--json: write results to benchmark_results.json (JSON Lines)
+--output: output file path for --json
 """,
     )
     parser.add_argument("--ch", default=None)
@@ -221,7 +229,14 @@ Usage:
     parser.add_argument("--runs", type=int, default=int(os.environ.get("BENCH_RUNS", 5)))
     parser.add_argument("--native", action="store_true")
     parser.add_argument("--settings", default=None)
-    parser.add_argument("--query", default=None)
+    parser.add_argument("--query", default=None,
+                        help="Run only this query (e.g. Q1, Q7)")
+    parser.add_argument("--queries", default=None,
+                        help="Comma-separated list of queries to run (e.g. Q1,Q7)")
+    parser.add_argument("--json", action="store_true",
+                        help="Write results to benchmark_results.json (JSON Lines)")
+    parser.add_argument("--output", default=None,
+                        help="Output file path for --json (default: benchmark_results.json in --sf dir)")
     return parser.parse_args()
 
 
@@ -253,6 +268,25 @@ def status_label(ms, rc, timeout):
     if ms >= threshold:
         return "TIMEOUT"
     return "OK"
+
+
+def get_git_sha():
+    """Return short git SHA or 'unknown'."""
+    try:
+        r = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True, text=True, cwd=os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+        )
+        return r.stdout.strip() if r.returncode == 0 else "unknown"
+    except Exception:
+        return "unknown"
+
+
+def write_json_line(output_path, suite_dict):
+    """Append one BenchmarkSuite dict as a JSON line."""
+    with open(output_path, "a") as f:
+        json.dump(suite_dict, f)
+        f.write("\n")
 
 
 def run_query_once(ch, port, query, timeout):
@@ -294,6 +328,15 @@ def main():
     timeout = args.timeout
     extra_settings = args.settings
     query_filter = args.query
+
+    # Parse --queries (comma-separated, Sedona-compatible)
+    if args.queries:
+        query_filter = ",".join(q.strip().upper() for q in args.queries.split(","))
+
+    json_flag = args.json
+    output_path = args.output if args.output else (
+        f"{args.sf}/benchmark_results.json" if json_flag else None
+    )
 
     fuel = (
         "SETTINGS webassembly_udf_max_fuel=0, max_execution_time="
@@ -340,12 +383,15 @@ def main():
     print("| %-6s | %8s | %8s | %8s | %10s |" % ("Query", "min", "avg", "max", "rows"))
     print("|--------|----------|----------|----------|------------|")
 
+    # Collect results for JSON output
+    results = []
+
     for label, tpl in QUERIES:
         if query_filter and label != query_filter:
             continue
 
         times = []
-        rows = "?"
+        rows = None
         errored = False
         timed_out = False
 
@@ -386,14 +432,34 @@ def main():
                 times.append(ms)
 
         if errored:
-            print("| %-6s | %8s | %8s | %8s | %10s |" % (label, "ERROR", "ERROR", "ERROR", rows))
+            print("| %-6s | %8s | %8s | %8s | %10s |" % (label, "ERROR", "ERROR", "ERROR", rows or "?"))
+            results.append({"query": label, "time_seconds": None, "row_count": None,
+                            "status": "error", "error_message": "ERROR"})
         elif timed_out:
-            print("| %-6s | %8s | %8s | %8s | %10s |" % (label, "TIMEOUT", "TIMEOUT", "TIMEOUT", rows))
+            print("| %-6s | %8s | %8s | %8s | %10s |" % (label, "TIMEOUT", "TIMEOUT", "TIMEOUT", rows or "?"))
+            results.append({"query": label, "time_seconds": float(timeout), "row_count": None,
+                            "status": "timeout", "error_message": f"Timeout after {timeout}s"})
         else:
             avg = sum(times) // len(times)
             mn = min(times)
             mx = max(times)
             print("| %-6s | %8sms | %8sms | %8sms | %10s |" % (label, mn, avg, mx, rows))
+            results.append({"query": label, "time_seconds": round(avg / 1000, 2), "row_count": rows,
+                            "status": "success", "error_message": None})
+
+    # Write JSON output
+    if json_flag and output_path:
+        git_sha = get_git_sha()
+        suite = {
+            "engine": "chgeos",
+            "version": git_sha,
+            "scale_factor": float(sf.replace("sf", "")),
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "total_time": round(sum(r["time_seconds"] for r in results if r["time_seconds"]), 2),
+            "results": results,
+        }
+        write_json_line(output_path, suite)
+        print(f"\nResults written to {output_path}")
 
 
 if __name__ == "__main__":
