@@ -21,7 +21,7 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 | Q2    | Count trips in county polygon      | 0.078 s  | 0.20 s   | 1.13 s  | chgeos   |
 | Q3    | Monthly stats in bbox+buffer       | 0.083 s  | 0.16 s   | 0.50 s  | chgeos   |
 | Q4    | Zone distribution (top-1000 tips)  | 0.620 s  | 0.67 s   | 0.91 s  | chgeos   |
-| Q5    | Convex hull area per customer/month| 0.857 s  | 0.82 s   | 2.00 s  | DuckDB   |
+| Q5    | Convex hull area per customer/month| 0.857 s  | 0.82 s   | 2.00 s  | Tie      |
 | Q6    | Zone stats for bbox-intersect zones| 0.814 s  | 0.97 s   | 0.87 s  | chgeos   |
 | Q7    | Detour ratio (all trips)           | 1.285 s  | 6.53 s   | 2.35 s  | chgeos   |
 | Q8    | Nearby pickups per building        | 0.146 s  | 0.46 s   | 0.35 s  | chgeos   |
@@ -30,7 +30,7 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 | Q11   | Cross-zone trip count              | 7.337 s  | TIMEOUT  | 7.82 s  | chgeos   |
 | Q12   | 5 nearest buildings per trip (kNN) | 10.431 s | TIMEOUT  | 18.07 s | chgeos   |
 
-**SF1 wins — chgeos: 11, DuckDB: 1, Sedona: 0**
+**SF1 wins — chgeos: 10, DuckDB: 0, Sedona: 0, Ties: 1**
 
 ![SF1 benchmark](sf1.png)
 
@@ -41,11 +41,11 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 | Query | Description                        | chgeos    | DuckDB   | Sedona   | Winner   |
 |-------|------------------------------------|-----------|----------|----------|----------|
 | Q1    | Point-in-radius filter             | 0.544 s   | 0.44 s   | 0.94 s   | DuckDB   |
-| Q2    | Count trips in county polygon      | 0.669 s   | 0.70 s   | 1.64 s   | chgeos   |
-| Q3    | Monthly stats in bbox+buffer       | 0.522 s   | 0.54 s   | 1.43 s   | chgeos   |
+| Q2    | Count trips in county polygon      | 0.669 s   | 0.70 s   | 1.64 s   | Tie      |
+| Q3    | Monthly stats in bbox+buffer       | 0.522 s   | 0.54 s   | 1.43 s   | Tie      |
 | Q4    | Zone distribution (top-1000 tips)  | 1.163 s   | 1.08 s   | 1.86 s   | DuckDB   |
 | Q5    | Convex hull area per customer/month| 9.899 s   | 8.24 s   | 42.43 s  | DuckDB   |
-| Q6    | Zone stats for bbox-intersect zones| 1.872 s   | 1.95 s   | 2.86 s   | chgeos   |
+| Q6    | Zone stats for bbox-intersect zones| 1.872 s   | 1.95 s   | 2.86 s   | Tie      |
 | Q7    | Detour ratio (all trips)           | 11.800 s  | 68.31 s  | 42.28 s  | chgeos   |
 | Q8    | Nearby pickups per building        | 1.602 s   | 2.19 s   | 2.02 s   | chgeos   |
 | Q9    | Building conflation via IoU        | 0.104 s   | 0.16 s   | 0.37 s   | chgeos   |
@@ -53,7 +53,7 @@ and Apache Sedona (SedonaDB) on the spatial benchmark suite.
 | Q11   | Cross-zone trip count              | 43.646 s  | TIMEOUT  | TIMEOUT  | chgeos   |
 | Q12   | 5 nearest buildings per trip (kNN) | 107.090 s | TIMEOUT  | TIMEOUT  | chgeos   |
 
-**SF10 wins — chgeos: 8, DuckDB: 3, Sedona: 1**
+**SF10 wins — chgeos: 6, DuckDB: 3, Sedona: 1, Ties: 3**
 
 ![SF10 benchmark](sf10.png)
 
