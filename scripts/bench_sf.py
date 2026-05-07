@@ -244,7 +244,7 @@ def run_query(ch, port, query):
     """Run a single query, returning (stdout_text, stderr_text, returncode)."""
     result = subprocess.run(
         [ch, "client", f"--port={port}", "--time", "-q", query],
-        capture_output=True, text=True,
+        capture_output=True, text=True, errors="replace",
     )
     return result.stdout, result.stderr, result.returncode
 
