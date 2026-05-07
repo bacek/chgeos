@@ -9,7 +9,17 @@ CONFIG="$REPO/clickhouse/config-test.xml"
 pkill -f "clickhouse server" 2>/dev/null || true
 sleep 1
 
-"$CH" server --config-file="$CONFIG" 2>/tmp/ch-server.log &
+DATA_DIR="$REPO/tmp/data"
+USER_FILES="$DATA_DIR/user_files"
+mkdir -p "$USER_FILES"
+
+# Write paths into config so it works cross-platform (no hardcoded /home/bacek)
+TMP_CONFIG="$REPO/tmp/config-test-generated.xml"
+sed -e "s|__DATA_DIR__|${DATA_DIR}|g" \
+    -e "s|__USER_FILES_PATH__|${USER_FILES}|g" \
+    < "$CONFIG" > "$TMP_CONFIG"
+
+"$CH" server --config-file="$TMP_CONFIG" 2>/tmp/ch-server.log &
 
 echo -n "Waiting for server"
 for i in $(seq 1 60); do
