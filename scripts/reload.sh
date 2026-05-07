@@ -4,7 +4,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$SCRIPT_DIR/.."
 CH="${CH:-$REPO/../ClickHouse/build/programs/clickhouse}"
-WASM="$REPO/build_wasm/bin/chgeos.wasm"
+WASM="${WASM:-$REPO/build_wasm/chgeos.wasm}"
 USER_FILES="$REPO/tmp/data/user_files"
 
 echo "==> Drop functions"
