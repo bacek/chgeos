@@ -730,31 +730,80 @@ CREATE OR REPLACE FUNCTION st_union_agg
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
 ABI COLUMNAR_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_aggregate = 1;
 
+-- UDAF aggregate: CH accumulates rows per group, passes as Array(String).
+-- Scalar String arg → CH wraps to Array(String) at runtime.
 CREATE OR REPLACE FUNCTION st_collect_agg
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ARGUMENTS (geoms String) RETURNS Nullable(String)
 ABI COLUMNAR_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_aggregate = 1;
 
 CREATE OR REPLACE FUNCTION st_extent_agg
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
 ABI COLUMNAR_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_aggregate = 1;
 
 CREATE OR REPLACE FUNCTION st_makeline_agg
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
 ABI COLUMNAR_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_aggregate = 1;
 
 CREATE OR REPLACE FUNCTION st_convexhull_agg
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
 ABI COLUMNAR_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_aggregate = 1;
+
+-- ---------------------------------------------------------------------------
+-- UDAF aggregate functions (is_aggregate = 1)
+-- CH accumulates rows per group and passes them as Array(String) to the WASM
+-- function.  Declared args are scalar String → CH wraps to Array(String).
+-- No groupArray() needed in SQL.
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION st_union_a
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms String) RETURNS String
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary', is_aggregate = 1;
+
+CREATE OR REPLACE FUNCTION st_collect_a
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms String) RETURNS String
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary', is_aggregate = 1;
+
+CREATE OR REPLACE FUNCTION st_extent_a
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms String) RETURNS String
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary', is_aggregate = 1;
+
+CREATE OR REPLACE FUNCTION st_makeline_a
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms String) RETURNS String
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary', is_aggregate = 1;
+
+CREATE OR REPLACE FUNCTION st_convexhull_a
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms String) RETURNS String
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'RowBinary', is_aggregate = 1;
 
 -- ---------------------------------------------------------------------------
 -- Processing

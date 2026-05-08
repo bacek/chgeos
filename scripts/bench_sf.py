@@ -79,7 +79,7 @@ SELECT z.z_zonekey, z.z_name, count() AS trip_count
         """\
 SELECT c.c_custkey, c.c_name AS customer_name,
     toStartOfMonth(t.t_pickuptime) AS pickup_month,
-    st_area(st_convexhull(st_collect_agg(groupArray(t.t_dropoffloc)))) AS monthly_travel_hull_area,
+    st_area(st_convexhull(st_collect_agg(t.t_dropoffloc))) AS monthly_travel_hull_area,
     count() AS dropoff_count
  FROM {TRIP} t
  JOIN {CUSTOMER} c ON t.t_custkey = c.c_custkey
