@@ -22,7 +22,7 @@ if [[ -z "${CLICKHOUSE_BIN}" ]]; then
 fi
 [[ -x "${CLICKHOUSE_BIN}" ]] || { echo "ERROR: clickhouse binary not found"; exit 1; }
 
-WASM_BIN="${2:-${REPO_ROOT}/build_wasm/bin/chgeos.wasm}"
+WASM_BIN="${2:-${REPO_ROOT}/build_wasm/chgeos.wasm}"
 [[ -f "${WASM_BIN}" ]] || { echo "ERROR: WASM binary not found: ${WASM_BIN}"; exit 1; }
 
 CONFIG="${SCRIPT_DIR}/config-e2e.xml"
@@ -104,8 +104,8 @@ t "st_symdiff_area"    "SELECT round(st_area(st_symdifference(st_geomfromtext('P
 
 # Aggregate — functions take Array(String); use groupArray() to collect rows
 t "st_union_agg"        "SELECT round(st_area(st_union_agg(groupArray(geom)))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))'))"  "2"
-t "st_collect_agg"      "SELECT st_numgeometries(st_collect_agg(groupArray(geom))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "2"
-t "st_collect_agg_nodissolve" "SELECT round(st_area(st_collect_agg(groupArray(geom)))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))'))"  "8"
+t "st_collect_agg"      "SELECT st_numgeometries(st_collect_agg(geom)) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "2"
+t "st_collect_agg_nodissolve" "SELECT round(st_area(st_collect_agg(geom))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))'))"  "8"
 t "st_extent_agg"       "SELECT round(st_area(st_extent_agg(groupArray(geom)))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (3 4)'))"  "12"
 t "st_extent_agg_polys" "SELECT round(st_area(st_extent_agg(groupArray(geom)))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))') AS geom UNION ALL SELECT st_geomfromtext('POLYGON ((3 0, 5 0, 5 2, 3 2, 3 0))'))"  "10"
 t "st_makeline_agg"     "SELECT st_astext(st_makeline_agg(groupArray(geom))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "LINESTRING (0 0, 1 0, 1 1)"
@@ -121,7 +121,7 @@ t "col_extent_agg_bbox" \
     "SELECT st_astext(st_extent_agg(groupArray(wkb))) FROM (SELECT st_geomfromtext('POINT (1 2)') AS wkb UNION ALL SELECT st_geomfromtext('POINT (4 6)') UNION ALL SELECT st_geomfromtext('POINT (-1 0)'))" \
     "POLYGON ((-1 0, 4 0, 4 6, -1 6, -1 0))"
 t "col_collect_agg_types" \
-    "SELECT st_astext(st_collect_agg(groupArray(wkb))) FROM (SELECT st_geomfromtext('POINT (0 0)') AS wkb UNION ALL SELECT st_geomfromtext('POINT (1 1)'))" \
+    "SELECT st_astext(st_collect_agg(wkb)) FROM (SELECT st_geomfromtext('POINT (0 0)') AS wkb UNION ALL SELECT st_geomfromtext('POINT (1 1)'))" \
     "GEOMETRYCOLLECTION (POINT (0 0), POINT (1 1))"
 t "col_union_agg_single" \
     "SELECT st_astext(st_union_agg(groupArray(wkb))) FROM (SELECT st_geomfromtext('POINT (3 7)') AS wkb)" \
