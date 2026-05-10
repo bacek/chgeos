@@ -2,11 +2,13 @@
 """Geospatial benchmark suite for ClickHouse.
 
 Usage:
-    python3 scripts/bench_sf.py [path/to/clickhouse] [sf1|sf10] [--native] [--settings "key=val, key2=val2"] [QUERY]
+    python3 scripts/bench_sf.py [path/to/clickhouse] [sf1|sf10] [--native] [--wire-protocol col|mp] [--settings "key=val, key2=val2"] [QUERY]
 
 SF (optional): scale factor — sf1 (default) or sf10.
 --native: read from native MergeTree tables (sf1.trip etc.) instead of parquet.
           Run scripts/import_sf.sh once beforehand to populate them.
+--wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default) or 'mp' (MsgPack, _mp suffix).
+        Appends _mp suffix to spatial function names when using 'mp'.
 --settings: comma-separated "key=value" pairs appended to SETTINGS clause of each query.
 QUERY (optional): run only the named query, e.g. Q1, Q7
 --json: write results to benchmark_results.json (JSON Lines, one BenchmarkSuite per line)
@@ -201,6 +203,49 @@ WITH
 ]
 
 # ---------------------------------------------------------------------------
+# Function suffix map for --path switching
+# ---------------------------------------------------------------------------
+
+# Spatial function names used in QUERIES (sorted longest-first to avoid
+# partial replacements like st_collect being turned into st_collect_mp_mp).
+_SPATIAL_FUNCS = sorted([
+    # predicates
+    "st_contains", "st_within", "st_intersects", "st_touches",
+    "st_dwithin", "st_overlaps", "st_crosses", "st_disjoint",
+    "st_containsproperly", "st_equals", "st_knn",
+    # accessors
+    "st_x", "st_y", "st_srid", "st_npoints",
+    "st_startpoint", "st_endpoint", "st_centroid",
+    # constructors / transforms
+    "st_geomfromtext", "st_geomfromgeojson", "st_geomfromwkb",
+    "st_geomfromchpoint", "st_geomfromchlinestring", "st_geomfromchpolygon",
+    "st_geomfromchmultipolygon",
+    "st_makeline", "st_convexhull", "st_intersection",
+    "st_expand", "st_makebox2d", "st_mbuffer", "st_distance",
+    # aggregates / other
+    "st_area", "st_length", "st_collect", "st_collect_agg",
+    "st_extent", "st_envelope", "st_asewkt", "st_astext",
+    "st_setsrid", "st_union_agg", "st_astext",
+    "st_asewkb", "st_asbinary",
+    # CH built-in geometry constructors used in queries
+    "st_point",
+])
+
+
+def _apply_suffix(sql: str, suffix: str) -> str:
+    """Append *suffix* (e.g. '_mp' or '_col') to every known function name.
+
+    Uses word-boundary matching so `st_collect` doesn't become
+    `st_collect_mp_mp`.  Order is longest-first to prioritise longer names.
+    """
+    if not suffix:
+        return sql
+    for fn in _SPATIAL_FUNCS:
+        sql = re.sub(rf'\b{fn}\b', f'{fn}{suffix}', sql)
+    return sql
+
+
+# ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
@@ -215,6 +260,7 @@ Usage:
 --ch: path to ClickHouse binary (default: clickhouse on PATH)
 --sf: scale factor — sf1 (default) or sf10
 --native: read from native MergeTree tables instead of parquet
+--wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default) or 'mp' (MsgPack, _mp suffix)
 --settings: extra SETTINGS appended to each query
 --query: run only this query (e.g. Q1, Q7)
 --queries: comma-separated queries (e.g. Q1,Q7)
@@ -228,6 +274,8 @@ Usage:
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("BENCH_TIMEOUT", 120)))
     parser.add_argument("--runs", type=int, default=int(os.environ.get("BENCH_RUNS", 5)))
     parser.add_argument("--native", action="store_true")
+    parser.add_argument("--wire-protocol", default="col", choices=["col", "mp"],
+                        help="Wire format: 'col' (COLUMNAR_V1, bare names, default) or 'mp' (MsgPack, _mp suffix)")
     parser.add_argument("--settings", default=None)
     parser.add_argument("--query", default=None,
                         help="Run only this query (e.g. Q1, Q7)")
@@ -328,6 +376,7 @@ def main():
     timeout = args.timeout
     extra_settings = args.settings
     query_filter = args.query
+    wire_protocol = args.wire_protocol
 
     # Parse --queries (comma-separated, Sedona-compatible)
     if args.queries:
@@ -367,7 +416,7 @@ def main():
 
     format_label = "native" if native else "parquet"
     print()
-    print(f"Scale factor: {sf}  format: {format_label}  ({runs} runs each)")
+    print(f"Scale factor: {sf}  format: {format_label}  wire-protocol: {wire_protocol}  ({runs} runs each)")
 
     # trip count
     result = subprocess.run(
@@ -396,9 +445,14 @@ def main():
         timed_out = False
 
         for i in range(runs):
+            # Build the query with table vars and wire-format suffix
+            tq = tpl.format(**{**table_vars, "FUEL": fuel, "FUEL5": fuel5})
+            suffix = "_mp" if wire_protocol == "mp" else ""
+            tq = _apply_suffix(tq, suffix)
+
             if i == 0:
                 # First run: capture rows
-                stdout, stderr, rc = run_query(ch, port, tpl.format(**{**table_vars, "FUEL": fuel, "FUEL5": fuel5}))
+                stdout, stderr, rc = run_query(ch, port, tq)
                 ms = extract_ms(stderr, timeout)
                 st = status_label(ms, rc, timeout)
 
@@ -418,7 +472,7 @@ def main():
                 times.append(ms)
             else:
                 # Subsequent runs: timing only
-                _, stderr, rc = run_query(ch, port, tpl.format(**{**table_vars, "FUEL": fuel, "FUEL5": fuel5}))
+                _, stderr, rc = run_query(ch, port, tq)
                 ms = extract_ms(stderr, timeout)
                 st = status_label(ms, rc, timeout)
 
@@ -454,6 +508,7 @@ def main():
             "engine": "chgeos",
             "version": git_sha,
             "scale_factor": float(sf.replace("sf", "")),
+            "wire_protocol": wire_protocol,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "total_time": round(sum(r["time_seconds"] for r in results if r["time_seconds"]), 2),
             "results": results,
