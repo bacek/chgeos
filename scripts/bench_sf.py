@@ -2,12 +2,12 @@
 """Geospatial benchmark suite for ClickHouse.
 
 Usage:
-    python3 scripts/bench_sf.py [path/to/clickhouse] [sf1|sf10] [--native] [--wire-protocol col|mp] [--settings "key=val, key2=val2"] [QUERY]
+    python3 scripts/bench_sf.py [path/to/clickhouse] [sf1|sf10] [--native] [--wire-protocol col|mp|buffers] [--settings "key=val, key2=val2"] [QUERY]
 
 SF (optional): scale factor — sf1 (default) or sf10.
 --native: read from native MergeTree tables (sf1.trip etc.) instead of parquet.
           Run scripts/import_sf.sh once beforehand to populate them.
---wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default) or 'mp' (MsgPack, _mp suffix).
+--wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp suffix), or 'buffers' (Buffers, _buffers suffix).
         Appends _mp suffix to spatial function names when using 'mp'.
 --settings: comma-separated "key=value" pairs appended to SETTINGS clause of each query.
 QUERY (optional): run only the named query, e.g. Q1, Q7
@@ -217,9 +217,6 @@ _SPATIAL_FUNCS = sorted([
     "st_x", "st_y", "st_srid", "st_npoints",
     "st_startpoint", "st_endpoint", "st_centroid",
     # constructors / transforms
-    "st_geomfromtext", "st_geomfromgeojson", "st_geomfromwkb",
-    "st_geomfromchpoint", "st_geomfromchlinestring", "st_geomfromchpolygon",
-    "st_geomfromchmultipolygon",
     "st_makeline", "st_convexhull", "st_intersection",
     "st_expand", "st_makebox2d", "st_mbuffer", "st_distance",
     # aggregates / other
@@ -260,7 +257,7 @@ Usage:
 --ch: path to ClickHouse binary (default: clickhouse on PATH)
 --sf: scale factor — sf1 (default) or sf10
 --native: read from native MergeTree tables instead of parquet
---wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default) or 'mp' (MsgPack, _mp suffix)
+--wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp suffix), or 'buffers' (Buffers, _buffers suffix)
 --settings: extra SETTINGS appended to each query
 --query: run only this query (e.g. Q1, Q7)
 --queries: comma-separated queries (e.g. Q1,Q7)
@@ -274,8 +271,8 @@ Usage:
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("BENCH_TIMEOUT", 120)))
     parser.add_argument("--runs", type=int, default=int(os.environ.get("BENCH_RUNS", 5)))
     parser.add_argument("--native", action="store_true")
-    parser.add_argument("--wire-protocol", default="col", choices=["col", "mp"],
-                        help="Wire format: 'col' (COLUMNAR_V1, bare names, default) or 'mp' (MsgPack, _mp suffix)")
+    parser.add_argument("--wire-protocol", default="col", choices=["col", "mp", "buffers"],
+                        help="Wire format: 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp suffix), or 'buffers' (Buffers, _buffers suffix)")
     parser.add_argument("--settings", default=None)
     parser.add_argument("--query", default=None,
                         help="Run only this query (e.g. Q1, Q7)")
@@ -447,7 +444,12 @@ def main():
         for i in range(runs):
             # Build the query with table vars and wire-format suffix
             tq = tpl.format(**{**table_vars, "FUEL": fuel, "FUEL5": fuel5})
-            suffix = "_mp" if wire_protocol == "mp" else ""
+            if wire_protocol == "mp":
+                suffix = "_mp"
+            elif wire_protocol == "buffers":
+                suffix = "_buffers"
+            else:
+                suffix = ""
             tq = _apply_suffix(tq, suffix)
 
             if i == 0:

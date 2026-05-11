@@ -17,6 +17,7 @@ add_executable(chgeos_tests
   test_processing.cpp
   test_rowbinary.cpp
   test_transforms.cpp
+  test_buffers.cpp
   ${CMAKE_SOURCE_DIR}/src/geom/wkb.cpp
   ${CMAKE_SOURCE_DIR}/src/mem.cpp
 )
