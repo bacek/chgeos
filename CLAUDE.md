@@ -12,13 +12,13 @@ ninja -C build                   # build + link chgeos_tests
 ctest --output-on-failure -C build  # run all 261 tests
 
 # WASM build (Emscripten, pre-configured in build_wasm/)
-ninja -C build_wasm              # produces build_wasm/bin/chgeos.wasm
+ninja -C build_wasm              # produces build_wasm/chgeos.wasm
 ```
 
 ClickHouse binary: `../ClickHouse/build/programs/clickhouse`
 (sibling directory, built from source)
 
-Inspect WASM exports: `wasm-tools dump build_wasm/bin/chgeos.wasm | grep <name>`
+Inspect WASM exports: `wasm-tools dump build_wasm/chgeos.wasm | grep <name>`
 
 LSP shows many false-positive errors for GEOS/CH headers — ignore them. The real compiler is always the source of truth.
 
@@ -44,27 +44,6 @@ Only needed when the **WASM binary changes** (`ninja -C build_wasm`). For pure C
 **Always run `restart_ch.sh` to completion before `reload.sh`** — reload requires a live CH instance.
 
 Use `scripts/reload.sh` (does all steps below automatically).
-
-Must drop all functions first — ClickHouse won't delete a module in use:
-
-```bash
-CH="../ClickHouse/build/programs/clickhouse"
-# 1. Drop all registered functions
-grep -oE "^CREATE OR REPLACE FUNCTION [a-z0-9_]+" clickhouse/create.sql \
-  | sed 's/CREATE OR REPLACE FUNCTION /DROP FUNCTION IF EXISTS /' \
-  | sed 's/$/ ;/' \
-  | $CH client --port 19000 --multiquery
-# 2. Delete module
-$CH client --port 19000 --query "DELETE FROM system.webassembly_modules WHERE name='chgeos'"
-# 3. Copy WASM to user_files and insert
-cp build_wasm/bin/chgeos.wasm tmp/data/user_files/chgeos.wasm
-$CH client --port 19000 --query \
-  "INSERT INTO system.webassembly_modules (name, code) VALUES ('chgeos', file('chgeos.wasm'))"
-# 4. Recreate all functions
-$CH client --port 19000 --multiquery < clickhouse/create.sql
-```
-
-Note: `system.webassembly_functions` does not exist. Use `system.functions WHERE origin != 'System'` to inspect registered UDFs.
 
 ## Building ClickHouse
 
@@ -120,18 +99,6 @@ python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf
 - `columnar_impl_wrapper(buf, n, fn_impl, ...)` — single generic template
 - Registered via `CH_UDF_COL` / `CH_UDF_COL_BBOX2` / `CH_UDF_COL_PRED3` macros
 
-### Function naming
-
-Each function can have up to three SQL names registered in `clickhouse/create.sql`:
-
-| Suffix | ABI | Example | Registered as |
-|--------|-----|---------|---------------|
-| `_mp` | MsgPack or RowBinary | `st_contains_mp` | direct WASM binding |
-| `_col` | COLUMNAR_V1 | `st_contains_col` | direct WASM binding |
-| *(none)* | SQL alias | `st_contains` | `AS (a, b) -> st_contains_col(a, b)` |
-
-Canonical (unsuffixed) aliases point to `_col` when available, `_mp` otherwise.
-Users call canonical names; suffixed names are available for explicit path selection.
 
 ### Source layout
 
