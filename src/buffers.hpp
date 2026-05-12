@@ -6,10 +6,6 @@
 //   num_rows (varint) | num_cols (varint)
 //   For each column:
 //     buffer_size (varint) | column_data (Native format binary)
-//
-// Native serialization properties:
-//   Fixed-width (UInt8-64, Int8-64, Float32/64): raw bytes, no prefix
-//   String: varint(len) + bytes + null terminator
 
 #include <algorithm>
 #include <array>
@@ -51,30 +47,9 @@ struct BuffersBuf {
     struct ColInfo {
         uint64_t buffer_size;
         const uint8_t* data;
+        bool is_const = false;
     };
     std::vector<ColInfo> cols;
-};
-
-// ── BuffersColView ─────────────────────────────────────────────────────────
-
-struct BuffersColView {
-    const uint8_t* data;
-    uint64_t buffer_size;
-    uint32_t row_count;
-
-    // Fixed-width: memcpy sizeof(T) per row.
-    template <typename T>
-    T get_fixed(uint32_t row) const noexcept {
-        T v;
-        std::memcpy(&v, data + row * sizeof(T), sizeof(T));
-        return v;
-    }
-
-    // String: varint(len) + bytes + null terminator per row.
-    std::span<const uint8_t> get_bytes(uint32_t row) const noexcept;
-
-    // True when every row has identical bytes. Used to trigger PreparedGeometry.
-    bool is_effectively_const() const noexcept;
 };
 
 // ── Varint helpers ────────────────────────────────────────────────────────────
@@ -101,7 +76,6 @@ static inline bool readVarUInt(const uint8_t* p, const uint8_t* end, uint64_t& r
     return false;
 }
 
-// Write a varint to a raw_buffer — minimal implementation matching CH's IO/VarInt.h.
 static inline void writeVarUInt(uint64_t n, raw_buffer& buf) {
     while (n >= 0x80) {
         buf.push_back(static_cast<uint8_t>((n & 0x7F) | 0x80));
@@ -110,13 +84,11 @@ static inline void writeVarUInt(uint64_t n, raw_buffer& buf) {
     buf.push_back(static_cast<uint8_t>(n));
 }
 
-// Write an 8-byte little-endian value (matches ClickHouse Buffers format).
 static inline void writeBinaryLE64(uint64_t n, raw_buffer& buf) {
     for (uint32_t i = 0; i < 8; ++i)
         buf.push_back(static_cast<uint8_t>(n >> (i * 8)));
 }
 
-// Read an 8-byte little-endian value from a buffer.
 static inline bool readBinaryLE64(const uint8_t*& p, const uint8_t* end, uint64_t& out) {
     if (p + 8 > end) return false;
     out = 0;
@@ -137,7 +109,9 @@ inline BuffersBuf parse_buffers(const raw_buffer* buf) {
     if (!readBinaryLE64(p, end, v)) return bb; bb.num_rows = static_cast<uint32_t>(v);
     for (uint32_t i = 0; i < bb.num_cols; ++i) {
         BuffersBuf::ColInfo ci;
-        if (!readBinaryLE64(p, end, v)) return bb; ci.buffer_size = static_cast<uint32_t>(v);
+        if (!readBinaryLE64(p, end, v)) return bb;
+        ci.is_const = (v & (1ULL << 63)) != 0;
+        ci.buffer_size = static_cast<uint32_t>(v & 0x7FFFFFFF);
         ci.data = p;
         bb.cols.push_back(ci);
         p = ci.data + ci.buffer_size;
@@ -145,45 +119,66 @@ inline BuffersBuf parse_buffers(const raw_buffer* buf) {
     return bb;
 }
 
-// ── BuffersColView methods ─────────────────────────────────────────────────
+// ── BuffersColReader: sequential access, O(1)/row ────────────────────────────
+// For non-const columns: advances through varint-encoded data one row at a time.
+// For const columns (is_const=true): always returns the same single-row data.
 
-inline std::span<const uint8_t> BuffersColView::get_bytes(uint32_t row) const noexcept {
-    const uint8_t* p = data;
-    const uint8_t* end = data + buffer_size;
-    for (uint32_t i = 0; i < row; ++i) {
-        uint64_t len;
-        if (!readVarUInt(p, end, len)) return {data, 0};
-        uint32_t varint_len = getLengthOfVarUInt(static_cast<uint32_t>(len));
-        p += varint_len + static_cast<uint32_t>(len);
-    }
-    uint64_t len;
-    if (!readVarUInt(p, end, len)) return {p, 0};
-    uint32_t varint_len = getLengthOfVarUInt(static_cast<uint32_t>(len));
-    return {p + varint_len, static_cast<uint32_t>(len)};
-}
+struct BuffersColReader {
+    mutable const uint8_t* p = nullptr;
+    const uint8_t* end = nullptr;
+    mutable uint32_t remaining = 0;
+    bool const_mode = false;
+    const uint8_t* const_data = nullptr;
+    uint32_t const_len = 0;
 
-inline bool BuffersColView::is_effectively_const() const noexcept {
-    if (row_count <= 1) return true;
-    const uint8_t* p = data;
-    const uint8_t* end = data + buffer_size;
-    uint64_t first_len;
-    if (!readVarUInt(p, end, first_len)) return false;
-    uint32_t first_varint_len = getLengthOfVarUInt(static_cast<uint32_t>(first_len));
-    uint32_t first_stride = first_varint_len + static_cast<uint32_t>(first_len);
-    if (first_stride == 0 || first_len > 1000000) return false;
-    const uint8_t* first_content = data + first_varint_len;
-    p += first_stride;
-    for (uint32_t i = 1; i < row_count; ++i) {
-        uint64_t len;
-        if (!readVarUInt(p, end, len)) return false;
-        uint32_t varint_len = getLengthOfVarUInt(static_cast<uint32_t>(len));
-        uint32_t stride = varint_len + static_cast<uint32_t>(len);
-        if (stride != first_stride) return false;
-        if (std::memcmp(p + varint_len, first_content, first_len) != 0) return false;
-        p += stride;
+    // Read exactly n bytes (fixed-size types: double, int32, etc.).
+    // In const mode always returns the same bytes.
+    std::span<const uint8_t> read(size_t n) const noexcept {
+        if (const_mode) {
+            if (n > const_len) return {};
+            return {const_data, n};
+        }
+        if (p + n > end) return {};
+        const uint8_t* start = p;
+        p += n;
+        return {start, n};
     }
-    return true;
-}
+
+    // Read a variable-length blob (Native: varint(len) + payload).
+    // In const mode strips the varint prefix; in non-const mode advances past it.
+    std::span<const uint8_t> read_blob() noexcept {
+        if (const_mode) {
+            uint64_t data_len = 0;
+            if (!readVarUInt(const_data, const_data + const_len, data_len)) return {};
+            uint32_t prefix = getLengthOfVarUInt(static_cast<uint32_t>(data_len));
+            if (static_cast<uint64_t>(prefix) + data_len > const_len) return {};
+            return {const_data + prefix, static_cast<size_t>(data_len)};
+        }
+        uint64_t data_len = 0;
+        if (!readVarUInt(p, end, data_len)) return {};
+        p += getLengthOfVarUInt(static_cast<uint32_t>(data_len));
+        if (p + data_len > end) return {};
+        const uint8_t* start = p;
+        p += data_len;
+        return {start, static_cast<size_t>(data_len)};
+    }
+
+    static BuffersColReader from_col(const BuffersBuf::ColInfo& ci, uint32_t row_count) {
+        BuffersColReader r;
+        if (ci.is_const && ci.buffer_size > 0) {
+            r.const_mode = true;
+            r.const_data = ci.data;
+            r.const_len  = static_cast<uint32_t>(ci.buffer_size);
+        } else {
+            r.p = ci.data;
+            r.end = ci.data + ci.buffer_size;
+            r.remaining = row_count;
+        }
+        return r;
+    }
+
+    bool done() const noexcept { return const_mode ? false : (remaining == 0); }
+};
 
 // ── pack_result: write a single result value into a raw_buffer ──────────────
 
@@ -207,10 +202,7 @@ static inline void pack_result(raw_buffer& buf, int32_t v) {
 }
 
 static inline void pack_result(raw_buffer& buf, std::unique_ptr<geos::geom::Geometry> g) {
-    if (!g) {
-        writeVarUInt(0u, buf);
-        return;
-    }
+    if (!g) { writeVarUInt(0u, buf); return; }
     auto wkb = write_ewkb(g);
     writeVarUInt(static_cast<uint64_t>(wkb.size()), buf);
     for (size_t i = 0; i < wkb.size(); ++i)
@@ -224,58 +216,88 @@ static inline void pack_result(raw_buffer& buf, std::string_view s) {
         buf.push_back(static_cast<uint8_t>(s[i]));
 }
 
-// ── arg getters for BuffersColView ──────────────────────────────────────────
+// ── unpack_arg: deserialize one argument from BuffersColReader ──────────────
+// Each specialization knows how many bytes to read and how to interpret them.
 
 template <typename T>
-T buf_get_arg(const BuffersColView& col, uint32_t row) {
-    if constexpr (std::is_same_v<T, std::span<const uint8_t>>) {
-        return col.get_bytes(row);
-    } else if constexpr (std::is_same_v<T, double>) {
-        T v;
-        std::memcpy(&v, col.data + row * sizeof(T), sizeof(T));
-        return v;
-    } else if constexpr (std::is_same_v<T, int32_t>) {
-        T v;
-        std::memcpy(&v, col.data + row * sizeof(T), sizeof(T));
-        return v;
-    } else if constexpr (std::is_same_v<T, uint32_t>) {
-        T v;
-        std::memcpy(&v, col.data + row * sizeof(T), sizeof(T));
-        return v;
-    } else if constexpr (std::is_same_v<T, std::string_view>) {
-        auto s = col.get_bytes(row);
-        return {reinterpret_cast<const char*>(s.data()), s.size()};
-    } else if constexpr (std::is_same_v<T, std::unique_ptr<geos::geom::Geometry>>) {
-        auto span = col.get_bytes(row);
-        return read_wkb(span);
-    } else {
-        T v;
-        std::memcpy(&v, col.data + row * sizeof(T), sizeof(T));
-        return v;
-    }
+T unpack_arg(BuffersColReader&);
+
+template <>
+inline double unpack_arg<double>(BuffersColReader& r) {
+    auto span = r.read(sizeof(double));
+    double v;
+    std::memcpy(&v, span.data(), sizeof(v));
+    return v;
+}
+
+template <>
+inline int32_t unpack_arg<int32_t>(BuffersColReader& r) {
+    auto span = r.read(sizeof(int32_t));
+    int32_t v;
+    std::memcpy(&v, span.data(), sizeof(v));
+    return v;
+}
+
+template <>
+inline uint32_t unpack_arg<uint32_t>(BuffersColReader& r) {
+    auto span = r.read(sizeof(uint32_t));
+    uint32_t v;
+    std::memcpy(&v, span.data(), sizeof(v));
+    return v;
+}
+
+template <>
+inline std::string_view unpack_arg<std::string_view>(BuffersColReader& r) {
+    auto span = r.read_blob();
+    return {reinterpret_cast<const char*>(span.data()), span.size()};
+}
+
+template <>
+inline std::span<const uint8_t> unpack_arg<std::span<const uint8_t>>(BuffersColReader& r) {
+    return r.read_blob();
+}
+
+template <>
+inline std::unique_ptr<geos::geom::Geometry> unpack_arg<std::unique_ptr<geos::geom::Geometry>>(BuffersColReader& r) {
+    auto span = r.read_blob();
+    if (span.empty()) return nullptr;
+    try { return ch::read_wkb(span); }
+    catch (...) { return ch::read_wkt(span); }
+}
+
+template <>
+inline geos::geom::Geometry* unpack_arg<geos::geom::Geometry*>(BuffersColReader& r) {
+    auto span = r.read_blob();
+    if (span.empty()) return nullptr;
+    try { return ch::read_wkb(span).release(); }
+    catch (...) { return ch::read_wkt(span).release(); }
+}
+
+template <>
+inline geos::geom::Geometry const* unpack_arg<geos::geom::Geometry const*>(BuffersColReader& r) {
+    return unpack_arg<geos::geom::Geometry*>(r);
 }
 
 // ── buffers_impl_worker: return-type dispatch ────────────────────────────────
-// Primary template: simple loop (double, int32_t, unique_ptr<Geometry>, string)
-// bool specialization: PreparedGeometry optimizations for const-col paths.
 
 template <typename Ret, size_t N, typename Invoke>
 struct buffers_impl_worker {
-    static void run(raw_buffer& out, uint32_t n, Invoke& invoke,
-                    const std::array<BuffersColView, N>&,
+    static void run(raw_buffer& out, uint32_t n, const char* func_name, Invoke& invoke,
+                    std::array<BuffersColReader, N>&,
                     BboxOp, bool,
                     ColPrepOp, ColPrepOp,
                     ColPrepDistOp, ColPrepDistOp,
                     ColPrepPointOp, ColPrepPointOp) {
+        log(std::format("{}: Primary template ({}), n={}", func_name, typeid(Ret).name(), n));
         for (uint32_t i = 0; i < n; ++i)
-            pack_result(out, invoke(i));
+            pack_result(out, invoke());
     }
 };
 
 template <size_t N, typename Invoke>
 struct buffers_impl_worker<bool, N, Invoke> {
-    static void run(raw_buffer& out, uint32_t n, Invoke& invoke,
-                    const std::array<BuffersColView, N>& cols,
+    static void run(raw_buffer& out, uint32_t n, const char* func_name, Invoke& invoke,
+                    std::array<BuffersColReader, N>& readers,
                     BboxOp bbox_op, bool early_ret,
                     ColPrepOp prep_a, ColPrepOp prep_b,
                     ColPrepDistOp prep_a_dist, ColPrepDistOp prep_b_dist,
@@ -284,18 +306,19 @@ struct buffers_impl_worker<bool, N, Invoke> {
         using PGF = geos::geom::prep::PreparedGeometryFactory;
 
         // ── A-const path ────────────────────────────────────────────────────
-        if (cols[0].is_effectively_const() && prep_a && n > 0) {
-            if (cols[0].get_bytes(0).empty() && n > 1) {
+        if (readers[0].const_mode && prep_a && n > 0) {
+            log(std::format("{}: A-const path, n={}", func_name, n));
+            auto span_a = unpack_arg<std::span<const uint8_t>>(readers[0]);
+            if (span_a.empty() && n > 1) {
                 for (uint32_t i = 0; i < n; ++i)
                     pack_result(out, false);
             } else {
-                auto span_a = cols[0].get_bytes(0);
                 BBox bbox_a = wkb_bbox(span_a);
                 auto geom_a = read_wkb(span_a);
                 auto pa = PGF::prepare(geom_a.get());
 
                 if (prep_a_point) {
-                    auto s1 = cols[1].get_bytes(0);
+                    auto s1 = readers[1].read_blob();
                     uint32_t pt_type = 0;
                     if (s1.size() == 21 && s1[0] == 0x01)
                         std::memcpy(&pt_type, s1.data() + 1, 4);
@@ -306,7 +329,7 @@ struct buffers_impl_worker<bool, N, Invoke> {
                         using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
                         IPIAL locator(*geom_a);
                         for (uint32_t i = 0; i < n; ++i) {
-                            auto span_b = cols[1].get_bytes(i);
+                            auto span_b = readers[1].read_blob();
                             double px, py;
                             std::memcpy(&px, span_b.data() + 5, 8);
                             std::memcpy(&py, span_b.data() + 13, 8);
@@ -317,7 +340,7 @@ struct buffers_impl_worker<bool, N, Invoke> {
                         }
                     } else {
                         for (uint32_t i = 0; i < n; ++i) {
-                            auto span_b = cols[1].get_bytes(i);
+                            auto span_b = readers[1].read_blob();
                             if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
                                 pack_result(out, early_ret); continue;
                             }
@@ -326,7 +349,7 @@ struct buffers_impl_worker<bool, N, Invoke> {
                     }
                 } else {
                     for (uint32_t i = 0; i < n; ++i) {
-                        auto span_b = cols[1].get_bytes(i);
+                        auto span_b = readers[1].read_blob();
                         if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
                             pack_result(out, early_ret); continue;
                         }
@@ -338,14 +361,15 @@ struct buffers_impl_worker<bool, N, Invoke> {
         }
 
         // ── B-const path ────────────────────────────────────────────────────
-        if (cols[1].is_effectively_const() && prep_b && n > 0) {
-            auto span_b = cols[1].get_bytes(0);
+        if (readers[1].const_mode && prep_b && n > 0) {
+            log(std::format("{}: B-const path, n={}", func_name, n));
+            auto span_b = unpack_arg<std::span<const uint8_t>>(readers[1]);
             BBox bbox_b = wkb_bbox(span_b);
             auto geom_b = read_wkb(span_b);
             auto pb = PGF::prepare(geom_b.get());
 
             if (prep_b_point) {
-                auto s0 = cols[0].get_bytes(0);
+                auto s0 = readers[0].read_blob();
                 uint32_t pt_type = 0;
                 if (s0.size() == 21 && s0[0] == 0x01)
                     std::memcpy(&pt_type, s0.data() + 1, 4);
@@ -356,7 +380,7 @@ struct buffers_impl_worker<bool, N, Invoke> {
                     using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
                     IPIAL locator(*geom_b);
                     for (uint32_t i = 0; i < n; ++i) {
-                        auto span_a = cols[0].get_bytes(i);
+                        auto span_a = readers[0].read_blob();
                         double px, py;
                         std::memcpy(&px, span_a.data() + 5, 8);
                         std::memcpy(&py, span_a.data() + 13, 8);
@@ -367,7 +391,7 @@ struct buffers_impl_worker<bool, N, Invoke> {
                     }
                 } else {
                     for (uint32_t i = 0; i < n; ++i) {
-                        auto span_a = cols[0].get_bytes(i);
+                        auto span_a = readers[0].read_blob();
                         if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
                             pack_result(out, early_ret); continue;
                         }
@@ -376,7 +400,7 @@ struct buffers_impl_worker<bool, N, Invoke> {
                 }
             } else {
                 for (uint32_t i = 0; i < n; ++i) {
-                    auto span_a = cols[0].get_bytes(i);
+                    auto span_a = readers[0].read_blob();
                     if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
                         pack_result(out, early_ret); continue;
                     }
@@ -388,14 +412,15 @@ struct buffers_impl_worker<bool, N, Invoke> {
 
         // ── 3-arg dist path (st_dwithin) ────────────────────────────────────
         if constexpr (N >= 3) {
-            if (cols[0].is_effectively_const() && prep_a_dist && n > 0) {
-                auto span_a = cols[0].get_bytes(0);
+            if (readers[0].const_mode && prep_a_dist && n > 0) {
+                log(std::format("{}: A-const dist path, n={}", func_name, n));
+                auto span_a = unpack_arg<std::span<const uint8_t>>(readers[0]);
                 BBox bbox_a = wkb_bbox(span_a);
                 auto geom_a = read_wkb(span_a);
                 auto pa = PGF::prepare(geom_a.get());
                 for (uint32_t i = 0; i < n; ++i) {
-                    auto span_b = cols[1].get_bytes(i);
-                    double dist = buf_get_arg<double>(cols[2], i);
+                    auto span_b = readers[1].read_blob();
+                    double dist = unpack_arg<double>(readers[2]);
                     if (!bbox_a.intersects(wkb_bbox(span_b).expanded(dist))) {
                         pack_result(out, false); continue;
                     }
@@ -403,14 +428,15 @@ struct buffers_impl_worker<bool, N, Invoke> {
                 }
                 return;
             }
-            if (cols[1].is_effectively_const() && prep_b_dist && n > 0) {
-                auto span_b = cols[1].get_bytes(0);
+            if (readers[1].const_mode && prep_b_dist && n > 0) {
+                log(std::format("{}: B-const dist path, n={}", func_name, n));
+                auto span_b = unpack_arg<std::span<const uint8_t>>(readers[1]);
                 BBox bbox_b = wkb_bbox(span_b);
                 auto geom_b = read_wkb(span_b);
                 auto pb = PGF::prepare(geom_b.get());
                 for (uint32_t i = 0; i < n; ++i) {
-                    auto span_a = cols[0].get_bytes(i);
-                    double dist = buf_get_arg<double>(cols[2], i);
+                    auto span_a = readers[0].read_blob();
+                    double dist = unpack_arg<double>(readers[2]);
                     if (!wkb_bbox(span_a).intersects(bbox_b.expanded(dist))) {
                         pack_result(out, false); continue;
                     }
@@ -421,55 +447,44 @@ struct buffers_impl_worker<bool, N, Invoke> {
         }
 
         // ── Fallback ────────────────────────────────────────────────────────
-        for (uint32_t i = 0; i < n; ++i) {
-            if (bbox_op &&
-                !bbox_op(wkb_bbox(cols[0].get_bytes(i)),
-                         wkb_bbox(cols[1].get_bytes(i)))) {
-                pack_result(out, early_ret); continue;
-            }
-            pack_result(out, invoke(i));
-        }
+        log(std::format("{}: Fallback path, n={}", func_name, n));
+        for (uint32_t i = 0; i < n; ++i)
+            pack_result(out, invoke());
     }
 };
 
 // ── buffers_impl_wrapper ────────────────────────────────────────────────────
-// Single-column Buffers output: header (num_cols=1, num_rows, result_size=0)
-// then results packed via pack_result(), then result_size updated in-place.
 
 template <typename Ret, typename... Args>
-raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
-                                 uint32_t num_rows,
-                                 Ret (*impl)(Args...),
-                                 BboxOp         bbox_op      = nullptr,
-                                 bool           early_ret    = false,
-                                 ColPrepOp      prep_a       = nullptr,
-                                 ColPrepOp      prep_b       = nullptr,
-                                 ColPrepDistOp  prep_a_dist  = nullptr,
-                                 ColPrepDistOp  prep_b_dist  = nullptr,
-                                 ColPrepPointOp prep_a_point = nullptr,
-                                 ColPrepPointOp prep_b_point = nullptr)
+raw_buffer* buffers_impl_wrapper(const char* func_name,
+                                   raw_buffer* ptr,
+                                   uint32_t num_rows,
+                                   Ret (*impl)(Args...),
+                                   BboxOp         bbox_op      = nullptr,
+                                   bool           early_ret    = false,
+                                   ColPrepOp      prep_a       = nullptr,
+                                   ColPrepOp      prep_b       = nullptr,
+                                   ColPrepDistOp  prep_a_dist  = nullptr,
+                                   ColPrepDistOp  prep_b_dist  = nullptr,
+                                   ColPrepPointOp prep_a_point = nullptr,
+                                   ColPrepPointOp prep_b_point = nullptr)
 {
     auto bb = parse_buffers(ptr);
     uint32_t n = bb.num_rows;
     constexpr size_t nargs = sizeof...(Args);
 
-    std::array<BuffersColView, nargs> cols;
+    log(std::format("{}: Executing {}/{}", func_name, bb.num_cols, bb.num_rows));
+
+    std::array<BuffersColReader, nargs> readers;
     for (size_t j = 0; j < nargs; ++j) {
-        BuffersColView cv;
-        if (j < bb.cols.size()) {
-            cv.data = bb.cols[j].data;
-            cv.buffer_size = bb.cols[j].buffer_size;
-        } else {
-            cv.data = nullptr;
-            cv.buffer_size = 0;
-        }
-        cv.row_count = n;
-        cols[j] = cv;
+        if (j < bb.cols.size())
+            readers[j] = BuffersColReader::from_col(bb.cols[j], n);
     }
 
-    auto invoke = [&](uint32_t row) {
+    // Invoke lambda: dispatches to unpack_arg<T> for each argument
+    auto invoke = [&readers, impl]() {
         return [&]<size_t... I>(std::index_sequence<I...>) {
-            return impl(buf_get_arg<std::decay_t<Args>>(cols[I], row)...);
+            return impl(unpack_arg<std::decay_t<Args>>(readers[I])...);
         }(std::make_index_sequence<nargs>{});
     };
 
@@ -479,10 +494,10 @@ raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
         out->clear();
         writeBinaryLE64(1u, *out);
         writeBinaryLE64(static_cast<uint64_t>(n), *out);
-        writeBinaryLE64(0u, *out);  // placeholder, updated at end
+        writeBinaryLE64(0u, *out);
 
         buffers_impl_worker<Ret, nargs, decltype(invoke)>::run(
-            *out, n, invoke, cols,
+            *out, n, func_name, invoke, readers,
             bbox_op, early_ret,
             prep_a, prep_b, prep_a_dist, prep_b_dist,
             prep_a_point, prep_b_point);
@@ -492,6 +507,7 @@ raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
         for (uint32_t i = 0; i < 8; ++i)
             *(size_ptr + i) = static_cast<uint8_t>(result_size >> (i * 8));
 
+        log(std::format("{}: Done, {} bytes output", func_name, result_size));
         return out;
 
     } catch (const std::exception& e) {
@@ -508,7 +524,7 @@ raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
     __attribute__((export_name(#name "_buffers")))                               \
     ch::raw_buffer * name##_buffers(ch::raw_buffer * ptr,                        \
                                     uint32_t num_rows) {                         \
-        return ch::buffers_impl_wrapper(ptr, num_rows, ch::name##_impl,          \
+        return ch::buffers_impl_wrapper(#name, ptr, num_rows, ch::name##_impl,   \
             ch::bbox_op, early_ret, ch::prep_a_##name, ch::prep_b_##name,        \
             nullptr, nullptr,                                                    \
             ch::prep_a_pt_##name, ch::prep_b_pt_##name);                         \
@@ -518,7 +534,7 @@ raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
     __attribute__((export_name(#name "_buffers")))                               \
     ch::raw_buffer * name##_buffers(ch::raw_buffer * ptr,                        \
                                     uint32_t num_rows) {                         \
-        return ch::buffers_impl_wrapper(ptr, num_rows, ch::name##_impl,          \
+        return ch::buffers_impl_wrapper(#name, ptr, num_rows, ch::name##_impl,   \
             ch::bbox_op, early_ret, ch::prep_a_##name, ch::prep_b_##name);       \
     }
 
@@ -526,7 +542,7 @@ raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
     __attribute__((export_name(#name "_buffers")))                               \
     ch::raw_buffer * name##_buffers(ch::raw_buffer * ptr,                        \
                                     uint32_t num_rows) {                         \
-        return ch::buffers_impl_wrapper(ptr, num_rows, ch::name##_impl,          \
+        return ch::buffers_impl_wrapper(#name, ptr, num_rows, ch::name##_impl,   \
             nullptr, false, nullptr, nullptr,                                    \
             ch::prep_a_##name, ch::prep_b_##name);                               \
     }
@@ -535,6 +551,5 @@ raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
     __attribute__((export_name(#name "_buffers")))                               \
     ch::raw_buffer * name##_buffers(ch::raw_buffer * ptr,                        \
                                     uint32_t num_rows) {                         \
-        return ch::buffers_impl_wrapper(ptr, num_rows, ch::name##_impl);         \
+        return ch::buffers_impl_wrapper(#name, ptr, num_rows, ch::name##_impl);  \
     }
-
