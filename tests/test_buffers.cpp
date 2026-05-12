@@ -400,6 +400,60 @@ TEST(BuffersOut, MultiCol) {
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
 }
 
+// ── buffers_impl_wrapper: bool return header format ──────────────────────────
+
+TEST(BuffersImpl, BoolHeaderOrder) {
+    // Verify the bool output header writes num_cols BEFORE num_rows.
+    // This matches parse_buffers() expectations and BuffersOut::finalize().
+    const uint32_t n = 5;
+    auto poly = wkt2wkb("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))");
+    auto pt   = wkt2wkb("POINT (0.5 0.5)");
+
+    std::vector<uint8_t> col0_data, col1_data;
+    auto write_geom = [&](const ch::Vector& wkb, std::vector<uint8_t>& out) {
+        uint32_t len = static_cast<uint32_t>(wkb.size());
+        raw_buffer* vb = clickhouse_create_buffer(0);
+        vb->clear();
+        writeVarUInt(len, *vb);
+        vb->append(wkb.data(), len);
+        out.insert(out.end(), vb->data(), vb->data() + vb->size());
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
+    };
+    for (uint32_t i = 0; i < n; ++i) {
+        write_geom(poly, col0_data);
+        write_geom(pt, col1_data);
+    }
+
+    auto* buf = make_buffers_buf(n, 2, {col0_data, col1_data});
+    auto* result = buffers_impl_wrapper(buf, n, st_contains_impl,
+        bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+
+    // Parse the output header manually to verify field ordering.
+    const uint8_t* p = result->data();
+    uint64_t v;
+
+    // First field must be num_cols = 1 (not num_rows).
+    EXPECT_TRUE(readBinaryLE64(p, p + result->size(), v));
+    EXPECT_EQ(v, 1ULL) << "First header field must be num_cols=1";
+
+    // Second field must be num_rows = n.
+    EXPECT_TRUE(readBinaryLE64(p, p + result->size(), v));
+    EXPECT_EQ(v, static_cast<uint64_t>(n)) << "Second header field must be num_rows=n";
+
+    // Third field is buffer_size = n.
+    EXPECT_TRUE(readBinaryLE64(p, p + result->size(), v));
+    EXPECT_EQ(v, static_cast<uint64_t>(n)) << "Third header field must be buffer_size=n";
+
+    auto bb = parse_buffers(const_cast<const raw_buffer*>(result));
+    EXPECT_EQ(bb.num_cols, 1u);
+    EXPECT_EQ(bb.num_rows, n);
+    for (uint32_t i = 0; i < n; ++i)
+        EXPECT_EQ(bb.cols[0].data[i], 1u);
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
+}
+
 // ── buffers_impl_wrapper: bool return with bbox + PreparedGeometry ────────────
 
 // Build a Buffers-format input buffer for geometry predicates.

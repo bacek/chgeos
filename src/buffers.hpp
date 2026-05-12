@@ -16,6 +16,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <format>
 #include <span>
 #include <string>
 #include <string_view>
@@ -28,6 +29,8 @@
 #include "geom/wkb.hpp"
 #include "geom/wkb_envelope.hpp"
 #include "mem.hpp"
+
+#include <geos/geom/prep/PreparedGeometryFactory.h>
 
 namespace ch {
 
@@ -182,77 +185,44 @@ inline bool BuffersColView::is_effectively_const() const noexcept {
     return true;
 }
 
-// ── Buffers output collector ──────────────────────────────────────────────
+// ── pack_result: write a single result value into a raw_buffer ──────────────
 
-struct BuffersOut {
-    std::vector<raw_buffer*> col_data;
-    uint32_t current_col = 0;
+static inline void pack_result(raw_buffer& buf, bool v) {
+    uint8_t byte = v ? 1u : 0u;
+    buf.push_back(byte);
+}
 
-    void init(uint32_t num_cols) {
-        current_col = 0;
-        col_data.reserve(num_cols);
-        for (uint32_t i = 0; i < num_cols; ++i)
-            col_data.push_back(clickhouse_create_buffer(0));
+static inline void pack_result(raw_buffer& buf, double v) {
+    uint8_t bytes[8];
+    std::memcpy(bytes, &v, 8);
+    for (uint32_t i = 0; i < 8; ++i)
+        buf.push_back(bytes[i]);
+}
+
+static inline void pack_result(raw_buffer& buf, int32_t v) {
+    uint8_t bytes[4];
+    std::memcpy(bytes, &v, 4);
+    for (uint32_t i = 0; i < 4; ++i)
+        buf.push_back(bytes[i]);
+}
+
+static inline void pack_result(raw_buffer& buf, std::unique_ptr<geos::geom::Geometry> g) {
+    if (!g) {
+        writeVarUInt(0u, buf);
+        return;
     }
+    auto wkb = write_ewkb(g);
+    writeVarUInt(static_cast<uint64_t>(wkb.size()), buf);
+    for (size_t i = 0; i < wkb.size(); ++i)
+        buf.push_back(wkb[i]);
+}
 
-    void set_col(uint32_t col) { current_col = col; }
-
-    void push_fixed(const uint8_t* data, uint32_t size) {
-        raw_buffer* buf = col_data[current_col];
-        for (uint32_t i = 0; i < size; ++i)
-            buf->push_back(data[i]);
-    }
-
-    void push_native_string(std::span<const uint8_t> bytes) {
-        uint32_t len = static_cast<uint32_t>(bytes.size());
-        raw_buffer* buf = col_data[current_col];
-        writeVarUInt(len, *buf);
-        for (uint32_t i = 0; i < len; ++i)
-            buf->push_back(bytes[i]);
-    }
-
-    void push_native_string_null() {
-        raw_buffer* buf = col_data[current_col];
-        writeVarUInt(0u, *buf);
-    }
-
-    void push_geometry(std::unique_ptr<geos::geom::Geometry> g) {
-        if (!g) { push_native_string_null(); return; }
-        auto wkb = write_ewkb(g);
-        raw_buffer* buf = col_data[current_col];
-        writeVarUInt(static_cast<uint64_t>(wkb.size()), *buf);
-        for (size_t i = 0; i < wkb.size(); ++i)
-            buf->push_back(wkb[i]);
-    }
-
-    void push_string(std::string_view s) {
-        uint32_t len = static_cast<uint32_t>(s.size());
-        raw_buffer* buf = col_data[current_col];
-        writeVarUInt(static_cast<uint64_t>(len), *buf);
-        for (uint32_t i = 0; i < len; ++i)
-            buf->push_back(static_cast<uint8_t>(s[i]));
-    }
-
-    raw_buffer* finalize(uint32_t num_rows, uint32_t num_cols) {
-        raw_buffer* out = clickhouse_create_buffer(0);
-        out->clear();
-        writeBinaryLE64(static_cast<uint64_t>(num_cols), *out);
-        writeBinaryLE64(static_cast<uint64_t>(num_rows), *out);
-        for (uint32_t i = 0; i < num_cols; ++i) {
-            writeBinaryLE64(static_cast<uint64_t>(col_data[i]->size()), *out);
-            for (size_t j = 0; j < col_data[i]->size(); ++j)
-                out->push_back((*col_data[i])[j]);
-            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_data[i]));
-            col_data[i] = nullptr;
-        }
-        return out;
-    }
-
-    ~BuffersOut() {
-        for (auto* buf : col_data)
-            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-    }
-};
+static inline void pack_result(raw_buffer& buf, std::string_view s) {
+    uint32_t len = static_cast<uint32_t>(s.size());
+    writeVarUInt(static_cast<uint64_t>(len), buf);
+    for (uint32_t i = 0; i < len; ++i)
+        buf.push_back(static_cast<uint8_t>(s[i]));
+}
 
 // ── arg getters for BuffersColView ──────────────────────────────────────────
 
@@ -285,12 +255,187 @@ T buf_get_arg(const BuffersColView& col, uint32_t row) {
     }
 }
 
-// ── buffers_impl_wrapper ────────────────────────────────────────────────────
-// Full implementation mirroring columnar_impl_wrapper with same optimization paths.
-// Uses BuffersColView for input parsing (varint strings instead of offset-based).
+// ── buffers_impl_worker: return-type dispatch ────────────────────────────────
+// Primary template: simple loop (double, int32_t, unique_ptr<Geometry>, string)
+// bool specialization: PreparedGeometry optimizations for const-col paths.
 
-// Deduction helper: takes the function pointer as a template parameter so
-// Ret and Args... are deduced from the template argument, not the value.
+template <typename Ret, size_t N, typename Invoke>
+struct buffers_impl_worker {
+    static void run(raw_buffer& out, uint32_t n, Invoke& invoke,
+                    const std::array<BuffersColView, N>&,
+                    BboxOp, bool,
+                    ColPrepOp, ColPrepOp,
+                    ColPrepDistOp, ColPrepDistOp,
+                    ColPrepPointOp, ColPrepPointOp) {
+        for (uint32_t i = 0; i < n; ++i)
+            pack_result(out, invoke(i));
+    }
+};
+
+template <size_t N, typename Invoke>
+struct buffers_impl_worker<bool, N, Invoke> {
+    static void run(raw_buffer& out, uint32_t n, Invoke& invoke,
+                    const std::array<BuffersColView, N>& cols,
+                    BboxOp bbox_op, bool early_ret,
+                    ColPrepOp prep_a, ColPrepOp prep_b,
+                    ColPrepDistOp prep_a_dist, ColPrepDistOp prep_b_dist,
+                    ColPrepPointOp prep_a_point, ColPrepPointOp prep_b_point)
+    {
+        using PGF = geos::geom::prep::PreparedGeometryFactory;
+
+        // ── A-const path ────────────────────────────────────────────────────
+        if (cols[0].is_effectively_const() && prep_a && n > 0) {
+            if (cols[0].get_bytes(0).empty() && n > 1) {
+                for (uint32_t i = 0; i < n; ++i)
+                    pack_result(out, false);
+            } else {
+                auto span_a = cols[0].get_bytes(0);
+                BBox bbox_a = wkb_bbox(span_a);
+                auto geom_a = read_wkb(span_a);
+                auto pa = PGF::prepare(geom_a.get());
+
+                if (prep_a_point) {
+                    auto s1 = cols[1].get_bytes(0);
+                    uint32_t pt_type = 0;
+                    if (s1.size() == 21 && s1[0] == 0x01)
+                        std::memcpy(&pt_type, s1.data() + 1, 4);
+                    auto gtype = geom_a->getGeometryTypeId();
+                    if (pt_type == 1u &&
+                        (gtype == geos::geom::GEOS_POLYGON ||
+                         gtype == geos::geom::GEOS_MULTIPOLYGON)) {
+                        using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
+                        IPIAL locator(*geom_a);
+                        for (uint32_t i = 0; i < n; ++i) {
+                            auto span_b = cols[1].get_bytes(i);
+                            double px, py;
+                            std::memcpy(&px, span_b.data() + 5, 8);
+                            std::memcpy(&py, span_b.data() + 13, 8);
+                            if (bbox_op && !bbox_op(bbox_a, BBox{px, py, px, py})) {
+                                pack_result(out, early_ret); continue;
+                            }
+                            pack_result(out, prep_a_point(&locator, px, py));
+                        }
+                    } else {
+                        for (uint32_t i = 0; i < n; ++i) {
+                            auto span_b = cols[1].get_bytes(i);
+                            if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
+                                pack_result(out, early_ret); continue;
+                            }
+                            pack_result(out, prep_a(pa.get(), read_wkb(span_b).get()));
+                        }
+                    }
+                } else {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        auto span_b = cols[1].get_bytes(i);
+                        if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
+                            pack_result(out, early_ret); continue;
+                        }
+                        pack_result(out, prep_a(pa.get(), read_wkb(span_b).get()));
+                    }
+                }
+            }
+            return;
+        }
+
+        // ── B-const path ────────────────────────────────────────────────────
+        if (cols[1].is_effectively_const() && prep_b && n > 0) {
+            auto span_b = cols[1].get_bytes(0);
+            BBox bbox_b = wkb_bbox(span_b);
+            auto geom_b = read_wkb(span_b);
+            auto pb = PGF::prepare(geom_b.get());
+
+            if (prep_b_point) {
+                auto s0 = cols[0].get_bytes(0);
+                uint32_t pt_type = 0;
+                if (s0.size() == 21 && s0[0] == 0x01)
+                    std::memcpy(&pt_type, s0.data() + 1, 4);
+                auto gtype = geom_b->getGeometryTypeId();
+                if (pt_type == 1u &&
+                    (gtype == geos::geom::GEOS_POLYGON ||
+                     gtype == geos::geom::GEOS_MULTIPOLYGON)) {
+                    using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
+                    IPIAL locator(*geom_b);
+                    for (uint32_t i = 0; i < n; ++i) {
+                        auto span_a = cols[0].get_bytes(i);
+                        double px, py;
+                        std::memcpy(&px, span_a.data() + 5, 8);
+                        std::memcpy(&py, span_a.data() + 13, 8);
+                        if (bbox_op && !bbox_op(BBox{px, py, px, py}, bbox_b)) {
+                            pack_result(out, early_ret); continue;
+                        }
+                        pack_result(out, prep_b_point(&locator, px, py));
+                    }
+                } else {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        auto span_a = cols[0].get_bytes(i);
+                        if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
+                            pack_result(out, early_ret); continue;
+                        }
+                        pack_result(out, prep_b(pb.get(), read_wkb(span_a).get()));
+                    }
+                }
+            } else {
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto span_a = cols[0].get_bytes(i);
+                    if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
+                        pack_result(out, early_ret); continue;
+                    }
+                    pack_result(out, prep_b(pb.get(), read_wkb(span_a).get()));
+                }
+            }
+            return;
+        }
+
+        // ── 3-arg dist path (st_dwithin) ────────────────────────────────────
+        if constexpr (N >= 3) {
+            if (cols[0].is_effectively_const() && prep_a_dist && n > 0) {
+                auto span_a = cols[0].get_bytes(0);
+                BBox bbox_a = wkb_bbox(span_a);
+                auto geom_a = read_wkb(span_a);
+                auto pa = PGF::prepare(geom_a.get());
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto span_b = cols[1].get_bytes(i);
+                    double dist = buf_get_arg<double>(cols[2], i);
+                    if (!bbox_a.intersects(wkb_bbox(span_b).expanded(dist))) {
+                        pack_result(out, false); continue;
+                    }
+                    pack_result(out, prep_a_dist(pa.get(), read_wkb(span_b).get(), dist));
+                }
+                return;
+            }
+            if (cols[1].is_effectively_const() && prep_b_dist && n > 0) {
+                auto span_b = cols[1].get_bytes(0);
+                BBox bbox_b = wkb_bbox(span_b);
+                auto geom_b = read_wkb(span_b);
+                auto pb = PGF::prepare(geom_b.get());
+                for (uint32_t i = 0; i < n; ++i) {
+                    auto span_a = cols[0].get_bytes(i);
+                    double dist = buf_get_arg<double>(cols[2], i);
+                    if (!wkb_bbox(span_a).intersects(bbox_b.expanded(dist))) {
+                        pack_result(out, false); continue;
+                    }
+                    pack_result(out, prep_b_dist(pb.get(), read_wkb(span_a).get(), dist));
+                }
+                return;
+            }
+        }
+
+        // ── Fallback ────────────────────────────────────────────────────────
+        for (uint32_t i = 0; i < n; ++i) {
+            if (bbox_op &&
+                !bbox_op(wkb_bbox(cols[0].get_bytes(i)),
+                         wkb_bbox(cols[1].get_bytes(i)))) {
+                pack_result(out, early_ret); continue;
+            }
+            pack_result(out, invoke(i));
+        }
+    }
+};
+
+// ── buffers_impl_wrapper ────────────────────────────────────────────────────
+// Single-column Buffers output: header (num_cols=1, num_rows, result_size=0)
+// then results packed via pack_result(), then result_size updated in-place.
+
 template <typename Ret, typename... Args>
 raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
                                  uint32_t num_rows,
@@ -304,8 +449,6 @@ raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
                                  ColPrepPointOp prep_a_point = nullptr,
                                  ColPrepPointOp prep_b_point = nullptr)
 {
-    using PGF = geos::geom::prep::PreparedGeometryFactory;
-
     auto bb = parse_buffers(ptr);
     uint32_t n = bb.num_rows;
     constexpr size_t nargs = sizeof...(Args);
@@ -332,180 +475,24 @@ raw_buffer* buffers_impl_wrapper(raw_buffer* ptr,
 
     raw_buffer* out = nullptr;
     try {
-        if constexpr (std::is_same_v<Ret, bool>) {
-            size_t data_size = n;
-            size_t total = 24 + data_size;  // 3×UInt64 LE headers + result data
+        out = clickhouse_create_buffer(24);
+        out->clear();
+        writeBinaryLE64(1u, *out);
+        writeBinaryLE64(static_cast<uint64_t>(n), *out);
+        writeBinaryLE64(0u, *out);  // placeholder, updated at end
 
-            out = clickhouse_create_buffer(total);
-            out->clear();
-            writeBinaryLE64(static_cast<uint64_t>(n), *out);
-            writeBinaryLE64(1u, *out);
-            writeBinaryLE64(data_size, *out);
-            uint8_t* res = out->data() + out->size();
+        buffers_impl_worker<Ret, nargs, decltype(invoke)>::run(
+            *out, n, invoke, cols,
+            bbox_op, early_ret,
+            prep_a, prep_b, prep_a_dist, prep_b_dist,
+            prep_a_point, prep_b_point);
 
-            if (cols[0].is_effectively_const() && prep_a && n > 0) {
-                if (cols[0].get_bytes(0).empty() && n > 1) {
-                    std::fill(res, res + n, 0u);
-                    return out;
-                }
-                auto span_a = cols[0].get_bytes(0);
-                BBox bbox_a = wkb_bbox(span_a);
-                auto geom_a = read_wkb(span_a);
-                auto pa = PGF::prepare(geom_a.get());
+        size_t result_size = out->size() - 24;
+        uint8_t* size_ptr = out->data() + 16;
+        for (uint32_t i = 0; i < 8; ++i)
+            *(size_ptr + i) = static_cast<uint8_t>(result_size >> (i * 8));
 
-                if (prep_a_point && n > 0) {
-                    auto s1 = cols[1].get_bytes(0);
-                    uint32_t pt_type = 0;
-                    if (s1.size() == 21 && s1[0] == 0x01) std::memcpy(&pt_type, s1.data() + 1, 4);
-                    auto gtype = geom_a->getGeometryTypeId();
-                    if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
-                                       || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
-                        using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
-                        IPIAL locator(*geom_a);
-                        for (uint32_t i = 0; i < n; ++i) {
-                            auto span_b = cols[1].get_bytes(i);
-                            double px, py;
-                            std::memcpy(&px, span_b.data() + 5, 8);
-                            std::memcpy(&py, span_b.data() + 13, 8);
-                            if (bbox_op && !bbox_op(bbox_a, BBox{px, py, px, py})) {
-                                res[i] = early_ret ? 1u : 0u; continue;
-                            }
-                            res[i] = prep_a_point(&locator, px, py) ? 1u : 0u;
-                        }
-                        return out;
-                    }
-                }
-
-                for (uint32_t i = 0; i < n; ++i) {
-                    auto span_b = cols[1].get_bytes(i);
-                    if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
-                        res[i] = early_ret ? 1u : 0u; continue;
-                    }
-                    res[i] = prep_a(pa.get(), read_wkb(span_b).get()) ? 1u : 0u;
-                }
-                return out;
-            }
-
-            if (cols[1].is_effectively_const() && prep_b && n > 0) {
-                auto span_b = cols[1].get_bytes(0);
-                BBox bbox_b = wkb_bbox(span_b);
-                auto geom_b = read_wkb(span_b);
-                auto pb = PGF::prepare(geom_b.get());
-
-                if (prep_b_point && n > 0) {
-                    auto s0 = cols[0].get_bytes(0);
-                    uint32_t pt_type = 0;
-                    if (s0.size() == 21 && s0[0] == 0x01) std::memcpy(&pt_type, s0.data() + 1, 4);
-                    auto gtype = geom_b->getGeometryTypeId();
-                    if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
-                                       || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
-                        using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
-                        IPIAL locator(*geom_b);
-                        for (uint32_t i = 0; i < n; ++i) {
-                            auto span_a = cols[0].get_bytes(i);
-                            double px, py;
-                            std::memcpy(&px, span_a.data() + 5, 8);
-                            std::memcpy(&py, span_a.data() + 13, 8);
-                            if (bbox_op && !bbox_op(BBox{px, py, px, py}, bbox_b)) {
-                                res[i] = early_ret ? 1u : 0u; continue;
-                            }
-                            res[i] = prep_b_point(&locator, px, py) ? 1u : 0u;
-                        }
-                        return out;
-                    }
-                }
-
-                for (uint32_t i = 0; i < n; ++i) {
-                    auto span_a = cols[0].get_bytes(i);
-                    if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
-                        res[i] = early_ret ? 1u : 0u; continue;
-                    }
-                    res[i] = prep_b(pb.get(), read_wkb(span_a).get()) ? 1u : 0u;
-                }
-                return out;
-            }
-
-            if constexpr (sizeof...(Args) >= 3) {
-                if (cols[0].is_effectively_const() && prep_a_dist && n > 0) {
-                    auto span_a = cols[0].get_bytes(0);
-                    BBox bbox_a = wkb_bbox(span_a);
-                    auto geom_a = read_wkb(span_a);
-                    auto pa = PGF::prepare(geom_a.get());
-                    for (uint32_t i = 0; i < n; ++i) {
-                        auto span_b = cols[1].get_bytes(i);
-                        double dist = buf_get_arg<double>(cols[2], i);
-                        if (!bbox_a.intersects(wkb_bbox(span_b).expanded(dist))) {
-                            res[i] = 0u; continue;
-                        }
-                        res[i] = prep_a_dist(pa.get(), read_wkb(span_b).get(), dist) ? 1u : 0u;
-                    }
-                    return out;
-                }
-                if (cols[1].is_effectively_const() && prep_b_dist && n > 0) {
-                    auto span_b = cols[1].get_bytes(0);
-                    BBox bbox_b = wkb_bbox(span_b);
-                    auto geom_b = read_wkb(span_b);
-                    auto pb = PGF::prepare(geom_b.get());
-                    for (uint32_t i = 0; i < n; ++i) {
-                        auto span_a = cols[0].get_bytes(i);
-                        double dist = buf_get_arg<double>(cols[2], i);
-                        if (!wkb_bbox(span_a).intersects(bbox_b.expanded(dist))) {
-                            res[i] = 0u; continue;
-                        }
-                        res[i] = prep_b_dist(pb.get(), read_wkb(span_a).get(), dist) ? 1u : 0u;
-                    }
-                    return out;
-                }
-            }
-
-            for (uint32_t i = 0; i < n; ++i) {
-                if constexpr (sizeof...(Args) >= 2) {
-                    if (bbox_op &&
-                        !bbox_op(wkb_bbox(cols[0].get_bytes(i)),
-                                 wkb_bbox(cols[1].get_bytes(i)))) {
-                        res[i] = early_ret ? 1u : 0u; continue;
-                    }
-                }
-                res[i] = invoke(i) ? 1u : 0u;
-            }
-            return out;
-
-        } else if constexpr (std::is_same_v<Ret, double>) {
-            BuffersOut out_buf;
-            out_buf.init(1);
-            for (uint32_t i = 0; i < n; ++i) {
-                double v = invoke(i);
-                out_buf.push_fixed(reinterpret_cast<const uint8_t*>(&v), sizeof(v));
-            }
-            out = out_buf.finalize(n, 1);
-            return out;
-
-        } else if constexpr (std::is_same_v<Ret, int32_t>) {
-            BuffersOut out_buf;
-            out_buf.init(1);
-            for (uint32_t i = 0; i < n; ++i) {
-                int32_t v = invoke(i);
-                out_buf.push_fixed(reinterpret_cast<const uint8_t*>(&v), sizeof(v));
-            }
-            out = out_buf.finalize(n, 1);
-            return out;
-
-        } else if constexpr (std::is_same_v<Ret, std::unique_ptr<geos::geom::Geometry>>) {
-            BuffersOut out_buf;
-            out_buf.init(1);
-            for (uint32_t i = 0; i < n; ++i)
-                out_buf.push_geometry(invoke(i));
-            out = out_buf.finalize(n, 1);
-            return out;
-
-        } else if constexpr (std::is_same_v<Ret, std::string>) {
-            BuffersOut out_buf;
-            out_buf.init(1);
-            for (uint32_t i = 0; i < n; ++i)
-                out_buf.push_string(invoke(i));
-            out = out_buf.finalize(n, 1);
-            return out;
-        }
+        return out;
 
     } catch (const std::exception& e) {
         if (out) clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
