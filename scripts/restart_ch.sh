@@ -19,10 +19,10 @@ sed -e "s|__DATA_DIR__|${DATA_DIR}|g" \
     -e "s|__USER_FILES_PATH__|${USER_FILES}|g" \
     < "$CONFIG" > "$TMP_CONFIG"
 
-"$CH" server --config-file="$TMP_CONFIG" 2>/tmp/ch-server.log &
+nohup "$CH" server --config-file="$TMP_CONFIG" 2>/tmp/ch-server.log &
 
 echo -n "Waiting for server"
-for i in $(seq 1 60); do
+for i in $(seq 1 120); do
     if "$CH" client --port 19000 --query "SELECT 1" 2>/dev/null; then
         echo "Ready after ${i}s"
         exit 0
