@@ -14,6 +14,7 @@ using namespace geos::geom;
 using namespace geos::io;
 
 std::unique_ptr<Geometry> read_wkb(std::span<const uint8_t> input);
+bool is_wkb(std::span<const uint8_t> input);
 std::unique_ptr<Geometry> read_wkt(std::span<const uint8_t> input);
 std::unique_ptr<Geometry> read_geojson(std::span<const uint8_t> input);
 raw_buffer write_ewkb(const std::unique_ptr<Geometry>& geometry);

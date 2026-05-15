@@ -2462,33 +2462,33 @@ DETERMINISTIC;
 -- Buffers wire format tests
 -- ---------------------------------------------------------------------------
 
-CREATE OR REPLACE FUNCTION st_x_buffers
+CREATE OR REPLACE FUNCTION st_x_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_y_buffers
+CREATE OR REPLACE FUNCTION st_y_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_area_buffers
+CREATE OR REPLACE FUNCTION st_area_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_contains_buffers
+CREATE OR REPLACE FUNCTION st_contains_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a Geometry, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
 -- ---------------------------------------------------------------------------
 -- Remaining Buffers wire format registrations (String types)
@@ -2496,649 +2496,656 @@ SETTINGS serialization_format = 'Buffers';
 
 -- Float64 (1 geometry arg)
 
-CREATE OR REPLACE FUNCTION st_z_buffers
+CREATE OR REPLACE FUNCTION st_z_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_length_buffers
+CREATE OR REPLACE FUNCTION st_length_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_perimeter_buffers
+CREATE OR REPLACE FUNCTION st_perimeter_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_distance_buffers
+CREATE OR REPLACE FUNCTION st_distance_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_hausdorffdistance_buffers
+CREATE OR REPLACE FUNCTION st_hausdorffdistance_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_frechetdistance_buffers
+CREATE OR REPLACE FUNCTION st_frechetdistance_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_hausdorffdistance_densify_buffers
+CREATE OR REPLACE FUNCTION st_hausdorffdistance_densify_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String, densify_frac Float64) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_frechetdistance_densify_buffers
+CREATE OR REPLACE FUNCTION st_frechetdistance_densify_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String, densify_frac Float64) RETURNS Float64
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_dwithin_buffers
+CREATE OR REPLACE FUNCTION st_dwithin_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String, dist Float64) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1, spatial_expand_arg = 2;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1, spatial_expand_arg = 2;
 
 -- UInt8 (1 geometry arg)
 
-CREATE OR REPLACE FUNCTION st_isvalid_buffers
+CREATE OR REPLACE FUNCTION st_isvalid_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_isempty_buffers
+CREATE OR REPLACE FUNCTION st_isempty_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_issimple_buffers
+CREATE OR REPLACE FUNCTION st_issimple_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_isring_buffers
+CREATE OR REPLACE FUNCTION st_isring_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
 -- Int32 (1 geometry arg)
 
-CREATE OR REPLACE FUNCTION st_srid_buffers
+CREATE OR REPLACE FUNCTION st_srid_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Int32
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_npoints_buffers
+CREATE OR REPLACE FUNCTION st_npoints_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Int32
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_numpoints_buffers
+CREATE OR REPLACE FUNCTION st_numpoints_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Int32
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_numgeometries_buffers
+CREATE OR REPLACE FUNCTION st_numgeometries_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Int32
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_numinteriorrings_buffers
+CREATE OR REPLACE FUNCTION st_numinteriorrings_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Int32
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_nrings_buffers
+CREATE OR REPLACE FUNCTION st_nrings_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Int32
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_dimension_buffers
+CREATE OR REPLACE FUNCTION st_dimension_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS Int32
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
 -- String output (1 geometry arg)
 
-CREATE OR REPLACE FUNCTION st_astext_buffers
+CREATE OR REPLACE FUNCTION st_astext_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_asewkt_buffers
+CREATE OR REPLACE FUNCTION st_asewkt_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_geometrytype_buffers
+CREATE OR REPLACE FUNCTION st_geometrytype_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_isvalidreason_buffers
+CREATE OR REPLACE FUNCTION st_isvalidreason_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
 -- UInt8 (2 geometry args)
 
-CREATE OR REPLACE FUNCTION st_intersects_buffers
+CREATE OR REPLACE FUNCTION st_intersects_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_touches_buffers
+CREATE OR REPLACE FUNCTION st_touches_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_within_buffers
+CREATE OR REPLACE FUNCTION st_within_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_crosses_buffers
+CREATE OR REPLACE FUNCTION st_crosses_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_overlaps_buffers
+CREATE OR REPLACE FUNCTION st_overlaps_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_disjoint_buffers
+CREATE OR REPLACE FUNCTION st_disjoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_equals_buffers
+CREATE OR REPLACE FUNCTION st_equals_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_covers_buffers
+CREATE OR REPLACE FUNCTION st_covers_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_coveredby_buffers
+CREATE OR REPLACE FUNCTION st_coveredby_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
-CREATE OR REPLACE FUNCTION st_containsproperly_buffers
+CREATE OR REPLACE FUNCTION st_containsproperly_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'BuffersWithMeta', is_spatial_predicate = 1;
 
 -- String (2 geometry args) — relation output
 
-CREATE OR REPLACE FUNCTION st_relate_buffers
+CREATE OR REPLACE FUNCTION st_relate_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_relate_pattern_buffers
+CREATE OR REPLACE FUNCTION st_relate_pattern_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String, pattern String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
 -- Nullable(String) (2 geometry args) — geometry output
 
-CREATE OR REPLACE FUNCTION st_intersection_buffers
+CREATE OR REPLACE FUNCTION st_intersection_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_union_buffers
+CREATE OR REPLACE FUNCTION st_union_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_difference_buffers
+CREATE OR REPLACE FUNCTION st_difference_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_makeline_buffers
+CREATE OR REPLACE FUNCTION st_makeline_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_symdifference_buffers
+CREATE OR REPLACE FUNCTION st_symdifference_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_collect_buffers
+CREATE OR REPLACE FUNCTION st_collect_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_closestpoint_buffers
+CREATE OR REPLACE FUNCTION st_closestpoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_shortestline_buffers
+CREATE OR REPLACE FUNCTION st_shortestline_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_sharedpaths_buffers
+CREATE OR REPLACE FUNCTION st_sharedpaths_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS Nullable(String)
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
 -- String output (1 geometry arg) — geometry-returning
 
-CREATE OR REPLACE FUNCTION st_convexhull_buffers
+CREATE OR REPLACE FUNCTION st_convexhull_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_envelope_buffers
+CREATE OR REPLACE FUNCTION st_envelope_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_centroid_buffers
+CREATE OR REPLACE FUNCTION st_centroid_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_makevalid_buffers
+CREATE OR REPLACE FUNCTION st_makevalid_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_boundary_buffers
+CREATE OR REPLACE FUNCTION st_boundary_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_unaryunion_buffers
+CREATE OR REPLACE FUNCTION st_unaryunion_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_reverse_buffers
+CREATE OR REPLACE FUNCTION st_reverse_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_normalize_buffers
+CREATE OR REPLACE FUNCTION st_normalize_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_node_buffers
+CREATE OR REPLACE FUNCTION st_node_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_linmerge_buffers
+CREATE OR REPLACE FUNCTION st_linmerge_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_polygonize_buffers
+CREATE OR REPLACE FUNCTION st_polygonize_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_clusterintersecting_buffers
+CREATE OR REPLACE FUNCTION st_clusterintersecting_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_extent_buffers
+CREATE OR REPLACE FUNCTION st_extent_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_interiorpoint_buffers
+CREATE OR REPLACE FUNCTION st_interiorpoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_expand_buffers
+CREATE OR REPLACE FUNCTION st_expand_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_minimumboundingcircle_buffers
+CREATE OR REPLACE FUNCTION st_minimumboundingcircle_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_snap_buffers
+CREATE OR REPLACE FUNCTION st_snap_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_offsetcurve_buffers
+CREATE OR REPLACE FUNCTION st_offsetcurve_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_delaunaytriangles_buffers
+CREATE OR REPLACE FUNCTION st_delaunaytriangles_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_voronoidiagram_buffers
+CREATE OR REPLACE FUNCTION st_voronoidiagram_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_buffer_buffers
+CREATE OR REPLACE FUNCTION st_buffer_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_simplify_buffers
+CREATE OR REPLACE FUNCTION st_simplify_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_segmentize_buffers
+CREATE OR REPLACE FUNCTION st_segmentize_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_subdivide_buffers
+CREATE OR REPLACE FUNCTION st_subdivide_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_translate_buffers
+CREATE OR REPLACE FUNCTION st_translate_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_scale_buffers
+CREATE OR REPLACE FUNCTION st_scale_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
 -- Other functions
 
-CREATE OR REPLACE FUNCTION st_makepoint_buffers
+CREATE OR REPLACE FUNCTION st_makepoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (x Float64, y Float64) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_makepoint3d_buffers
+CREATE OR REPLACE FUNCTION st_makepoint3d_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (x Float64, y Float64, z Float64) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_makepolygon_buffers
+CREATE OR REPLACE FUNCTION st_makepolygon_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_addpoint_buffers
+CREATE OR REPLACE FUNCTION st_addpoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_removepoint_buffers
+CREATE OR REPLACE FUNCTION st_removepoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_setpoint_buffers
+CREATE OR REPLACE FUNCTION st_setpoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_setsrid_buffers
+CREATE OR REPLACE FUNCTION st_setsrid_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_transform_buffers
+CREATE OR REPLACE FUNCTION st_transform_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_transform_proj_buffers
+CREATE OR REPLACE FUNCTION st_transform_proj_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_buffer_params_buffers
+CREATE OR REPLACE FUNCTION st_buffer_params_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_geomfromgeojson_buffers
+CREATE OR REPLACE FUNCTION st_geomfromgeojson_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (s String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_startpoint_buffers
+CREATE OR REPLACE FUNCTION st_startpoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_endpoint_buffers
+CREATE OR REPLACE FUNCTION st_endpoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_makebox2d_buffers
+CREATE OR REPLACE FUNCTION st_makebox2d_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_geometryn_buffers
+CREATE OR REPLACE FUNCTION st_geometryn_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_exteriorring_buffers
+CREATE OR REPLACE FUNCTION st_exteriorring_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_interiorringn_buffers
+CREATE OR REPLACE FUNCTION st_interiorringn_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION st_pointn_buffers
+CREATE OR REPLACE FUNCTION st_pointn_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
 
-CREATE OR REPLACE FUNCTION geos_version_buffers
+CREATE OR REPLACE FUNCTION geos_version_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (s String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'Buffers';
+SETTINGS serialization_format = 'BuffersWithMeta';
+
+CREATE OR REPLACE FUNCTION st_collect_agg_cb
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (geoms Array(String)) RETURNS String
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'BuffersWithMeta';
 

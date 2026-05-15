@@ -65,6 +65,18 @@ static void write_u32(uint8_t* p, uint32_t v, bool little_endian) {
 // clear the flag in the type word, and pass the cleaned WKB to GEOS
 // WKBReader (which handles standard WKB and ISO-style 3D WKB natively).
 // The SRID is then re-applied via setSRID().
+bool is_wkb(std::span<const uint8_t> input) {
+    if (input.size() < 5) return false;
+    const uint8_t* p = input.data();
+    // Valid WKB: byte 0 is 0x00 (big-endian) or 0x01 (little-endian)
+    if (p[0] != 0x00 && p[0] != 0x01) return false;
+    // Byte 1-4 should be a valid geometry type (1-17 for standard types)
+    uint32_t type_word = read_u32(p + 1, p[0] == 0x01);
+    // Clear SRID flag if present
+    type_word &= ~EWKB_SRID_FLAG;
+    return type_word >= 1 && type_word <= 17;
+}
+
 std::unique_ptr<Geometry> read_wkb(std::span<const uint8_t> input) {
     if (input.size() < 5)
         throw std::runtime_error("read_wkb: input too short");
