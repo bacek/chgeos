@@ -362,63 +362,13 @@ CH_UDF_CB(st_geomfromwkb)
 
 
 // ── st_knn: k-nearest-neighbour spatial query ─────────────────────────────────
-// Manual export (not via CH_UDF_COL) because we need direct ColView access
-// to detect when candidates is const → build STRtree once per batch.
+// COLUMNAR_V1: st_knn_col in columnar.hpp
+// ColumnBinary: st_knn_cb in col_binary.hpp
 //
 // Signature: st_knn(query String, candidates Array(String), k UInt32)
 //            → Array(Tuple(UInt64, Float64))
 // Returns k (index, distance) pairs sorted by distance ascending.
 // Index is 0-based into the candidates array.
-
-__attribute__((export_name("st_knn")))
-ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
-{
-    using KVPair   = std::pair<uint64_t, double>;
-    using KNNResult = std::vector<KVPair>;
-
-    auto cb = ch::parse_columnar(ptr);
-    uint32_t n     = cb.num_rows;
-    ch::ColView col_q = cb.col(0);   // String (WKB)
-    ch::ColView col_c = cb.col(1);   // Array(String) — COL_COMPLEX
-    ch::ColView col_k = cb.col(2);   // UInt32
-
-    uint32_t k = ch::col_get_fixed_widened<uint32_t>(col_k, 0);
-
-    if (k == 0 || n == 0)
-        return ch::write_complex_col<KNNResult>(n, [](uint32_t) -> KNNResult { return {}; });
-
-    ch::raw_buffer* out = nullptr;
-    try {
-        if (col_c.is_const) {
-            // Candidates same for every row → build centroid k-d tree once.
-            // CentroidKNNIndex uses wkb_bbox() centroids — zero GEOS allocation
-            // at build or query time.  O(log N) per query vs O(N) expanding-envelope.
-            auto wkbs = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, 0);
-            ch::CentroidKNNIndex index(wkbs);
-
-            return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
-                if (col_q.is_null(row)) return {};
-                // Extract X/Y from the query point WKB via wkb_bbox (no GEOS allocation).
-                // For a POINT the bbox is degenerate: xmin==xmax, ymin==ymax.
-                ch::BBox pt = ch::wkb_bbox(col_q.get_bytes(row));
-                if (pt.is_empty()) return {};
-                return index.query(pt.xmin, pt.ymin, k);
-            });
-        } else {
-            // Candidates vary per row: brute-force.
-            return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
-                if (col_q.is_null(row)) return {};
-                auto q   = ch::read_wkb(col_q.get_bytes(row));
-                auto cands = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, row);
-                return ch::st_knn_brute(q.get(), cands, k);
-            });
-        }
-    } catch (const std::exception& e) {
-        if (out) clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-        ch::panic(e.what());
-    }
-    __builtin_unreachable();
-}
 
 // ── Chain function opt-in registrations ──────────────────────────────────────
 // Only functions listed here participate in chain_execute.  All others continue

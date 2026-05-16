@@ -166,4 +166,21 @@ public:
     }
 };
 
+// Centroid-based kNN: build a k-d tree from candidate centroids (wkb_bbox centres),
+// then query using the query-point's bbox centre.  Zero GEOS allocation at build
+// or query time — everything is computed from bbox envelope data.
+inline std::vector<std::pair<uint64_t, double>>
+st_knn_centroid(std::span<const uint8_t> query_wkb,
+                const std::vector<std::span<const uint8_t>>& cands,
+                uint32_t k)
+{
+    if (k == 0 || cands.empty()) return {};
+    BBox qb = wkb_bbox(query_wkb);
+    if (qb.is_empty()) return {};
+    double qx = (qb.xmin + qb.xmax) * 0.5;
+    double qy = (qb.ymin + qb.ymax) * 0.5;
+    CentroidKNNIndex idx(cands);
+    return idx.query(qx, qy, k);
+}
+
 } // namespace ch

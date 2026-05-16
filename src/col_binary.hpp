@@ -28,6 +28,8 @@
 
 #include "clickhouse.hpp"
 #include "col_prep_op.hpp"
+#include "columnar.hpp"
+#include "functions/knn.hpp"
 #include "geom/wkb.hpp"
 #include "geom/wkb_envelope.hpp"
 #include "mem.hpp"
@@ -837,6 +839,119 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
 
     } catch (const std::exception& e) {
         if (out) clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        panic(e.what());
+    }
+    __builtin_unreachable();
+}
+
+// ── pack_complex_result: serialize a complex type into ColumnBinary format ────
+// Uses write_complex_col from columnar.hpp to produce the data, then packs it
+// as a varint-length blob (length prefix + raw bytes).
+
+static inline void pack_complex_result(raw_buffer& buf, const std::vector<std::pair<uint64_t, double>>& val) {
+    raw_buffer* tmp = write_complex_col<std::vector<std::pair<uint64_t, double>>>(1,
+        [&](uint32_t) -> const std::vector<std::pair<uint64_t, double>>& { return val; });
+    uint64_t len = static_cast<uint64_t>(tmp->size());
+    writeVarUInt(len, buf);
+    for (size_t i = 0; i < tmp->size(); ++i)
+        buf.push_back((*tmp)[i]);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(tmp));
+}
+
+// ── st_knn_cb: k-nearest-neighbour (ColumnBinary) ─────────────────────────────
+// Signature: st_knn_cb(query String, candidates Array(String), k UInt32)
+//            → Array(Tuple(UInt64, Float64))
+
+__attribute__((export_name("st_knn_cb")))
+raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
+    auto cb = parse_col_binary(ptr);
+    auto& col_q = cb.cols[0];  // String (WKB)
+    auto& col_c = cb.cols[1];  // Array(String) — COL_COMPLEX
+    auto& col_k = cb.cols[2];  // UInt32
+
+    uint32_t k = col_k.is_const
+        ? *reinterpret_cast<const uint32_t*>(col_k.data)
+        : *reinterpret_cast<const uint32_t*>(col_k.data);
+
+    if (k == 0 || num_rows == 0) {
+        raw_buffer* out = clickhouse_create_buffer(28);
+        writeBinaryLE32(1u, *out);
+        writeBinaryLE32(num_rows, *out);
+        out->push_back(0x00);
+        uint64_t zero = 0;
+        writeBinaryLE64(zero, *out);
+        return out;
+    }
+
+    raw_buffer* out = clickhouse_create_buffer(28);
+    writeBinaryLE32(1u, *out);
+    writeBinaryLE32(num_rows, *out);
+    out->push_back(0x00);
+    size_t data_size_pos = out->size();
+    uint64_t zero = 0;
+    writeBinaryLE64(zero, *out);
+
+    try {
+        ColBinaryReader rq = ColBinaryReader::from_col(col_q, num_rows);
+
+        if (col_c.is_const) {
+            // Candidates same for every row → build centroid k-d tree once.
+            // For const candidates, parse them from the raw data.
+            // col_c.data = [u32[M+1] outer_offs][inner_offs][bytes]
+            const uint32_t* outer_offs = reinterpret_cast<const uint32_t*>(col_c.data);
+            const uint32_t M = outer_offs[cb.num_rows];
+            const uint32_t* inner_offs = reinterpret_cast<const uint32_t*>(col_c.data + (cb.num_rows + 1u) * 4u);
+            const uint8_t* chars = col_c.data + (cb.num_rows + 1u) * 4u + (M + 1u) * 4u;
+
+            std::vector<std::span<const uint8_t>> cands;
+            cands.reserve(M);
+            for (uint32_t i = 0; i < M; ++i) {
+                uint32_t s = inner_offs[i], e = inner_offs[i + 1];
+                uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
+                cands.push_back({chars + s, len});
+            }
+
+            for (uint32_t i = 0; i < num_rows; ++i) {
+                auto span_q = rq.read_blob();
+                if (span_q.empty()) {
+                    pack_complex_result(*out, {});
+                } else {
+                    BBox pt = wkb_bbox(span_q);
+                    if (pt.is_empty()) {
+                        pack_complex_result(*out, {});
+                    } else {
+                        auto result = st_knn_centroid(span_q, cands, k);
+                        pack_complex_result(*out, result);
+                    }
+                }
+            }
+        } else {
+            // Candidates vary per row: brute-force.
+            const uint32_t* outer_offs = reinterpret_cast<const uint32_t*>(col_c.data);
+            const uint32_t M = outer_offs[num_rows];
+            const uint32_t* inner_offs = reinterpret_cast<const uint32_t*>(col_c.data + (num_rows + 1u) * 4u);
+            const uint8_t* chars = col_c.data + (num_rows + 1u) * 4u + (M + 1u) * 4u;
+
+            for (uint32_t i = 0; i < num_rows; ++i) {
+                auto span_q = rq.read_blob();
+                if (span_q.empty()) {
+                    pack_complex_result(*out, {});
+                    continue;
+                }
+                auto q = read_wkb(span_q);
+                uint32_t elem_start = outer_offs[i], elem_end = outer_offs[i + 1];
+                std::vector<std::span<const uint8_t>> cands;
+                cands.reserve(elem_end - elem_start);
+                for (uint32_t j = elem_start; j < elem_end; ++j) {
+                    uint32_t s = inner_offs[j], e = inner_offs[j + 1];
+                    uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
+                    cands.push_back({chars + s, len});
+                }
+                pack_complex_result(*out, st_knn_brute(q.get(), cands, k));
+            }
+        }
+    } catch (const std::exception& e) {
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
         panic(e.what());
     }
     __builtin_unreachable();

@@ -54,6 +54,7 @@
 
 #include "clickhouse.hpp"
 #include "col_prep_op.hpp"
+#include "functions/knn.hpp"
 #include "geom/wkb.hpp"
 #include "geom/wkb_envelope.hpp"
 #include "mem.hpp"
@@ -927,6 +928,52 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 }
 
 } // namespace ch
+
+// ── st_knn_col: k-nearest-neighbour (COLUMNAR_V1) ─────────────────────────────
+// Signature: st_knn(query String, candidates Array(String), k UInt32)
+//            → Array(Tuple(UInt64, Float64))
+
+__attribute__((export_name("st_knn")))
+ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
+{
+    using KVPair   = std::pair<uint64_t, double>;
+    using KNNResult = std::vector<KVPair>;
+
+    auto cb = ch::parse_columnar(ptr);
+    uint32_t n     = cb.num_rows;
+    ch::ColView col_q = cb.col(0);
+    ch::ColView col_c = cb.col(1);
+    ch::ColView col_k = cb.col(2);
+
+    uint32_t k = ch::col_get_fixed_widened<uint32_t>(col_k, 0);
+
+    if (k == 0 || n == 0)
+        return ch::write_complex_col<KNNResult>(n, [](uint32_t) -> KNNResult { return {}; });
+
+    ch::raw_buffer* out = nullptr;
+    try {
+        if (col_c.is_const) {
+            auto wkbs = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, 0);
+            return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
+                if (col_q.is_null(row)) return {};
+                ch::BBox pt = ch::wkb_bbox(col_q.get_bytes(row));
+                if (pt.is_empty()) return {};
+                return ch::st_knn_centroid(col_q.get_bytes(row), wkbs, k);
+            });
+        } else {
+            return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
+                if (col_q.is_null(row)) return {};
+                auto q   = ch::read_wkb(col_q.get_bytes(row));
+                auto cands = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, row);
+                return ch::st_knn_brute(q.get(), cands, k);
+            });
+        }
+    } catch (const std::exception& e) {
+        if (out) clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+        ch::panic(e.what());
+    }
+    __builtin_unreachable();
+}
 
 // ── Registration macros ───────────────────────────────────────────────────────
 // All macros route through columnar_impl_wrapper; return types and arg types

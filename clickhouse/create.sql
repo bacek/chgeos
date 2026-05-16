@@ -1460,6 +1460,17 @@ ABI COLUMNAR_V1
 DETERMINISTIC;
 
 -- ---------------------------------------------------------------------------
+-- st_knn_cb: k-nearest-neighbour (ColumnBinary wire format)
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION st_knn_cb
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (query String, candidates Array(String), k UInt32) RETURNS Array(Tuple(UInt64, Float64))
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'ColumnBinary';
+
+-- ---------------------------------------------------------------------------
 -- Remaining aliases — no COLUMNAR_V1 implementation, delegate to _mp
 -- ---------------------------------------------------------------------------
 
@@ -3161,5 +3172,5 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary';
+SETTINGS serialization_format = 'ColumnBinary', is_aggregate=1;
 
