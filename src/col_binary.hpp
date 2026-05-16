@@ -2,10 +2,14 @@
 
 // ColumnBinary wire format for ClickHouse WASM UDFs.
 //
-// Wire layout:
+// Input wire layout (CH → WASM):
 //   num_columns (u32LE) | num_rows (u32LE)
 //   For each column:
-//     flags (u8, bit0=IS_CONST) | type_tags (recursive, discarded) | data_size (u64LE) | data
+//     flags (u8, bit0=IS_CONST) | data_size (u64LE) | data
+//   Type is deduced from the C++ function signature — no type tags on the wire.
+//
+// Output wire layout (WASM → CH, always single column):
+//   num_columns (u32LE) | num_rows (u32LE) | flags (u8) | data_size (u64LE) | data
 
 #include <algorithm>
 #include <array>
@@ -47,6 +51,12 @@ struct ColBinaryInfo {
     bool           is_const;
     uint64_t       data_size;
     const uint8_t* data;
+
+    // O(1) data_size for u32 offset format: (N+1)*4 + last_offset.
+    // Callers: compute this before building the column data block.
+    static inline uint64_t compute_data_size_u32_offsets(uint64_t num_rows, uint64_t total_bytes) {
+        return (num_rows + 1u) * 4u + total_bytes;
+    }
 };
 
 struct ColBinaryBuf {
@@ -115,34 +125,6 @@ static inline bool readBinaryLE32(const uint8_t*& p, const uint8_t* end, uint32_
     return true;
 }
 
-// ── consume_type_tag: skip past a recursive type tag stream ──────────────────
-
-inline void consume_type_tag(const uint8_t*& p, const uint8_t* end) {
-    if (p >= end) ch::panic("consume_type_tag: truncated");
-    uint8_t tag = *p++;
-    switch (tag) {
-        case 0x01: case 0x02: case 0x03: case 0x04:
-        case 0x05: case 0x06: case 0x07: case 0x08:
-        case 0x09: case 0x0A: case 0x0B:
-            // Leaf types — nothing to recurse into
-            return;
-        case 0x0C:
-            // Nullable — 1 child
-            consume_type_tag(p, end);
-            return;
-        case 0x0D:
-            // Array — 1 child
-            consume_type_tag(p, end);
-            return;
-        case 0x0E:
-            // Tuple — not supported yet
-            ch::panic("consume_type_tag: Tuple not supported — TODO");
-            return;
-        default:
-            ch::panic("consume_type_tag: unknown type tag");
-    }
-}
-
 // ── parse_col_binary: ColumnBinary format ─────────────────────────────────────
 
 inline ColBinaryBuf parse_col_binary(const raw_buffer* buf) {
@@ -166,9 +148,6 @@ inline ColBinaryBuf parse_col_binary(const raw_buffer* buf) {
         uint8_t flags = *p++;
         ci.is_const = (flags & 0x01) != 0;
 
-        // type tags (recursive, discard)
-        consume_type_tag(p, end);
-
         // data_size (u64LE)
         if (!readBinaryLE64(p, end, v64)) ch::panic("parse_col_binary: truncated data_size");
         ci.data_size = v64;
@@ -190,11 +169,11 @@ inline ColBinaryBuf parse_col_binary(const raw_buffer* buf) {
 struct ColBinaryReader {
     bool           is_const;
     uint32_t       stored_rows;   // 1 if const, else num_rows
-    const uint8_t* data_start;    // after type tags
+    const uint8_t* data_start;    // data section start (offsets for COL_BYTES, raw for fixed-width)
     const uint8_t* data_end;      // data_start + data_size
     mutable const uint8_t* p;     // cursor for sequential reads (COL_BYTES non-const)
 
-    // Cached blob for const-mode COL_BYTES (parsed once, returned on every call)
+    // Cached blob for const-mode COL_BYTES (parsed once, returned on every call).
     mutable std::span<const uint8_t> cached_blob{};
     mutable bool blob_cached = false;
 
@@ -205,9 +184,17 @@ struct ColBinaryReader {
     mutable std::vector<uint64_t> cached_offsets{};
     mutable bool offsets_cached = false;
 
+    // u32 offsets for non-const COL_BYTES (new format: u32[N+1] + raw bytes).
+    mutable const uint32_t* cached_u32_offsets = nullptr;
+    mutable const uint8_t*  cached_u32_data = nullptr;
+    mutable bool u32_offsets_cached = false;
+
     bool is_null(uint32_t) const { return false; }
 
-    // Read a variable-length blob (Native: varint(len) + payload).
+    // Read a variable-length blob.
+    // const: u32[2] offsets at start of data → span between offsets[0] and offsets[1].
+    // non-const (new format): u32[N+1] offsets + raw bytes → lookup offsets[current_row].
+    // non-const (legacy format): varint(len) + payload at cursor.
     std::span<const uint8_t> read_blob() noexcept {
         if (is_const) {
             if (!blob_cached) {
@@ -244,28 +231,74 @@ struct ColBinaryReader {
 
     static ColBinaryReader from_col(const ColBinaryInfo& ci, uint32_t num_rows) {
         ColBinaryReader r;
-        r.is_const    = ci.is_const;
-        r.stored_rows = r.is_const ? 1 : num_rows;
-        r.data_start  = ci.data;
-        r.data_end    = ci.data + ci.data_size;
-        r.p           = r.data_start;
-        r.blob_cached = false;
+        r.is_const         = ci.is_const;
+        r.stored_rows      = r.is_const ? 1 : num_rows;
+        r.data_start       = ci.data;
+        r.data_end         = ci.data + ci.data_size;
+        r.p                = r.data_start;
+        r.blob_cached      = false;
+        r.u32_offsets_cached = false;
+        r.cached_u32_offsets = nullptr;
+        r.cached_u32_data    = nullptr;
+        r.current_row        = 0;
         return r;
     }
 
-    // Parse a varint+payload blob from the start of a const column's data.
+    // Parse a u32-offset blob from the start of a const column's data.
+    // Format: u32[2] {offset_0, offset_1} + raw bytes → span at data[offset_0..offset_1).
     static std::span<const uint8_t> parse_blob_from(const uint8_t* start, const uint8_t* end) {
-        if (!start || start >= end) return {};
-        uint64_t data_len = 0;
-        if (!readVarUInt(start, end, data_len)) return {};
-        uint32_t prefix = getLengthOfVarUInt(static_cast<uint32_t>(data_len));
-        if (start + prefix > end) return {};
-        if (start + prefix + data_len > end) return {};
-        return {start + prefix, static_cast<size_t>(data_len)};
+        if (!start || start + 8 > end) return {};
+        uint32_t o0, o1;
+        std::memcpy(&o0, start, 4);
+        std::memcpy(&o1, start + 4, 4);
+        if (o0 > o1) return {};
+        const uint8_t* data = start + 8;  // skip the 2-entry u32 offset table
+        if (data + o1 > end) return {};
+        return {data + o0, static_cast<size_t>(o1 - o0)};
     }
 
-    // Read a varint+payload blob advancing the cursor.
+    // Read a blob using u32 offset lookup (new format) or varint (legacy).
+    // New format: u32[N+1] offsets at data_start, raw bytes follow.
+    // Legacy format: sequential varint(len) + payload.
     std::span<const uint8_t> read_blob_from_cursor() noexcept {
+        if (!data_start || !data_end) return {};
+
+        // Try u32 offset path first.
+        const uint32_t* u32_offs = nullptr;
+        const uint8_t*  u32_dat  = nullptr;
+
+        if (u32_offsets_cached) {
+            u32_offs = cached_u32_offsets;
+            u32_dat  = cached_u32_data;
+        } else {
+            uint32_t n = stored_rows;
+            if (n + 1u < 2u) n = 1u;
+            u32_offs = reinterpret_cast<const uint32_t*>(data_start);
+            u32_dat  = data_start + (n + 1u) * sizeof(uint32_t);
+
+            // Validate: offsets[N] + remaining bytes must not exceed data_end.
+            uint32_t last_off = u32_offs[n];
+            if (u32_dat + last_off <= data_end) {
+                cached_u32_offsets = u32_offs;
+                cached_u32_data = u32_dat;
+                u32_offsets_cached = true;
+            } else {
+                // Legacy varint format — skip u32 path.
+                u32_offs = nullptr;
+            }
+        }
+
+        if (u32_offs) {
+            uint32_t row = current_row;
+            if (row + 1 > stored_rows) return {};
+            uint32_t o0 = u32_offs[row];
+            uint32_t o1 = u32_offs[row + 1];
+            if (o0 > o1) return {};
+            p = u32_dat + o0;
+            return {p, static_cast<size_t>(o1 - o0)};
+        }
+
+        // Legacy varint path (for backward compatibility).
         if (!p) return {};
         const uint8_t* limit = data_end;
         uint64_t data_len = 0;
@@ -302,8 +335,43 @@ struct ColBinaryReader {
         return true;
     }
 
-    // Peek at the next varint+payload blob without advancing the cursor.
+    // Peek at the next blob without advancing the cursor.
+    // Uses u32 offset lookup for new format, varint for legacy.
     std::span<const uint8_t> peek_blob() const noexcept {
+        if (!data_start || !data_end) return {};
+
+        if (is_const) {
+            if (!blob_cached) {
+                const_cast<ColBinaryReader*>(this)->blob_cached = true;
+                const_cast<ColBinaryReader*>(this)->cached_blob = parse_blob_from(data_start, data_end);
+            }
+            return cached_blob;
+        }
+
+        // For non-const, use the u32 offset at current_row.
+        if (!u32_offsets_cached) {
+            uint32_t n = stored_rows;
+            if (n + 1u < 2u) n = 1u;
+            const uint32_t* offs = reinterpret_cast<const uint32_t*>(data_start);
+            const uint8_t*  dat  = data_start + (n + 1u) * sizeof(uint32_t);
+            uint32_t last_off = offs[n];
+            if (dat + last_off <= data_end) {
+                const_cast<ColBinaryReader*>(this)->cached_u32_offsets = offs;
+                const_cast<ColBinaryReader*>(this)->cached_u32_data = dat;
+                const_cast<ColBinaryReader*>(this)->u32_offsets_cached = true;
+            }
+        }
+
+        if (u32_offsets_cached && cached_u32_offsets) {
+            uint32_t row = current_row;
+            if (row + 1 > stored_rows) return {};
+            uint32_t o0 = cached_u32_offsets[row];
+            uint32_t o1 = cached_u32_offsets[row + 1];
+            if (o0 > o1) return {};
+            return {cached_u32_data + o0, static_cast<size_t>(o1 - o0)};
+        }
+
+        // Legacy varint path.
         if (!p || p >= data_end) return {};
         const uint8_t* limit = data_end;
         uint64_t data_len = 0;
@@ -314,29 +382,6 @@ struct ColBinaryReader {
         return {p + prefix, static_cast<size_t>(data_len)};
     }
 };
-
-// ── cb_output_tag: return type → ColumnBinary type tag ───────────────────────
-
-template <typename Ret>
-constexpr uint8_t cb_output_tag() {
-    // Default: string/geometry types
-    return 0x0B;
-}
-
-template <>
-constexpr uint8_t cb_output_tag<bool>() { return 0x02; }
-
-template <>
-constexpr uint8_t cb_output_tag<double>() { return 0x0A; }
-
-template <>
-constexpr uint8_t cb_output_tag<int32_t>() { return 0x05; }
-
-template <>
-constexpr uint8_t cb_output_tag<uint32_t>() { return 0x06; }
-
-template <>
-constexpr uint8_t cb_output_tag<raw_buffer>() { return 0x0B; }
 
 // ── pack_result: write a single result value into a raw_buffer ───────────────
 
@@ -770,14 +815,13 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
         out = clickhouse_create_buffer(28);
         out->clear();
 
-        // Output header: num_cols(u32LE) + num_rows(u32LE) + flags(u8) + type_tag(u8) + data_size(u64LE placeholder)
+        // Output header: num_cols(u32LE) + num_rows(u32LE) + flags(u8) + data_size(u64LE)
         writeBinaryLE32(1u, *out);
         writeBinaryLE32(static_cast<uint32_t>(n), *out);
-        out->push_back(0);  // flags: 0 (non-const output)
-        out->push_back(cb_output_tag<Ret>());  // type tag
+        out->push_back(0x00);  // flags: 0 (non-const output)
 
-        // data_size placeholder (8 zero bytes)
-        for (int i = 0; i < 8; ++i) out->push_back(0);
+        size_t data_size_pos = out->size();
+        writeBinaryLE64(0u, *out);  // placeholder; patched after data is written
 
         col_binary_impl_worker<Ret, nargs, decltype(invoke)>::run(
             *out, n, func_name, invoke, readers,
@@ -785,11 +829,9 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
             prep_a, prep_b, prep_a_dist, prep_b_dist,
             prep_a_point, prep_b_point);
 
-       // Backfill data_size
-        size_t data_size = out->size() - 18;
-        uint8_t* size_ptr = out->data() + 10;
-        for (uint32_t i = 0; i < 8; ++i)
-            *(size_ptr + i) = static_cast<uint8_t>(data_size >> (i * 8));
+        uint64_t data_size = static_cast<uint64_t>(out->size() - data_size_pos - 8);
+        for (int i = 0; i < 8; ++i)
+            (*out)[data_size_pos + i] = static_cast<uint8_t>(data_size >> (i * 8));
 
         return out;
 
