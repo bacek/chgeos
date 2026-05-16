@@ -55,6 +55,17 @@ inline std::unordered_map<std::string, ChainFn>& chain_registry() {
     return reg;
 }
 
+// Strip known wire-format suffixes so st_length_cb / st_length_mp / st_length_col
+// all resolve to the same ChainFn.  Only the bare name is ever registered; the
+// suffixed variants are resolved at lookup time.
+inline std::string chain_resolve_name(std::string name) {
+    if (name.ends_with("_cb"))      name.resize(name.size() - 3);
+    else if (name.ends_with("_mp")) name.resize(name.size() - 3);
+    else if (name.ends_with("_col"))name.resize(name.size() - 4);
+    else if (name.ends_with("_buffers")) name.resize(name.size() - 7);
+    return name;
+}
+
 // ── Arity deduction ───────────────────────────────────────────────────────────
 
 template <typename Ret, typename... Args>
@@ -205,16 +216,18 @@ inline std::vector<std::string> parse_chain_names(const raw_buffer* chain_buf) {
 inline bool validate_chain(const std::vector<std::string>& names) {
     if (names.size() < 2) return false;
     auto& reg = chain_registry();
-    for (auto& name : names)
-        if (!reg.count(name)) return false;
-    const auto& front = reg.at(names.front());
+    for (auto& name : names) {
+        auto rname = chain_resolve_name(name);
+        if (!reg.count(rname)) return false;
+    }
+    const auto& front = reg.at(chain_resolve_name(names.front()));
     // Allow XFORM at front if it can also act as SOURCE (has as_source).
     bool front_ok = (front.role == ChainRole::SOURCE) ||
                     (front.role == ChainRole::XFORM && front.as_source);
     if (!front_ok) return false;
-    if (reg.at(names.back()).role != ChainRole::SINK) return false;
+    if (reg.at(chain_resolve_name(names.back())).role != ChainRole::SINK) return false;
     for (size_t i = 1; i + 1 < names.size(); ++i)
-        if (reg.at(names[i]).role != ChainRole::XFORM) return false;
+        if (reg.at(chain_resolve_name(names[i])).role != ChainRole::XFORM) return false;
     return true;
 }
 
@@ -227,13 +240,13 @@ inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf
     auto& reg     = chain_registry();
 
     // SOURCE (or XFORM acting as SOURCE): consumes source_arity geometry columns.
-    const auto& source = reg.at(fn_names[0]);
+    const auto& source = reg.at(chain_resolve_name(fn_names[0]));
     auto handles = source.as_source(cb, n);
     uint32_t col_offset = source.source_arity;
 
     // XFORMs: each consumes n_scalar_cols const columns from row_buf.
     for (size_t i = 1; i + 1 < fn_names.size(); ++i) {
-        const auto& fn = reg.at(fn_names[i]);
+        const auto& fn = reg.at(chain_resolve_name(fn_names[i]));
         std::vector<ColView> scalars;
         scalars.reserve(fn.n_scalar_cols);
         for (uint32_t k = 0; k < fn.n_scalar_cols; ++k)
@@ -243,7 +256,7 @@ inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf
     }
 
     // SINK
-    return reg.at(fn_names.back()).as_sink(std::move(handles), n);
+    return reg.at(chain_resolve_name(fn_names.back())).as_sink(std::move(handles), n);
 }
 
 } // namespace ch
