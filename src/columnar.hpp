@@ -934,7 +934,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 //            → Array(Tuple(UInt64, Float64))
 
 __attribute__((export_name("st_knn")))
-ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
+inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
 {
     using KVPair   = std::pair<uint64_t, double>;
     using KNNResult = std::vector<KVPair>;

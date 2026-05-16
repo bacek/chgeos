@@ -844,23 +844,18 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
     __builtin_unreachable();
 }
 
-// ── pack_complex_result: serialize a complex type into ColumnBinary format ────
-// Uses write_complex_col from columnar.hpp to produce the data, then packs it
-// as a varint-length blob (length prefix + raw bytes).
-
-static inline void pack_complex_result(raw_buffer& buf, const std::vector<std::pair<uint64_t, double>>& val) {
-    raw_buffer* tmp = write_complex_col<std::vector<std::pair<uint64_t, double>>>(1,
-        [&](uint32_t) -> const std::vector<std::pair<uint64_t, double>>& { return val; });
-    uint64_t len = static_cast<uint64_t>(tmp->size());
-    writeVarUInt(len, buf);
-    for (size_t i = 0; i < tmp->size(); ++i)
-        buf.push_back((*tmp)[i]);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(tmp));
-}
-
 // ── st_knn_cb: k-nearest-neighbour (ColumnBinary) ─────────────────────────────
 // Signature: st_knn_cb(query String, candidates Array(String), k UInt32)
 //            → Array(Tuple(UInt64, Float64))
+//
+// Output format: raw ColumnBinary Array data (NOT COL_COMPLEX):
+//   [offset_0: u64LE][offset_1: u64LE]...[offset_n-1: u64LE]
+//   [idx_0: u64LE][idx_1: u64LE]...[idx_{total-1}: u64LE]
+//   [dist_0: u64LE][dist_1: u64LE]...[dist_{total-1}: u64LE]
+//
+// Offsets are cumulative element counts (matching readArrayColumnData).
+// Tuple elements are written in columnar order: all UInt64 indices first,
+// then all Float64 distances (matching deserializeBinaryBulk for Tuple).
 
 __attribute__((export_name("st_knn_cb")))
 raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
@@ -884,6 +879,7 @@ raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
     }
 
     raw_buffer* out = clickhouse_create_buffer(28);
+    out->clear();
     writeBinaryLE32(1u, *out);
     writeBinaryLE32(num_rows, *out);
     out->push_back(0x00);
@@ -894,10 +890,12 @@ raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
     try {
         ColBinaryReader rq = ColBinaryReader::from_col(col_q, num_rows);
 
+        // Collect results first — ColumnBinary Array format requires
+        // offsets first, then all tuple elements in columnar order.
+        std::vector<std::pair<uint64_t, double>> all_results;
+        all_results.reserve(static_cast<size_t>(num_rows) * k);
+
         if (col_c.is_const) {
-            // Candidates same for every row → build centroid k-d tree once.
-            // For const candidates, parse them from the raw data.
-            // col_c.data = [u32[M+1] outer_offs][inner_offs][bytes]
             const uint32_t* outer_offs = reinterpret_cast<const uint32_t*>(col_c.data);
             const uint32_t M = outer_offs[cb.num_rows];
             const uint32_t* inner_offs = reinterpret_cast<const uint32_t*>(col_c.data + (cb.num_rows + 1u) * 4u);
@@ -914,19 +912,21 @@ raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
             for (uint32_t i = 0; i < num_rows; ++i) {
                 auto span_q = rq.read_blob();
                 if (span_q.empty()) {
-                    pack_complex_result(*out, {});
+                    for (uint32_t j = 0; j < k; ++j)
+                        all_results.emplace_back(0, 0.0);
                 } else {
                     BBox pt = wkb_bbox(span_q);
                     if (pt.is_empty()) {
-                        pack_complex_result(*out, {});
+                        for (uint32_t j = 0; j < k; ++j)
+                            all_results.emplace_back(0, 0.0);
                     } else {
                         auto result = st_knn_centroid(span_q, cands, k);
-                        pack_complex_result(*out, result);
+                        for (auto& r : result)
+                            all_results.push_back(r);
                     }
                 }
             }
         } else {
-            // Candidates vary per row: brute-force.
             const uint32_t* outer_offs = reinterpret_cast<const uint32_t*>(col_c.data);
             const uint32_t M = outer_offs[num_rows];
             const uint32_t* inner_offs = reinterpret_cast<const uint32_t*>(col_c.data + (num_rows + 1u) * 4u);
@@ -935,26 +935,50 @@ raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
             for (uint32_t i = 0; i < num_rows; ++i) {
                 auto span_q = rq.read_blob();
                 if (span_q.empty()) {
-                    pack_complex_result(*out, {});
-                    continue;
+                    for (uint32_t j = 0; j < k; ++j)
+                        all_results.emplace_back(0, 0.0);
+                } else {
+                    auto q = read_wkb(span_q);
+                    uint32_t elem_start = outer_offs[i], elem_end = outer_offs[i + 1];
+                    std::vector<std::span<const uint8_t>> cands;
+                    cands.reserve(elem_end - elem_start);
+                    for (uint32_t j = elem_start; j < elem_end; ++j) {
+                        uint32_t s = inner_offs[j], e = inner_offs[j + 1];
+                        uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
+                        cands.push_back({chars + s, len});
+                    }
+                    auto result = st_knn_brute(q.get(), cands, k);
+                    for (auto& r : result)
+                        all_results.push_back(r);
                 }
-                auto q = read_wkb(span_q);
-                uint32_t elem_start = outer_offs[i], elem_end = outer_offs[i + 1];
-                std::vector<std::span<const uint8_t>> cands;
-                cands.reserve(elem_end - elem_start);
-                for (uint32_t j = elem_start; j < elem_end; ++j) {
-                    uint32_t s = inner_offs[j], e = inner_offs[j + 1];
-                    uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
-                    cands.push_back({chars + s, len});
-                }
-                pack_complex_result(*out, st_knn_brute(q.get(), cands, k));
             }
+        }
+
+        // Write ColumnBinary Array format:
+        // 1. Cumulative offsets (u64LE each)
+        // 2. All UInt64 indices (u64LE each)
+        // 3. All Float64 distances (u64LE each)
+        uint64_t cumulative = 0;
+        for (uint32_t i = 0; i < num_rows; ++i) {
+            cumulative += k;
+            writeBinaryLE64(cumulative, *out);
+        }
+        for (size_t i = 0; i < all_results.size(); ++i) {
+            writeBinaryLE64(all_results[i].first, *out);
+        }
+        for (size_t i = 0; i < all_results.size(); ++i) {
+            writeBinaryLE64(*reinterpret_cast<uint64_t*>(&all_results[i].second), *out);
         }
     } catch (const std::exception& e) {
         clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
         panic(e.what());
     }
-    __builtin_unreachable();
+
+    uint64_t data_size = out->size() - data_size_pos - 8;
+    for (int i = 0; i < 8; ++i)
+        (*out)[data_size_pos + i] = static_cast<uint8_t>(data_size >> (i * 8));
+
+    return out;
 }
 
 } // namespace ch
