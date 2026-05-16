@@ -3,6 +3,9 @@
 #
 # Usage:
 #   ./clickhouse/test_e2e.sh [path/to/clickhouse] [path/to/chgeos.wasm]
+#
+# Environment:
+#   WIRE_PROTOCOL=col|mp|buffers|cb — wire format (default: col, bare names)
 
 set -euo pipefail
 
@@ -111,21 +114,6 @@ t "st_extent_agg_polys" "SELECT round(st_area(st_extent_agg(geom))) FROM (SELECT
 t "st_makeline_agg"     "SELECT st_astext(st_makeline_agg(geom)) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (1 1)'))"  "LINESTRING (0 0, 1 0, 1 1)"
 t "st_convexhull_agg"   "SELECT round(st_area(st_convexhull_agg(geom)), 1) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (0 1)'))"  "0.5"
 
-# COLUMNAR_V1 aggregate functions (is_aggregate=1)
-# Cross-check: COLUMNAR_V1 and _mp paths must agree.
-t "col_vs_mp_union_agg" \
-    "SELECT st_astext(st_union_agg(wkb)) = st_astext(st_union_agg_mp(groupArray(wkb))) FROM (SELECT st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))') AS wkb UNION ALL SELECT st_geomfromtext('POLYGON ((2 2, 3 2, 3 3, 2 3, 2 2))'))" \
-    "1"
-t "col_extent_agg_bbox" \
-    "SELECT st_astext(st_extent_agg(wkb)) FROM (SELECT st_geomfromtext('POINT (1 2)') AS wkb UNION ALL SELECT st_geomfromtext('POINT (4 6)') UNION ALL SELECT st_geomfromtext('POINT (-1 0)'))" \
-    "POLYGON ((-1 0, 4 0, 4 6, -1 6, -1 0))"
-t "col_collect_agg_types" \
-    "SELECT st_astext(st_collect_agg(wkb)) FROM (SELECT st_geomfromtext('POINT (0 0)') AS wkb UNION ALL SELECT st_geomfromtext('POINT (1 1)'))" \
-    "GEOMETRYCOLLECTION (POINT (0 0), POINT (1 1))"
-t "col_union_agg_single" \
-    "SELECT st_astext(st_union_agg(wkb)) FROM (SELECT st_geomfromtext('POINT (3 7)') AS wkb)" \
-    "POINT (3 7)"
-
 # st_knn: k-nearest-neighbour
 # 3 candidate points at (0,0), (3,4), (10,0); query (1,0) with k=2
 # Distances: to (0,0)=1.0, to (3,4)=5.0, to (10,0)=9.0 → nearest 2: idx 0 (d=1), idx 1 (d=5)
@@ -177,9 +165,6 @@ t "st_dwithin_yes"     "SELECT st_dwithin(st_geomfromtext('POINT (0 0)'), st_geo
 t "st_dwithin_no"      "SELECT st_dwithin(st_geomfromtext('POINT (0 0)'), st_geomfromtext('POINT (3 4)'), 4.9)"  "0"
 t "st_intersects_ext_yes" "SELECT st_intersects_extent(st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))'), st_geomfromtext('POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))'))"  "1"
 t "st_intersects_ext_no"  "SELECT st_intersects_extent(st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))'), st_geomfromtext('POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))'))"  "0"
-t "st_intersects_ext_rb_yes" "SELECT st_intersects_extent_rb(st_geomfromtext('POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))'), st_geomfromtext('POLYGON ((1 1, 3 1, 3 3, 1 3, 1 1))'))"  "1"
-t "st_intersects_ext_rb_no"  "SELECT st_intersects_extent_rb(st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))'), st_geomfromtext('POLYGON ((5 5, 6 5, 6 6, 5 6, 5 5))'))"  "0"
-t "st_intersects_ext_rb_touch" "SELECT st_intersects_extent_rb(st_geomfromtext('POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))'), st_geomfromtext('POLYGON ((1 0, 2 0, 2 1, 1 1, 1 0))'))"  "1"
 t "st_covers_interior" "SELECT st_covers(st_geomfromtext('POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))'), st_geomfromtext('POINT (5 5)'))"  "1"
 t "st_covers_boundary" "SELECT st_covers(st_geomfromtext('POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))'), st_geomfromtext('POINT (5 0)'))"  "1"
 t "st_coveredby"       "SELECT st_coveredby(st_geomfromtext('POINT (5 0)'), st_geomfromtext('POLYGON ((0 0, 10 0, 10 10, 0 10, 0 0))'))"  "1"
@@ -285,6 +270,12 @@ MULTIQUERY="$(cat "${CREATE_SQL}")"$'\n'
 for i in "${!NAMES[@]}"; do
     MULTIQUERY+="${QUERIES[$i]};"$'\n'
 done
+
+# Apply wire protocol suffix to all bare chgeos function names
+if [[ "${WIRE_PROTOCOL:-col}" != "col" ]]; then
+    SUFFIX="_${WIRE_PROTOCOL:-col}"
+    MULTIQUERY="$(printf '%s' "${MULTIQUERY}" | sed "s/\(st_[a-z]*\)\([ (,)]\|$\)/\1${SUFFIX}\2/g")"
+fi
 
 RESULTS="$(CH --multiquery --query "${MULTIQUERY}")"
 
