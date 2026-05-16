@@ -357,6 +357,8 @@ CH_UDF_CB(st_setsrid)
 CH_UDF_CB(st_transform)
 CH_UDF_CB(st_transform_proj)
 CH_UDF_CB(st_collect_agg)
+CH_UDF_CB(st_geomfromtext)
+CH_UDF_CB(st_geomfromwkb)
 
 
 // ── st_knn: k-nearest-neighbour spatial query ─────────────────────────────────

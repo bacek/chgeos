@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -334,6 +335,9 @@ constexpr uint8_t cb_output_tag<int32_t>() { return 0x05; }
 template <>
 constexpr uint8_t cb_output_tag<uint32_t>() { return 0x06; }
 
+template <>
+constexpr uint8_t cb_output_tag<raw_buffer>() { return 0x0B; }
+
 // ── pack_result: write a single result value into a raw_buffer ───────────────
 
 static inline void pack_result(raw_buffer& buf, bool v) {
@@ -375,6 +379,12 @@ static inline void pack_result(raw_buffer& buf, std::string_view s) {
     writeVarUInt(static_cast<uint64_t>(len), buf);
     for (uint32_t i = 0; i < len; ++i)
         buf.push_back(static_cast<uint8_t>(s[i]));
+}
+
+static inline void pack_result(raw_buffer& buf, raw_buffer v) {
+    writeVarUInt(static_cast<uint64_t>(v.size()), buf);
+    for (size_t i = 0; i < v.size(); ++i)
+        buf.push_back(v[i]);
 }
 
 // ── unpack_arg: deserialize one argument from ColBinaryReader ────────────────
@@ -473,7 +483,7 @@ unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(ColBinaryReader& 
         std::memcpy(&o0, p, 8); p += 8;
         std::memcpy(&o1, p, 8); p += 8;
         uint64_t M = o1 - o0;
-        off += snprintf(errbuf + off, sizeof(errbuf) - off, " CONST: o0=%lu o1=%lu M=%lu", o0, o1, M);
+        off += snprintf(errbuf + off, sizeof(errbuf) - off, " CONST: o0=%" PRIu64 " o1=%" PRIu64 " M=%" PRIu64, o0, o1, M);
         for (uint64_t i = 0; i < M && num_results < 4096; ++i) {
             uint64_t data_len = 0;
             int shift = 0;
@@ -518,7 +528,7 @@ unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(ColBinaryReader& 
             ch::panic(errbuf);
         }
         uint64_t elem_count = r.cached_offsets[row + 1] - r.cached_offsets[row];
-        off += snprintf(errbuf + off, sizeof(errbuf) - off, " elem_count=%lu", elem_count);
+        off += snprintf(errbuf + off, sizeof(errbuf) - off, " elem_count=%" PRIu64, elem_count);
 
         const uint8_t* p = r.p;
         for (uint64_t i = 0; i < elem_count && num_results < 4096; ++i) {

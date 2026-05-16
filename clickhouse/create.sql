@@ -2762,63 +2762,63 @@ SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_intersection_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_union_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_difference_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_makeline_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_symdifference_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_collect_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_closestpoint_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_shortestline_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_sharedpaths_cb
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
@@ -3061,6 +3061,20 @@ SETTINGS serialization_format = 'ColumnBinary';
 CREATE OR REPLACE FUNCTION st_transform_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geometry String) RETURNS String
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'ColumnBinary';
+
+CREATE OR REPLACE FUNCTION st_geomfromtext_cb
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkt String) RETURNS String
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'ColumnBinary';
+
+CREATE OR REPLACE FUNCTION st_geomfromwkb_cb
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (wkb String) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
