@@ -280,7 +280,7 @@ struct ColBinaryReader {
 
             // Validate: offsets[N] + remaining bytes must not exceed data_end.
             uint32_t last_off = u32_offs[n];
-            if (u32_dat + last_off <= data_end) {
+            if (u32_dat <= data_end && u32_offs[0] == 0 && u32_dat + last_off == data_end) {
                 cached_u32_offsets = u32_offs;
                 cached_u32_data = u32_dat;
                 u32_offsets_cached = true;
@@ -311,20 +311,6 @@ struct ColBinaryReader {
         const uint8_t* start = p + prefix;
         p += prefix + static_cast<uint32_t>(data_len);
         return {start, static_cast<size_t>(data_len)};
-    }
-
-    // Debug: print hex dump of a span (for WASM troubleshooting).
-    void debug_dump(const char* label, const uint8_t* start, size_t len) const {
-        char buf[256];
-        int off = 0;
-        off += snprintf(buf + off, sizeof(buf) - off, "DBG|%s: %zu bytes", label, len);
-        if (off >= (int)sizeof(buf) - 1) return;
-        for (size_t i = 0; i < len && i < 64; ++i) {
-            off += snprintf(buf + off, sizeof(buf) - off, " %02x", start[i]);
-            if (off >= (int)sizeof(buf) - 1) break;
-        }
-        if (len > 64) off += snprintf(buf + off, sizeof(buf) - off, " ...");
-        ch::log(ch::log_level::debug, buf);
     }
 
     // Read a u64LE value from the cursor (for parsing Native array offsets).
@@ -498,112 +484,81 @@ inline geos::geom::Geometry const* unpack_arg<geos::geom::Geometry const*>(ColBi
 template <>
 inline std::vector<std::unique_ptr<geos::geom::Geometry>>
 unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(ColBinaryReader& r) {
-    std::vector<uint64_t> offsets;
     std::vector<std::unique_ptr<Geometry>> result;
-    char errbuf[128];
-    int off = 0;
 
-    if (!r.data_start || !r.data_end) ch::panic("ARRAY: null data pointers");
-    size_t data_len = r.data_end - r.data_start;
-    off += snprintf(errbuf, sizeof(errbuf), "ARRAY: const=%d rows=%d data_len=%zu",
-                    r.is_const, r.stored_rows, data_len);
-    ch::log(ch::log_level::debug, errbuf);
+    if (!r.data_start || !r.data_end) return result;
 
-    uint64_t offsets_buf[4096];
-    std::unique_ptr<Geometry> result_buf[4096];
-    uint32_t num_results = 0;
-    uint32_t num_offsets = 0;
-
-    auto add_geom = [&](std::unique_ptr<Geometry> g) {
-        if (num_results < 4096) result_buf[num_results++] = std::move(g);
+    auto parse_geom = [](const uint8_t* p, size_t len) -> std::unique_ptr<Geometry> {
+        if (len == 0) return nullptr;
+        auto sp = std::span<const uint8_t>{p, len};
+        if (ch::is_wkb(sp)) return ch::read_wkb(sp);
+        return ch::read_wkt(sp);
     };
 
     if (r.is_const) {
-        if (!r.blob_cached) {
-            r.cached_blob = r.parse_blob_from(r.data_start, r.data_end);
-            r.blob_cached = true;
+        // [N u64 per-row counts][u32[M+1] cumul str offsets][chars]
+        // (ColumnBinary: no null terminators in data)
+        const uint8_t* p = r.data_start;
+        const uint8_t* end = r.data_end;
+        uint64_t M = 0;
+        // Read all per-row counts to skip past them to u32 offsets.
+        uint32_t n = r.stored_rows;
+        if (p + n * 8 > end) return result;
+        const uint8_t* off_p = p + n * 8;
+        if (n > 0) {
+            for (uint32_t i = 0; i < n; ++i) {
+                uint64_t count = 0;
+                std::memcpy(&count, p, 8); p += 8;
+                M = count;
+            }
         }
-        const uint8_t* p = r.cached_blob.data();
-        const uint8_t* end = p + r.cached_blob.size();
-        if (p + 16 > end) return {};
-        uint64_t o0, o1;
-        std::memcpy(&o0, p, 8); p += 8;
-        std::memcpy(&o1, p, 8); p += 8;
-        uint64_t M = o1 - o0;
-        off += snprintf(errbuf + off, sizeof(errbuf) - off, " CONST: o0=%" PRIu64 " o1=%" PRIu64 " M=%" PRIu64, o0, o1, M);
-        for (uint64_t i = 0; i < M && num_results < 4096; ++i) {
-            uint64_t data_len = 0;
-            int shift = 0;
-            const uint8_t* ep = p;
-            while (ep < end) {
-                uint8_t byte = *ep++;
-                data_len |= static_cast<uint64_t>(byte & 0x7F) << shift;
-                if ((byte & 0x80) == 0) break;
-                shift += 7;
-            }
-            if (ep + data_len > end) break;
-            if (data_len == 0) {
-                add_geom(nullptr);
-            } else {
-                if (ch::is_wkb({ep, static_cast<size_t>(data_len)}))
-                    add_geom(ch::read_wkb({ep, static_cast<size_t>(data_len)}));
-                else
-                    add_geom(ch::read_wkt({ep, static_cast<size_t>(data_len)}));
-            }
-            p = ep + data_len;
+        if (M == 0 || off_p + (M + 1) * 4 > end) return result;
+        const uint32_t* str_offs = reinterpret_cast<const uint32_t*>(off_p);
+        const uint8_t* chars = off_p + (M + 1) * 4;
+        result.reserve(static_cast<size_t>(M));
+        for (uint64_t i = 0; i < M; ++i) {
+            uint32_t o0 = str_offs[i], o1 = str_offs[i + 1];
+            if (o0 > o1 || chars + o1 > end) { result.push_back(nullptr); continue; }
+            result.push_back(parse_geom(chars + o0, static_cast<size_t>(o1 - o0)));
         }
     } else {
-        const uint8_t* end = r.data_end;
+        // Non-const: [N u64 per-row counts][u32[total_M+1] offsets][chars].
+        // Cache row-start table and string-offset pointer on first call.
         if (!r.offsets_cached) {
             const uint8_t* p = r.data_start;
-            uint32_t expected_offsets = r.stored_rows + 1;
-            if (expected_offsets > 4096) expected_offsets = 4096;
-            if (expected_offsets < 2) expected_offsets = 2;
-            for (uint32_t i = 0; i < expected_offsets && p + 8 <= end; ++i) {
-                uint64_t o = 0;
-                std::memcpy(&o, p, 8);
-                r.cached_offsets.push_back(o);
-                p += 8;
+            const uint8_t* end = r.data_end;
+            r.cached_offsets.clear();
+            r.cached_offsets.reserve(r.stored_rows + 1);
+            r.cached_offsets.push_back(0);
+            uint64_t total_M = 0;
+            for (uint32_t i = 0; i < r.stored_rows && p + 8 <= end; ++i) {
+                uint64_t count = 0;
+                std::memcpy(&count, p, 8); p += 8;
+                total_M += count;
+                r.cached_offsets.push_back(total_M);
             }
-            r.p = p;
+            if (total_M > 0 && p + (total_M + 1) * 4 <= end) {
+                r.cached_u32_offsets = reinterpret_cast<const uint32_t*>(p);
+                r.cached_u32_data = p + (total_M + 1) * 4;
+            }
             r.offsets_cached = true;
         }
-        if (r.cached_offsets.size() < 2) return {};
-        uint32_t row = r.current_row;
-        if (row + 1 >= static_cast<uint32_t>(r.cached_offsets.size())) {
-            off += snprintf(errbuf + off, sizeof(errbuf) - off, " ERROR: row+1 >= num_offsets");
-            ch::panic(errbuf);
-        }
-        uint64_t elem_count = r.cached_offsets[row + 1] - r.cached_offsets[row];
-        off += snprintf(errbuf + off, sizeof(errbuf) - off, " elem_count=%" PRIu64, elem_count);
 
-        const uint8_t* p = r.p;
-        for (uint64_t i = 0; i < elem_count && num_results < 4096; ++i) {
-            uint64_t data_len = 0;
-            int shift = 0;
-            while (p < end) {
-                uint8_t byte = *p++;
-                data_len |= static_cast<uint64_t>(byte & 0x7F) << shift;
-                if ((byte & 0x80) == 0) break;
-                shift += 7;
-            }
-            if (p + data_len > end) break;
-            if (data_len == 0) {
-                add_geom(nullptr);
-            } else {
-                if (ch::is_wkb({p, static_cast<size_t>(data_len)}))
-                    add_geom(ch::read_wkb({p, static_cast<size_t>(data_len)}));
-                else
-                    add_geom(ch::read_wkt({p, static_cast<size_t>(data_len)}));
-            }
-            p += data_len;
+        uint32_t row = r.current_row++;
+        if (row + 1 >= static_cast<uint32_t>(r.cached_offsets.size())) return result;
+        uint64_t elem_start = r.cached_offsets[row];
+        uint64_t elem_end   = r.cached_offsets[row + 1];
+        if (elem_start >= elem_end || !r.cached_u32_offsets || !r.cached_u32_data) return result;
+
+        const uint8_t* chars    = r.cached_u32_data;
+        const uint8_t* data_end = r.data_end;
+        result.reserve(static_cast<size_t>(elem_end - elem_start));
+        for (uint64_t i = elem_start; i < elem_end; ++i) {
+            uint32_t o0 = r.cached_u32_offsets[i], o1 = r.cached_u32_offsets[i + 1];
+            if (o0 > o1 || chars + o1 > data_end) { result.push_back(nullptr); continue; }
+            result.push_back(parse_geom(chars + o0, static_cast<size_t>(o1 - o0)));
         }
-        r.p = p;
-        ++r.current_row;
     }
-    ch::log(ch::log_level::debug, errbuf);
-    for (uint32_t i = 0; i < num_results; ++i)
-        result.push_back(std::move(result_buf[i]));
     return result;
 }
 
@@ -793,9 +748,6 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
                                     ColPrepPointOp prep_a_point = nullptr,
                                     ColPrepPointOp prep_b_point = nullptr)
 {
-    char dbg[64];
-    int o = snprintf(dbg, sizeof(dbg), "CB_WRAPPER: %s rows=%d", func_name, num_rows);
-    ch::log(ch::log_level::debug, dbg);
     auto cb = parse_col_binary(ptr);
     uint32_t n = cb.num_rows;
     constexpr size_t nargs = sizeof...(Args);
@@ -848,35 +800,23 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
 // Signature: st_knn_cb(query String, candidates Array(String), k UInt32)
 //            → Array(Tuple(UInt64, Float64))
 //
-// Output format: raw ColumnBinary Array data (NOT COL_COMPLEX):
-//   [offset_0: u64LE][offset_1: u64LE]...[offset_n-1: u64LE]
-//   [idx_0: u64LE][idx_1: u64LE]...[idx_{total-1}: u64LE]
-//   [dist_0: u64LE][dist_1: u64LE]...[dist_{total-1}: u64LE]
+// Output ColumnBinary Array format (N rows):
+//   N × u64LE cumulative end-offsets  (no leading zero — CH Array serialization)
+//   all UInt64 indices  (columnar, Tuple field 0)
+//   all Float64 distances  (columnar, Tuple field 1)
 //
-// Offsets are cumulative element counts (matching readArrayColumnData).
-// Tuple elements are written in columnar order: all UInt64 indices first,
-// then all Float64 distances (matching deserializeBinaryBulk for Tuple).
+// Input Array(String) CH wire format:
+//   const col:     [u64 M][u32[M+1] cumul str offsets][chars+null-terminators]
+//   non-const col: [N u64 per-row counts][u32[total_M+1] cumul str offsets][chars]
 
 __attribute__((export_name("st_knn_cb")))
 raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
     auto cb = parse_col_binary(ptr);
     auto& col_q = cb.cols[0];  // String (WKB)
-    auto& col_c = cb.cols[1];  // Array(String) — COL_COMPLEX
+    auto& col_c = cb.cols[1];  // Array(String)
     auto& col_k = cb.cols[2];  // UInt32
 
-    uint32_t k = col_k.is_const
-        ? *reinterpret_cast<const uint32_t*>(col_k.data)
-        : *reinterpret_cast<const uint32_t*>(col_k.data);
-
-    if (k == 0 || num_rows == 0) {
-        raw_buffer* out = clickhouse_create_buffer(28);
-        writeBinaryLE32(1u, *out);
-        writeBinaryLE32(num_rows, *out);
-        out->push_back(0x00);
-        uint64_t zero = 0;
-        writeBinaryLE64(zero, *out);
-        return out;
-    }
+    uint32_t k = *reinterpret_cast<const uint32_t*>(col_k.data);
 
     raw_buffer* out = clickhouse_create_buffer(28);
     out->clear();
@@ -884,97 +824,114 @@ raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
     writeBinaryLE32(num_rows, *out);
     out->push_back(0x00);
     size_t data_size_pos = out->size();
-    uint64_t zero = 0;
-    writeBinaryLE64(zero, *out);
+    writeBinaryLE64(0ull, *out);
 
     try {
         ColBinaryReader rq = ColBinaryReader::from_col(col_q, num_rows);
 
-        // Collect results first — ColumnBinary Array format requires
-        // offsets first, then all tuple elements in columnar order.
-        std::vector<std::pair<uint64_t, double>> all_results;
-        all_results.reserve(static_cast<size_t>(num_rows) * k);
+        std::vector<std::vector<std::pair<uint64_t, double>>> row_results(num_rows);
 
-        if (col_c.is_const) {
-            const uint32_t* outer_offs = reinterpret_cast<const uint32_t*>(col_c.data);
-            const uint32_t M = outer_offs[cb.num_rows];
-            const uint32_t* inner_offs = reinterpret_cast<const uint32_t*>(col_c.data + (cb.num_rows + 1u) * 4u);
-            const uint8_t* chars = col_c.data + (cb.num_rows + 1u) * 4u + (M + 1u) * 4u;
-
-            std::vector<std::span<const uint8_t>> cands;
-            cands.reserve(M);
-            for (uint32_t i = 0; i < M; ++i) {
-                uint32_t s = inner_offs[i], e = inner_offs[i + 1];
-                uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
-                cands.push_back({chars + s, len});
-            }
-
-            for (uint32_t i = 0; i < num_rows; ++i) {
-                auto span_q = rq.read_blob();
-                if (span_q.empty()) {
-                    for (uint32_t j = 0; j < k; ++j)
-                        all_results.emplace_back(0, 0.0);
-                } else {
-                    BBox pt = wkb_bbox(span_q);
-                    if (pt.is_empty()) {
-                        for (uint32_t j = 0; j < k; ++j)
-                            all_results.emplace_back(0, 0.0);
-                    } else {
-                        auto result = st_knn_centroid(span_q, cands, k);
-                        for (auto& r : result)
-                            all_results.push_back(r);
+        if (k > 0 && num_rows > 0) {
+            if (col_c.is_const) {
+                // [N u64 per-row counts][u32[M+1] cumul str offsets][chars+null-terminators]
+                const uint8_t* p = col_c.data;
+                const uint8_t* cend = col_c.data + col_c.data_size;
+                uint64_t M = 0;
+                std::vector<std::span<const uint8_t>> cands;
+                // Read all per-row counts (for const, each count = M_total).
+                const uint8_t* counts_end = p + num_rows * 8;
+                if (p + 8 <= cend && counts_end <= cend) {
+                    for (uint32_t i = 0; i < num_rows; ++i) {
+                        uint64_t count = 0;
+                        std::memcpy(&count, p, 8); p += 8;
+                        M = count;
+                    }
+                    if (M > 0 && p + (M + 1) * 4 <= cend) {
+                        const uint32_t* str_offs = reinterpret_cast<const uint32_t*>(p);
+                        p += (M + 1) * 4;
+                        const uint8_t* chars = p;
+                        cands.reserve(static_cast<size_t>(M));
+                        for (uint64_t i = 0; i < M; ++i) {
+                            uint32_t o0 = str_offs[i], o1 = str_offs[i + 1];
+                            if (o0 > o1 || chars + o1 > cend) break;
+                            cands.push_back({chars + o0, static_cast<size_t>(o1 - o0)});
+                        }
                     }
                 }
-            }
-        } else {
-            const uint32_t* outer_offs = reinterpret_cast<const uint32_t*>(col_c.data);
-            const uint32_t M = outer_offs[num_rows];
-            const uint32_t* inner_offs = reinterpret_cast<const uint32_t*>(col_c.data + (num_rows + 1u) * 4u);
-            const uint8_t* chars = col_c.data + (num_rows + 1u) * 4u + (M + 1u) * 4u;
-
-            for (uint32_t i = 0; i < num_rows; ++i) {
-                auto span_q = rq.read_blob();
-                if (span_q.empty()) {
-                    for (uint32_t j = 0; j < k; ++j)
-                        all_results.emplace_back(0, 0.0);
-                } else {
+                CentroidKNNIndex idx(cands);
+                for (uint32_t i = 0; i < num_rows; ++i) {
+                    auto span_q = rq.read_blob();
+                    if (span_q.empty() || idx.empty()) continue;
+                    BBox qb = wkb_bbox(span_q);
+                    if (qb.is_empty()) continue;
+                    double qx = (qb.xmin + qb.xmax) * 0.5;
+                    double qy = (qb.ymin + qb.ymax) * 0.5;
+                    row_results[i] = idx.query(qx, qy, k);
+                }
+            } else {
+                // [N u64 per-row counts][u32[total_M+1] cumul str offsets][chars+null-terminators]
+                const uint8_t* p = col_c.data;
+                const uint8_t* cend = col_c.data + col_c.data_size;
+                std::vector<uint64_t> row_starts;
+                row_starts.reserve(num_rows + 1);
+                row_starts.push_back(0);
+                uint64_t total_M = 0;
+                for (uint32_t i = 0; i < num_rows && p + 8 <= cend; ++i) {
+                    uint64_t count = 0;
+                    std::memcpy(&count, p, 8);
+                    p += 8;
+                    total_M += count;
+                    row_starts.push_back(total_M);
+                }
+                std::vector<std::span<const uint8_t>> all_elems;
+                if (total_M > 0 && p + (total_M + 1) * 4 <= cend) {
+                    const uint32_t* str_offs = reinterpret_cast<const uint32_t*>(p);
+                    p += (total_M + 1) * 4;
+                    const uint8_t* chars = p;
+                    all_elems.reserve(static_cast<size_t>(total_M));
+                    for (uint64_t i = 0; i < total_M; ++i) {
+                        uint32_t o0 = str_offs[i], o1 = str_offs[i + 1];
+                        if (o0 > o1 || chars + o1 > cend) break;
+                        all_elems.push_back({chars + o0, static_cast<size_t>(o1 - o0)});
+                    }
+                }
+                for (uint32_t i = 0; i < num_rows; ++i) {
+                    auto span_q = rq.read_blob();
+                    if (span_q.empty()) continue;
+                    uint64_t elem_start = i < row_starts.size() ? row_starts[i] : 0;
+                    uint64_t elem_end = (i + 1) < row_starts.size() ? row_starts[i + 1] : 0;
+                    if (elem_start >= elem_end || elem_end > all_elems.size()) continue;
+                    std::vector<std::span<const uint8_t>> cands(
+                        all_elems.begin() + static_cast<ptrdiff_t>(elem_start),
+                        all_elems.begin() + static_cast<ptrdiff_t>(elem_end));
                     auto q = read_wkb(span_q);
-                    uint32_t elem_start = outer_offs[i], elem_end = outer_offs[i + 1];
-                    std::vector<std::span<const uint8_t>> cands;
-                    cands.reserve(elem_end - elem_start);
-                    for (uint32_t j = elem_start; j < elem_end; ++j) {
-                        uint32_t s = inner_offs[j], e = inner_offs[j + 1];
-                        uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
-                        cands.push_back({chars + s, len});
-                    }
-                    auto result = st_knn_brute(q.get(), cands, k);
-                    for (auto& r : result)
-                        all_results.push_back(r);
+                    if (!q) continue;
+                    row_results[i] = st_knn_brute(q.get(), cands, k);
                 }
             }
         }
 
-        // Write ColumnBinary Array format:
-        // 1. Cumulative offsets (u64LE each)
-        // 2. All UInt64 indices (u64LE each)
-        // 3. All Float64 distances (u64LE each)
-        uint64_t cumulative = 0;
+        // N per-row element counts (CH Array input: readBinaryLittleEndian per-row, not cumulative).
+        for (uint32_t i = 0; i < num_rows; ++i)
+            writeBinaryLE64(static_cast<uint64_t>(row_results[i].size()), *out);
+        // All UInt64 indices (Tuple field 0, columnar).
+        for (uint32_t i = 0; i < num_rows; ++i)
+            for (auto& [idx, dist] : row_results[i])
+                writeBinaryLE64(idx, *out);
+        // All Float64 distances (Tuple field 1, columnar).
         for (uint32_t i = 0; i < num_rows; ++i) {
-            cumulative += k;
-            writeBinaryLE64(cumulative, *out);
-        }
-        for (size_t i = 0; i < all_results.size(); ++i) {
-            writeBinaryLE64(all_results[i].first, *out);
-        }
-        for (size_t i = 0; i < all_results.size(); ++i) {
-            writeBinaryLE64(*reinterpret_cast<uint64_t*>(&all_results[i].second), *out);
+            for (auto& [idx, dist] : row_results[i]) {
+                uint64_t bits;
+                std::memcpy(&bits, &dist, 8);
+                writeBinaryLE64(bits, *out);
+            }
         }
     } catch (const std::exception& e) {
         clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
         panic(e.what());
     }
 
-    uint64_t data_size = out->size() - data_size_pos - 8;
+    uint64_t data_size = static_cast<uint64_t>(out->size()) - data_size_pos - 8;
     for (int i = 0; i < 8; ++i)
         (*out)[data_size_pos + i] = static_cast<uint8_t>(data_size >> (i * 8));
 

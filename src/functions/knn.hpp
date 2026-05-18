@@ -135,6 +135,7 @@ public:
         tree_.reserve(wkbs.size());
         for (uint64_t i = 0; i < static_cast<uint64_t>(wkbs.size()); ++i)
         {
+            if (wkbs[i].empty()) continue;
             BBox bb = wkb_bbox(wkbs[i]);
             if (bb.is_empty()) continue;
             tree_.push_back({(bb.xmin + bb.xmax) * 0.5,

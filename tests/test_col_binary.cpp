@@ -38,25 +38,23 @@ TEST(ColBinaryVarint, WriteReadRoundTrip) {
 // ── Helper: build a ColumnBinary-format raw_buffer ────────────────────────────
 
 // Build a ColumnBinary-format raw_buffer from num_rows, num_cols, and per-column data.
-// Each column has: flags(u8), type_tag(u8 for simple types), data_size(u64LE), data.
+// Each column has: flags(u8), data_size(u64LE), data.
 static raw_buffer* make_col_binary_buf(uint32_t num_rows, uint32_t num_cols,
                                         const std::vector<std::vector<uint8_t>>& col_data,
-                                        uint8_t col_flags = 0,
-                                        uint8_t type_tag = 0x0B) {
+                                        uint8_t col_flags = 0) {
      raw_buffer* buf = clickhouse_create_buffer(0);
      buf->clear();
      writeBinaryLE32(num_cols, *buf);
      writeBinaryLE32(num_rows, *buf);
      for (uint32_t i = 0; i < num_cols; ++i) {
          buf->push_back(col_flags);
-         buf->push_back(type_tag);
          uint64_t data_size = static_cast<uint64_t>(col_data[i].size());
          for (uint32_t j = 0; j < 8; ++j)
              buf->push_back(static_cast<uint8_t>(data_size >> (j * 8)));
          for (size_t j = 0; j < col_data[i].size(); ++j)
              buf->push_back(col_data[i][j]);
      }
-    return buf;
+     return buf;
  }
 
  // Build a column buffer containing N varint-length strings (each: varint(len)+bytes).
@@ -133,92 +131,6 @@ TEST(ColBinaryParse, LargeDataSize) {
     EXPECT_EQ(cb.num_rows, 1u);
     EXPECT_EQ(cb.num_cols, 1u);
     EXPECT_EQ(cb.cols[0].data_size, 0x100ULL);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-// ── consume_type_tag ──────────────────────────────────────────────────────────
-
-TEST(ColBinaryTypeTag, LeafTypes) {
-    // Each leaf type should consume exactly 1 byte
-    for (uint8_t tag = 0x01; tag <= 0x0B; ++tag) {
-        raw_buffer* buf = clickhouse_create_buffer(0);
-        buf->clear();
-        buf->push_back(tag);
-        buf->push_back(0x42); // extra byte
-
-        const uint8_t* p = buf->data();
-        consume_type_tag(p, buf->data() + buf->size());
-        EXPECT_EQ(p, buf->data() + 1) << "Failed for leaf tag 0x" << std::hex << (int)tag;
-
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-    }
-}
-
-TEST(ColBinaryTypeTag, Nullable) {
-    // Nullable: 0x0C + inner tag
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    buf->push_back(0x0C);
-    buf->push_back(0x05); // Int32
-    buf->push_back(0xFF);
-
-    const uint8_t* p = buf->data();
-    consume_type_tag(p, buf->data() + buf->size());
-    EXPECT_EQ(p, buf->data() + 2);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-TEST(ColBinaryTypeTag, Array) {
-    // Array: 0x0D + inner tag
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    buf->push_back(0x0D);
-    buf->push_back(0x0B); // String
-    buf->push_back(0xFF);
-
-    const uint8_t* p = buf->data();
-    consume_type_tag(p, buf->data() + buf->size());
-    EXPECT_EQ(p, buf->data() + 2);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-TEST(ColBinaryTypeTag, NestedNullableArray) {
-    // Array(Nullable(String)): 0x0D 0x0C 0x0B
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    buf->push_back(0x0D);
-    buf->push_back(0x0C);
-    buf->push_back(0x0B);
-    buf->push_back(0xFF);
-
-    const uint8_t* p = buf->data();
-    consume_type_tag(p, buf->data() + buf->size());
-    EXPECT_EQ(p, buf->data() + 3);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-TEST(ColBinaryTypeTag, TuplePanic) {
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    buf->push_back(0x0E); // Tuple
-
-    const uint8_t* p = buf->data();
-    EXPECT_THROW(consume_type_tag(p, buf->data() + buf->size()), WasmPanicException);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-TEST(ColBinaryTypeTag, UnknownPanic) {
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    buf->push_back(0x0F); // Unknown
-
-    const uint8_t* p = buf->data();
-    EXPECT_THROW(consume_type_tag(p, buf->data() + buf->size()), WasmPanicException);
 
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 }
@@ -313,12 +225,11 @@ TEST(ColBinaryReader, ConstGeometry) {
     auto wkb = write_ewkb(g);
     std::vector<uint8_t> col_data;
     {
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(wkb.size(), *vb);
-        vb->append(wkb.data(), wkb.size());
-        col_data.assign(vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
+        // Const String columns use u32[2] header: {o0=0, o1=len} + bytes.
+        uint32_t o0 = 0, o1 = static_cast<uint32_t>(wkb.size());
+        for (int j = 0; j < 4; ++j) col_data.push_back(static_cast<uint8_t>(o0 >> (j * 8)));
+        for (int j = 0; j < 4; ++j) col_data.push_back(static_cast<uint8_t>(o1 >> (j * 8)));
+        col_data.insert(col_data.end(), wkb.begin(), wkb.end());
     }
     ColBinaryInfo ci;
     ci.is_const = true;
@@ -341,27 +252,38 @@ TEST(ColBinaryImpl, BoolHeaderOrder) {
     auto poly = wkt2wkb("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))");
     auto pt   = wkt2wkb("POINT (0.5 0.5)");
 
-    std::vector<uint8_t> col0_data, col1_data;
-    auto write_geom = [&](const ch::Vector& wkb, std::vector<uint8_t>& out) {
-        uint32_t len = static_cast<uint32_t>(wkb.size());
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(len, *vb);
-        out.insert(out.end(), vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-        out.insert(out.end(), wkb.data(), wkb.data() + wkb.size());
+    // Build u32 offset format for each column
+    auto write_geom_col = [&](const std::vector<ch::Vector>& wkbs, std::vector<uint8_t>& offsets, std::vector<uint8_t>& payload) {
+        std::vector<uint32_t> off;
+        off.push_back(0);
+        for (uint32_t i = 0; i < n; ++i) {
+            const auto& wkb = wkbs[i % wkbs.size()];
+            payload.insert(payload.end(), wkb.data(), wkb.data() + wkb.size());
+            off.push_back(static_cast<uint32_t>(payload.size()));
+        }
+        for (uint32_t o : off) {
+            for (uint32_t j = 0; j < 4; ++j)
+                offsets.push_back(static_cast<uint8_t>(o >> (j * 8)));
+        }
     };
-    for (uint32_t i = 0; i < n; ++i) {
-        write_geom(poly, col0_data);
-        write_geom(pt, col1_data);
-    }
+
+    std::vector<uint8_t> col0_offsets, col0_payload, col1_offsets, col1_payload;
+    std::vector<ch::Vector> polys(n, poly), pts(n, pt);
+    write_geom_col(polys, col0_offsets, col0_payload);
+    write_geom_col(pts, col1_offsets, col1_payload);
+
+    std::vector<uint8_t> col0_data, col1_data;
+    col0_data.insert(col0_data.end(), col0_offsets.begin(), col0_offsets.end());
+    col0_data.insert(col0_data.end(), col0_payload.begin(), col0_payload.end());
+    col1_data.insert(col1_data.end(), col1_offsets.begin(), col1_offsets.end());
+    col1_data.insert(col1_data.end(), col1_payload.begin(), col1_payload.end());
 
     auto* buf = make_col_binary_buf(n, 2, {col0_data, col1_data});
     auto* result = col_binary_impl_wrapper("st_contains_cb", buf, n, st_contains_impl,
         bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 
-    // Parse the output header: num_cols(u32LE) | num_rows(u32LE) | flags(u8) | type_tag(u8) | data_size(u64LE) | data
+    // Parse the output header: num_cols(u32LE) | num_rows(u32LE) | flags(u8) | data_size(u64LE) | data
     const uint8_t* p = result->data();
     const uint8_t* end = result->data() + result->size();
     uint32_t v32;
@@ -374,7 +296,6 @@ TEST(ColBinaryImpl, BoolHeaderOrder) {
     EXPECT_EQ(v32, n);
 
     EXPECT_EQ(*p++, 0u); // flags
-    EXPECT_EQ(*p++, 0x02u); // bool type tag
 
     EXPECT_TRUE(readBinaryLE64(p, end, v64));
     EXPECT_EQ(v64, static_cast<uint64_t>(n)); // data_size = n bool bytes
@@ -385,27 +306,37 @@ TEST(ColBinaryImpl, BoolHeaderOrder) {
 // ── col_binary_impl_wrapper: bool return with bbox + PreparedGeometry ─────────
 
 // Build a ColumnBinary-format input buffer for geometry predicates.
+// Uses u32 offset format: u32[N+1] offsets at data_start, raw bytes follow.
 static raw_buffer* make_col_binary_geom_buf(uint32_t num_rows,
-                                              const std::vector<ch::Vector>& col0_wkbs,
-                                              const std::vector<ch::Vector>& col1_wkbs,
-                                              uint32_t const_col_idx = UINT32_MAX) {
-    auto write_col = [&](const std::vector<ch::Vector>& wkbs, std::vector<uint8_t>& out, bool is_const) {
+                                               const std::vector<ch::Vector>& col0_wkbs,
+                                               const std::vector<ch::Vector>& col1_wkbs,
+                                               uint32_t const_col_idx = UINT32_MAX) {
+    auto write_col = [&](const std::vector<ch::Vector>& wkbs, std::vector<uint8_t>& offsets, std::vector<uint8_t>& payload, bool is_const) {
         uint32_t rows = is_const ? 1 : num_rows;
+        std::vector<uint32_t> off;
+        off.reserve(rows + 1);
+        off.push_back(0);
         for (uint32_t i = 0; i < rows; ++i) {
             const auto& wkb = wkbs.empty() ? wkbs[0] : wkbs[i % wkbs.size()];
-            uint32_t len = static_cast<uint32_t>(wkb.size());
-            raw_buffer* vb = clickhouse_create_buffer(0);
-            vb->clear();
-            writeVarUInt(len, *vb);
-            vb->append(wkb.data(), len);
-            out.insert(out.end(), vb->data(), vb->data() + vb->size());
-            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
+            payload.insert(payload.end(), wkb.data(), wkb.data() + wkb.size());
+            off.push_back(static_cast<uint32_t>(payload.size()));
+        }
+        for (uint32_t o : off) {
+            for (uint32_t j = 0; j < 4; ++j)
+                offsets.push_back(static_cast<uint8_t>(o >> (j * 8)));
         }
     };
 
+    std::vector<uint8_t> col0_offsets, col0_payload, col1_offsets, col1_payload;
+    write_col(col0_wkbs, col0_offsets, col0_payload, const_col_idx == 0);
+    write_col(col1_wkbs, col1_offsets, col1_payload, const_col_idx == 1);
+
+    // Combine offsets + payload for each column
     std::vector<uint8_t> col0_data, col1_data;
-    write_col(col0_wkbs, col0_data, const_col_idx == 0);
-    write_col(col1_wkbs, col1_data, const_col_idx == 1);
+    col0_data.insert(col0_data.end(), col0_offsets.begin(), col0_offsets.end());
+    col0_data.insert(col0_data.end(), col0_payload.begin(), col0_payload.end());
+    col1_data.insert(col1_data.end(), col1_offsets.begin(), col1_offsets.end());
+    col1_data.insert(col1_data.end(), col1_payload.begin(), col1_payload.end());
 
     uint8_t col0_flags = const_col_idx == 0 ? 0x01 : 0;
     uint8_t col1_flags = const_col_idx == 1 ? 0x01 : 0;
@@ -415,14 +346,14 @@ static raw_buffer* make_col_binary_geom_buf(uint32_t num_rows,
     writeBinaryLE32(2, *buf);
     writeBinaryLE32(num_rows, *buf);
 
-    // Col0: flags + type_tag(0x0B=String) + data_size(u64) + data
-    buf->push_back(col0_flags); buf->push_back(0x0B);
+    // Col0: flags + data_size(u64) + data
+    buf->push_back(col0_flags);
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
     // Col1
-    buf->push_back(col1_flags); buf->push_back(0x0B);
+    buf->push_back(col1_flags);
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
     for (auto b : col1_data) buf->push_back(b);
@@ -573,7 +504,7 @@ TEST(ColBinaryImpl, DoubleReturn) {
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(double));
     }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, 0x0A); // f64 tag
+    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0);
     auto* result = col_binary_impl_wrapper("double_identity_cb", buf, 3, double_identity_impl);
 
     auto cb = parse_col_binary(result);
@@ -667,7 +598,7 @@ TEST(ColBinaryImpl, Int32Return) {
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(int32_t));
     }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, 0x05);
+    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0);
     auto* result = col_binary_impl_wrapper("int32_identity_cb", buf, 3, int32_identity_impl);
 
     auto cb = parse_col_binary(result);
@@ -697,7 +628,7 @@ TEST(ColBinaryImpl, Uint32Return) {
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(uint32_t));
     }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, 0x06);
+    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0);
     auto* result = col_binary_impl_wrapper("uint32_identity_cb", buf, 3, uint32_identity_impl);
 
     auto cb = parse_col_binary(result);
@@ -727,12 +658,20 @@ static raw_buffer* make_col_binary_geom3(uint32_t num_rows,
         for (uint32_t i = 0; i < rows; ++i) {
             const auto& wkb = wkbs.empty() ? wkbs[0] : wkbs[i % wkbs.size()];
             uint32_t len = static_cast<uint32_t>(wkb.size());
-            raw_buffer* vb = clickhouse_create_buffer(0);
-            vb->clear();
-            writeVarUInt(len, *vb);
-            vb->append(wkb.data(), len);
-            out.insert(out.end(), vb->data(), vb->data() + vb->size());
-            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
+            if (is_const) {
+                // CH native format for const String: u32[2] {0, len} + raw bytes
+                uint32_t o0 = 0, o1 = len;
+                for (int j = 0; j < 4; ++j) out.push_back(static_cast<uint8_t>(o0 >> (j * 8)));
+                for (int j = 0; j < 4; ++j) out.push_back(static_cast<uint8_t>(o1 >> (j * 8)));
+                out.insert(out.end(), wkb.data(), wkb.data() + wkb.size());
+            } else {
+                raw_buffer* vb = clickhouse_create_buffer(0);
+                vb->clear();
+                writeVarUInt(len, *vb);
+                vb->append(wkb.data(), len);
+                out.insert(out.end(), vb->data(), vb->data() + vb->size());
+                clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
+            }
         }
     };
 
@@ -751,19 +690,19 @@ static raw_buffer* make_col_binary_geom3(uint32_t num_rows,
     writeBinaryLE32(num_rows, *buf);
 
     // Col0: geom
-    buf->push_back(const_col_idx == 0 ? 0x01 : 0); buf->push_back(0x0B);
+    buf->push_back(const_col_idx == 0 ? 0x01 : 0);
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
     // Col1: geom
-    buf->push_back(const_col_idx == 1 ? 0x01 : 0); buf->push_back(0x0B);
+    buf->push_back(const_col_idx == 1 ? 0x01 : 0);
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
     for (auto b : col1_data) buf->push_back(b);
 
     // Col2: double
-    buf->push_back(0); buf->push_back(0x0A);
+    buf->push_back(0);
     uint64_t ds2 = col2_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds2 >> (j * 8)));
     for (auto b : col2_data) buf->push_back(b);
@@ -842,6 +781,7 @@ TEST(ColBinaryImpl, BoolBConstDist_MatchesBaseline) {
 // ── Array(String) with cumulative offsets ─────────────────────────────────────
 
 // Helper: build a ColumnBinary buffer with a single Array(String) column.
+// CH wire format: [N u64 per-row counts][u32[total_M+1] cumul str offsets][chars+nulls]
 static raw_buffer* make_col_binary_array_col(uint32_t num_rows,
                                               const std::vector<std::vector<std::string>>& rows) {
     raw_buffer* buf = clickhouse_create_buffer(0);
@@ -849,45 +789,32 @@ static raw_buffer* make_col_binary_array_col(uint32_t num_rows,
     writeBinaryLE32(1, *buf);
     writeBinaryLE32(num_rows, *buf);
 
-    std::vector<uint8_t> col_data;
-    std::vector<uint64_t> offsets;
-    uint64_t cumulative = 0;
-    offsets.push_back(0);
+    // Build flat string list — CH ColumnBinaryOutputFormat does NOT write null terminators.
+    std::string chars_data;
+    std::vector<uint32_t> str_offsets = {0};
     for (uint32_t i = 0; i < num_rows; ++i) {
         for (auto& s : rows[i]) {
-            uint32_t len = static_cast<uint32_t>(s.size());
-            raw_buffer* vb = clickhouse_create_buffer(0);
-            vb->clear();
-            writeVarUInt(len, *vb);
-            for (uint32_t j = 0; j < len; ++j)
-                vb->push_back(static_cast<uint8_t>(s[j]));
-            col_data.insert(col_data.end(), vb->data(), vb->data() + vb->size());
-            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-            cumulative++;
+            chars_data += s;
+            str_offsets.push_back(static_cast<uint32_t>(chars_data.size()));
         }
-        offsets.push_back(cumulative);
     }
 
-    col_data.clear();
-    for (auto o : offsets) {
-        for (uint32_t j = 0; j < 8; ++j)
+    std::vector<uint8_t> col_data;
+    // N u64LE per-row element counts.
+    for (uint32_t i = 0; i < num_rows; ++i) {
+        uint64_t c = rows[i].size();
+        for (int j = 0; j < 8; ++j)
+            col_data.push_back(static_cast<uint8_t>(c >> (j * 8)));
+    }
+    // u32[total_M+1] cumulative string offsets.
+    for (uint32_t o : str_offsets) {
+        for (int j = 0; j < 4; ++j)
             col_data.push_back(static_cast<uint8_t>(o >> (j * 8)));
     }
-    cumulative = 0;
-    for (uint32_t i = 0; i < num_rows; ++i) {
-        for (auto& s : rows[i]) {
-            uint32_t len = static_cast<uint32_t>(s.size());
-            raw_buffer* vb = clickhouse_create_buffer(0);
-            vb->clear();
-            writeVarUInt(len, *vb);
-            for (uint32_t j = 0; j < len; ++j)
-                vb->push_back(static_cast<uint8_t>(s[j]));
-            col_data.insert(col_data.end(), vb->data(), vb->data() + vb->size());
-            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-        }
-    }
+    // Chars (CH ColumnBinaryOutputFormat does not write null terminators).
+    col_data.insert(col_data.end(), chars_data.begin(), chars_data.end());
 
-    buf->push_back(0); buf->push_back(0x0D); buf->push_back(0x0B); // Array(String)
+    buf->push_back(0); // non-const, Array(String)
     uint64_t ds = col_data.size();
     for (uint32_t j = 0; j < 8; ++j)
         buf->push_back(static_cast<uint8_t>(ds >> (j * 8)));
@@ -897,6 +824,7 @@ static raw_buffer* make_col_binary_array_col(uint32_t num_rows,
 }
 
 // Helper: build a const Array(String) column buffer.
+// CH wire format (1 row): [u64 M][u32[M+1] cumul str offsets][chars+nulls]
 static raw_buffer* make_col_binary_array_col_const(uint32_t num_rows,
                                                     const std::vector<std::string>& one_row) {
     raw_buffer* buf = clickhouse_create_buffer(0);
@@ -904,35 +832,31 @@ static raw_buffer* make_col_binary_array_col_const(uint32_t num_rows,
     writeBinaryLE32(1, *buf);
     writeBinaryLE32(num_rows, *buf);
 
-    std::vector<uint8_t> payload;
-    uint64_t offsets[2] = {0, static_cast<uint64_t>(one_row.size())};
-    for (int i = 0; i < 2; ++i) {
-        for (uint32_t j = 0; j < 8; ++j)
-            payload.push_back(static_cast<uint8_t>(offsets[i] >> (j * 8)));
-    }
+    uint64_t M = one_row.size();
+    std::string chars_data;
+    std::vector<uint32_t> str_offsets = {0};
     for (auto& s : one_row) {
-        uint32_t len = static_cast<uint32_t>(s.size());
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(len, *vb);
-        for (uint32_t j = 0; j < len; ++j)
-            vb->push_back(static_cast<uint8_t>(s[j]));
-        payload.insert(payload.end(), vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
+        chars_data += s;
+        str_offsets.push_back(static_cast<uint32_t>(chars_data.size()));
     }
 
-    // Wrap with varint prefix (const column format)
-    raw_buffer* col_data = clickhouse_create_buffer(0);
-    col_data->clear();
-    writeVarUInt(payload.size(), *col_data);
-    for (auto b : payload) col_data->push_back(b);
+    std::vector<uint8_t> col_data;
+    // u64 M
+    for (int j = 0; j < 8; ++j)
+        col_data.push_back(static_cast<uint8_t>(M >> (j * 8)));
+    // u32[M+1] cumulative string offsets
+    for (uint32_t o : str_offsets) {
+        for (int j = 0; j < 4; ++j)
+            col_data.push_back(static_cast<uint8_t>(o >> (j * 8)));
+    }
+    // chars (CH ColumnBinaryOutputFormat does not write null terminators)
+    col_data.insert(col_data.end(), chars_data.begin(), chars_data.end());
 
-    buf->push_back(0x01); buf->push_back(0x0D); buf->push_back(0x0B); // const + Array(String)
-    uint64_t ds = col_data->size();
+    buf->push_back(0x01); // const, Array(String)
+    uint64_t ds = static_cast<uint64_t>(col_data.size());
     for (uint32_t j = 0; j < 8; ++j)
         buf->push_back(static_cast<uint8_t>(ds >> (j * 8)));
-    for (auto b : *col_data) buf->push_back(b);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_data));
+    for (auto b : col_data) buf->push_back(b);
 
     return buf;
 }
@@ -979,39 +903,10 @@ TEST(ColBinaryImpl, ArrayConst_CumulativeOffsets) {
 }
 
 TEST(ColBinaryImpl, ArrayDebug_DirectUnpack) {
-    raw_buffer* col_data = clickhouse_create_buffer(0);
-    col_data->clear();
-
-    std::vector<uint8_t> payload;
-    uint64_t offsets[2] = {0, 3};
-    for (int i = 0; i < 2; ++i)
-        for (uint32_t j = 0; j < 8; ++j)
-            payload.push_back(static_cast<uint8_t>(offsets[i] >> (j * 8)));
-
-    const char* strs[] = {"POINT(0 0)", "POINT(1 1)", "POINT(2 2)"};
-    for (auto* s : strs) {
-        uint32_t len = static_cast<uint32_t>(strlen(s));
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(len, *vb);
-        for (uint32_t j = 0; j < len; ++j)
-            vb->push_back(static_cast<uint8_t>(s[j]));
-        payload.insert(payload.end(), vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-    }
-
-    writeVarUInt(payload.size(), *col_data);
-    for (auto b : payload) col_data->push_back(b);
-
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    writeBinaryLE32(1, *buf);
-    writeBinaryLE32(5, *buf);
-    buf->push_back(0x01); buf->push_back(0x0D); buf->push_back(0x0B); // const + Array(String)
-    uint64_t ds = col_data->size();
-    for (uint32_t j = 0; j < 8; ++j)
-        buf->push_back(static_cast<uint8_t>(ds >> (j * 8)));
-    for (auto b : *col_data) buf->push_back(b);
+    // Const Array(String) with 3 WKT strings.
+    // CH format: [u64 M][u32[M+1] cumul str offsets][chars] (no null terminators)
+    const std::vector<std::string> strs = {"POINT(0 0)", "POINT(1 1)", "POINT(2 2)"};
+    auto* buf = make_col_binary_array_col_const(5, strs);
 
     auto cb = parse_col_binary(buf);
     ColBinaryReader reader = ColBinaryReader::from_col(cb.cols[0], 5);
@@ -1021,19 +916,6 @@ TEST(ColBinaryImpl, ArrayDebug_DirectUnpack) {
     for (auto& g : result) ASSERT_NE(g, nullptr);
 
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_data));
-}
-
-// ── Output type tag tests ────────────────────────────────────────────────────
-
-TEST(ColBinaryOutputTag, Tags) {
-    EXPECT_EQ(cb_output_tag<bool>(), 0x02);
-    EXPECT_EQ(cb_output_tag<double>(), 0x0A);
-    EXPECT_EQ(cb_output_tag<int32_t>(), 0x05);
-    EXPECT_EQ(cb_output_tag<uint32_t>(), 0x06);
-    EXPECT_EQ(cb_output_tag<std::unique_ptr<geos::geom::Geometry>>(), 0x0B);
-    EXPECT_EQ(cb_output_tag<std::string>(), 0x0B);
-    EXPECT_EQ(cb_output_tag<std::string_view>(), 0x0B);
 }
 
 // ── BConst_NativeFormat: const col with Native format ─────────────────────────
@@ -1056,14 +938,13 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Predicate) {
         clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
     }
 
+    // const col1: CH native format u32[2] {0, len} + raw WKB bytes
     std::vector<uint8_t> col1_data;
     {
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(pt.size(), *vb);
-        vb->append(pt.data(), pt.size());
-        col1_data.assign(vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
+        uint32_t o0 = 0, o1 = static_cast<uint32_t>(pt.size());
+        for (int j = 0; j < 4; ++j) col1_data.push_back(static_cast<uint8_t>(o0 >> (j * 8)));
+        for (int j = 0; j < 4; ++j) col1_data.push_back(static_cast<uint8_t>(o1 >> (j * 8)));
+        col1_data.insert(col1_data.end(), pt.begin(), pt.end());
     }
 
     raw_buffer* buf = clickhouse_create_buffer(0);
@@ -1072,13 +953,13 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Predicate) {
     writeBinaryLE32(n, *buf);
 
     // Col0: non-const
-    buf->push_back(0); buf->push_back(0x0B);
+    buf->push_back(0);
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
     // Col1: const
-    buf->push_back(0x01); buf->push_back(0x0B);
+    buf->push_back(0x01);
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
     for (auto b : col1_data) buf->push_back(b);
@@ -1114,12 +995,10 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Dwithin) {
 
     std::vector<uint8_t> col1_data;
     {
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(origin.size(), *vb);
-        vb->append(origin.data(), origin.size());
-        col1_data.assign(vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
+        uint32_t o0 = 0, o1 = static_cast<uint32_t>(origin.size());
+        for (int j = 0; j < 4; ++j) col1_data.push_back(static_cast<uint8_t>(o0 >> (j * 8)));
+        for (int j = 0; j < 4; ++j) col1_data.push_back(static_cast<uint8_t>(o1 >> (j * 8)));
+        col1_data.insert(col1_data.end(), origin.begin(), origin.end());
     }
 
     std::vector<uint8_t> col2_data;
@@ -1134,19 +1013,19 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Dwithin) {
     writeBinaryLE32(n, *buf);
 
     // Col0: non-const geom
-    buf->push_back(0); buf->push_back(0x0B);
+    buf->push_back(0);
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
     // Col1: const geom
-    buf->push_back(0x01); buf->push_back(0x0B);
+    buf->push_back(0x01);
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
     for (auto b : col1_data) buf->push_back(b);
 
     // Col2: non-const double
-    buf->push_back(0); buf->push_back(0x0A);
+    buf->push_back(0);
     uint64_t ds2 = col2_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds2 >> (j * 8)));
     for (auto b : col2_data) buf->push_back(b);
