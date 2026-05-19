@@ -5,8 +5,9 @@
 // Input wire layout (CH → WASM):
 //   num_columns (u32LE) | num_rows (u32LE)
 //   For each column:
-//     flags (u8, bit0=IS_CONST) | data_size (u64LE) | data
-//   Type is deduced from the C++ function signature — no type tags on the wire.
+//     flags (u8, bit0=IS_CONST) | type_tags (recursive stream) | data_size (u64LE) | data
+//   Type tags: Nullable/Array/Tuple are containers (have children),
+//   all others are leaves. Stream ends at first leaf. Empty = no coercion.
 //
 // Output wire layout (WASM → CH, always single column):
 //   num_columns (u32LE) | num_rows (u32LE) | flags (u8) | data_size (u64LE) | data
@@ -47,10 +48,107 @@ using ColPrepDistOp = bool (*)(const geos::geom::prep::PreparedGeometry*,
 using ColPrepPointOp = bool (*)(geos::algorithm::locate::IndexedPointInAreaLocator*,
                                  double, double);
 
+// ── Type tags ─────────────────────────────────────────────────────────────────
+// ClickHouse native type tags for auto-coercion on the WASM side.
+// Scalar tags: 0x01–0x0A, String=0x0B, Nullable=0x0C, Array=0x0D, Tuple=0x0E
+
+enum class TypeTag : uint8_t {
+    Int8    = 0x01,
+    UInt8   = 0x02,
+    Int16   = 0x03,
+    UInt16  = 0x04,
+    Int32   = 0x05,
+    UInt32  = 0x06,
+    Int64   = 0x07,
+    UInt64  = 0x08,
+    Float32 = 0x09,
+    Float64 = 0x0A,
+    String  = 0x0B,
+    Nullable= 0x0C,
+    Array   = 0x0D,
+    Tuple   = 0x0E,
+};
+
+// Read a recursive type tag stream from the wire.
+// Returns the vector of type tags for this column.
+// For scalars: one tag (e.g., 0x05 for Int32).
+// For Nullable: [Nullable, inner_tag].
+// For Array: [Array, element_tag].
+// For Tuple: [Tuple, field1_tag, field2_tag, ...].
+// Stops at first leaf scalar.
+static inline std::vector<TypeTag> read_type_tags(const uint8_t*& p, const uint8_t* end) {
+    std::vector<TypeTag> tags;
+    while (p < end) {
+        uint8_t byte = *p++;
+        tags.push_back(static_cast<TypeTag>(byte));
+        if (byte != static_cast<uint8_t>(TypeTag::Nullable) &&
+            byte != static_cast<uint8_t>(TypeTag::Array) &&
+            byte != static_cast<uint8_t>(TypeTag::Tuple)) {
+            break;
+        }
+    }
+    return tags;
+}
+
+// Write a recursive type tag stream to a buffer.
+static inline void write_type_tags(raw_buffer& buf, const std::vector<TypeTag>& tags) {
+    for (auto tag : tags)
+        buf.push_back(static_cast<uint8_t>(tag));
+}
+
+// Check if the type tags represent a scalar type that can be widened.
+static inline bool is_scalar_tag(TypeTag tag) {
+    return tag >= TypeTag::Int8 && tag <= TypeTag::Float64;
+}
+
+// Check if a source tag can be widened to a target C++ type.
+static inline bool can_widen(TypeTag src, std::type_identity<int8_t>)    { return src == TypeTag::Int8; }
+static inline bool can_widen(TypeTag src, std::type_identity<int16_t>)   { return src == TypeTag::Int8 || src == TypeTag::Int16; }
+static inline bool can_widen(TypeTag src, std::type_identity<int32_t>)   { return src >= TypeTag::Int8 && src <= TypeTag::Int32; }
+static inline bool can_widen(TypeTag src, std::type_identity<int64_t>)   { return src >= TypeTag::Int8 && src <= TypeTag::Int64; }
+static inline bool can_widen(TypeTag src, std::type_identity<uint8_t>)   { return src == TypeTag::UInt8; }
+static inline bool can_widen(TypeTag src, std::type_identity<uint16_t>)  { return src == TypeTag::UInt8 || src == TypeTag::UInt16; }
+static inline bool can_widen(TypeTag src, std::type_identity<uint32_t>)  { return src >= TypeTag::UInt8 && src <= TypeTag::UInt32; }
+static inline bool can_widen(TypeTag src, std::type_identity<uint64_t>)  { return src >= TypeTag::UInt8 && src <= TypeTag::UInt64; }
+static inline bool can_widen(TypeTag src, std::type_identity<float>)     { return src == TypeTag::Float32; }
+static inline bool can_widen(TypeTag src, std::type_identity<double>)    { return src == TypeTag::Float32 || src == TypeTag::Float64; }
+
+// Get the type tag for a return type.
+template <typename T> struct ret_type_tag {};
+template <> struct ret_type_tag<bool>       { static constexpr TypeTag value = TypeTag::Int8; };
+template <> struct ret_type_tag<double>     { static constexpr TypeTag value = TypeTag::Float64; };
+template <> struct ret_type_tag<float>      { static constexpr TypeTag value = TypeTag::Float32; };
+template <> struct ret_type_tag<int32_t>    { static constexpr TypeTag value = TypeTag::Int32; };
+template <> struct ret_type_tag<uint32_t>   { static constexpr TypeTag value = TypeTag::UInt32; };
+template <> struct ret_type_tag<int64_t>    { static constexpr TypeTag value = TypeTag::Int64; };
+template <> struct ret_type_tag<uint64_t>   { static constexpr TypeTag value = TypeTag::UInt64; };
+template <> struct ret_type_tag<int16_t>    { static constexpr TypeTag value = TypeTag::Int16; };
+template <> struct ret_type_tag<uint16_t>   { static constexpr TypeTag value = TypeTag::UInt16; };
+template <> struct ret_type_tag<int8_t>     { static constexpr TypeTag value = TypeTag::Int8; };
+template <> struct ret_type_tag<uint8_t>    { static constexpr TypeTag value = TypeTag::UInt8; };
+template <> struct ret_type_tag<std::string_view> { static constexpr TypeTag value = TypeTag::String; };
+template <> struct ret_type_tag<std::string>    { static constexpr TypeTag value = TypeTag::String; };
+template <> struct ret_type_tag<std::span<const uint8_t>> { static constexpr TypeTag value = TypeTag::String; };
+template <> struct ret_type_tag<std::unique_ptr<geos::geom::Geometry>> { static constexpr TypeTag value = TypeTag::String; };
+
+// Get the byte size for a type tag.
+static inline size_t tag_byte_size(TypeTag tag) {
+    switch (tag) {
+        case TypeTag::Int8:    case TypeTag::UInt8:   return 1;
+        case TypeTag::Int16:   case TypeTag::UInt16:  return 2;
+        case TypeTag::Int32:   case TypeTag::UInt32:  return 4;
+        case TypeTag::Int64:   case TypeTag::UInt64:  return 8;
+        case TypeTag::Float32: return 4;
+        case TypeTag::Float64: return 8;
+        default: return 0;
+    }
+}
+
 // ── ColBinaryBuf ─────────────────────────────────────────────────────────────
 
 struct ColBinaryInfo {
     bool           is_const;
+    std::vector<TypeTag> type_tags;  // recursive stream for auto-coercion
     uint64_t       data_size;
     const uint8_t* data;
 
@@ -150,6 +248,9 @@ inline ColBinaryBuf parse_col_binary(const raw_buffer* buf) {
         uint8_t flags = *p++;
         ci.is_const = (flags & 0x01) != 0;
 
+        // type tags (recursive, ends at leaf scalar)
+        ci.type_tags = read_type_tags(p, end);
+
         // data_size (u64LE)
         if (!readBinaryLE64(p, end, v64)) ch::panic("parse_col_binary: truncated data_size");
         ci.data_size = v64;
@@ -166,7 +267,9 @@ inline ColBinaryBuf parse_col_binary(const raw_buffer* buf) {
 
 // ── ColBinaryReader: sequential access ────────────────────────────────────────
 // For const columns: always returns the same single-row data.
-// No nullable support — wire type always matches C++ signature.
+// Auto-coercion: if type_tags is populated and the wire type is narrower than
+// the C++ template parameter, the reader reads the narrower type and promotes.
+// type_tags empty → no coercion (backward compatible with existing tests).
 
 struct ColBinaryReader {
     bool           is_const;
@@ -174,6 +277,12 @@ struct ColBinaryReader {
     const uint8_t* data_start;    // data section start (offsets for COL_BYTES, raw for fixed-width)
     const uint8_t* data_end;      // data_start + data_size
     mutable const uint8_t* p;     // cursor for sequential reads (COL_BYTES non-const)
+    std::vector<TypeTag> type_tags;
+    // Cached wire size from the last consumed type tag (for non-const multi-value reads).
+    // Set when a tag is consumed; reused when no tag is available.
+    mutable size_t cached_wire_size = 0;
+
+    std::vector<TypeTag>::const_iterator tag_iter() const { return type_tags.begin(); }
 
     // Cached blob for const-mode COL_BYTES (parsed once, returned on every call).
     mutable std::span<const uint8_t> cached_blob{};
@@ -222,12 +331,65 @@ struct ColBinaryReader {
         return {start, n};
     }
 
+    // Read a fixed-size scalar from cursor (non-const, sequential).
+    template <typename T>
+    T read_fixed_seq() const noexcept {
+        T v;
+        if (is_const) {
+            std::memcpy(&v, data_start, sizeof(T));
+            return v;
+        }
+        if (p + sizeof(T) > data_end) return T{};
+        std::memcpy(&v, p, sizeof(T));
+        p += sizeof(T);
+        return v;
+    }
+
+    // Read a fixed-size scalar, auto-promoting from narrower wire types.
+    // e.g. Int8 wire → int32_t C++: reads 1 byte, sign-extends to 4 bytes.
+    // For const columns: reads from data_start (single value).
+    // For non-const: reads from cursor at wire_size, advances by wire_size.
     template <typename T>
     T read_fixed(uint32_t row) const noexcept {
         T v{};
         size_t elem_size = sizeof(T);
         const uint8_t* elem_ptr = data_start + (is_const ? 0 : row) * elem_size;
         std::memcpy(&v, elem_ptr, elem_size);
+        return v;
+    }
+
+    // Read a fixed-size scalar, auto-promoting from narrower wire types.
+    // wire_tag: the consumed type tag from the iterator.
+    // For const columns: reads from data_start (single value).
+    // For non-const: reads from cursor p, advances by wire_size (or cached_wire_size for default).
+    template <typename T>
+    T read_from_tag(TypeTag wire_tag) const noexcept {
+        size_t wire_size = tag_byte_size(wire_tag);
+        size_t cpp_size = sizeof(T);
+
+        if (wire_size == 0 || wire_size == cpp_size) {
+            // Same size or unknown tag — direct read from cursor.
+            T v;
+            const uint8_t* src = is_const ? data_start : p;
+            if (src + cpp_size > data_end) return T{};
+            std::memcpy(&v, src, cpp_size);
+            if (!is_const) p += cpp_size;
+            return v;
+        }
+
+        // wire_size < cpp_size: auto-widen (sign-extend for signed, zero-extend for unsigned).
+        uint8_t buf[8] = {};
+        const uint8_t* src = is_const ? data_start : p;
+        if (src + wire_size > data_end) return T{};
+        std::memcpy(buf, src, wire_size);
+        if (std::is_signed_v<T>) {
+            uint8_t sign = buf[wire_size - 1] & 0x80 ? 0xFF : 0x00;
+            for (size_t i = wire_size; i < cpp_size; ++i)
+                buf[i] = sign;
+        }
+        T v;
+        std::memcpy(&v, buf, cpp_size);
+        if (!is_const) p += wire_size;  // advance by wire size, not cpp size
         return v;
     }
 
@@ -243,6 +405,8 @@ struct ColBinaryReader {
         r.cached_u32_offsets = nullptr;
         r.cached_u32_data    = nullptr;
         r.current_row        = 0;
+        r.type_tags        = ci.type_tags;
+        r.cached_wire_size = 0;
         return r;
     }
 
@@ -421,69 +585,86 @@ static inline void pack_result(raw_buffer& buf, raw_buffer v) {
 }
 
 // ── unpack_arg: deserialize one argument from ColBinaryReader ────────────────
+// Type tags are consumed hierarchically: each specialization consumes the tag
+// matching its C++ type (Array→vector, Nullable→optional, scalar→widen).
+// Tags empty → no coercion, read native size.
 
 template <typename T>
-T unpack_arg(ColBinaryReader&);
-
-template <>
-inline double unpack_arg<double>(ColBinaryReader& r) {
-    auto span = r.read_fixed_bytes(sizeof(double));
-    double v;
-    std::memcpy(&v, span.data(), sizeof(v));
-    return v;
-}
-
-template <>
-inline int32_t unpack_arg<int32_t>(ColBinaryReader& r) {
-    auto span = r.read_fixed_bytes(sizeof(int32_t));
-    int32_t v;
-    std::memcpy(&v, span.data(), sizeof(v));
-    return v;
-}
-
-template <>
-inline uint32_t unpack_arg<uint32_t>(ColBinaryReader& r) {
-    auto span = r.read_fixed_bytes(sizeof(uint32_t));
-    uint32_t v;
-    std::memcpy(&v, span.data(), sizeof(v));
-    return v;
-}
-
-template <>
-inline std::string_view unpack_arg<std::string_view>(ColBinaryReader& r) {
-    auto span = r.read_blob();
-    return {reinterpret_cast<const char*>(span.data()), span.size()};
-}
-
-template <>
-inline std::span<const uint8_t> unpack_arg<std::span<const uint8_t>>(ColBinaryReader& r) {
-    return r.read_blob();
-}
-
-template <>
-inline std::unique_ptr<geos::geom::Geometry> unpack_arg<std::unique_ptr<geos::geom::Geometry>>(ColBinaryReader& r) {
-    auto span = r.read_blob();
-    if (span.empty()) return nullptr;
-    if (ch::is_wkb(span)) return ch::read_wkb(span);
-    return ch::read_wkt(span);
-}
-
-template <>
-inline geos::geom::Geometry* unpack_arg<geos::geom::Geometry*>(ColBinaryReader& r) {
-    auto span = r.read_blob();
-    if (span.empty()) return nullptr;
-    try { return ch::read_wkb(span).release(); }
-    catch (...) { return ch::read_wkt(span).release(); }
-}
-
-template <>
-inline geos::geom::Geometry const* unpack_arg<geos::geom::Geometry const*>(ColBinaryReader& r) {
-    return unpack_arg<geos::geom::Geometry*>(r);
+T unpack_arg(ColBinaryReader& r, std::vector<TypeTag>::const_iterator tags_it) {
+    if constexpr (std::is_arithmetic_v<T>) {
+        // Consume the next type tag if available; otherwise use cached wire size.
+        TypeTag wire_tag = TypeTag::Int32;
+        bool has_tag = (tags_it != r.type_tags.end());
+        if (has_tag) {
+            wire_tag = *tags_it++;
+        } else if (r.cached_wire_size > 0) {
+            // Reuse wire size from the previously consumed tag.
+            wire_tag = static_cast<TypeTag>(r.cached_wire_size);
+        } else {
+            // No tag and no cached size — read native C++ size from cursor.
+            return r.read_fixed_seq<T>();
+        }
+        if constexpr (std::is_same_v<T, double>)       return r.read_from_tag<double>(wire_tag);
+        else if constexpr (std::is_same_v<T, float>)   return r.read_from_tag<float>(wire_tag);
+        else if constexpr (std::is_same_v<T, int32_t>) return r.read_from_tag<int32_t>(wire_tag);
+        else if constexpr (std::is_same_v<T, uint32_t>)return r.read_from_tag<uint32_t>(wire_tag);
+        else if constexpr (std::is_same_v<T, int64_t>) return r.read_from_tag<int64_t>(wire_tag);
+        else if constexpr (std::is_same_v<T, uint64_t>)return r.read_from_tag<uint64_t>(wire_tag);
+        else if constexpr (std::is_same_v<T, int16_t>) return r.read_from_tag<int16_t>(wire_tag);
+        else if constexpr (std::is_same_v<T, uint16_t>)return r.read_from_tag<uint16_t>(wire_tag);
+        else if constexpr (std::is_same_v<T, int8_t>)  return r.read_from_tag<int8_t>(wire_tag);
+        else if constexpr (std::is_same_v<T, uint8_t>) return r.read_from_tag<uint8_t>(wire_tag);
+        else return r.read_fixed<T>(0);
+        // Cache the wire size for subsequent reads (when no tag is available).
+        if (has_tag) {
+            const_cast<ColBinaryReader&>(r).cached_wire_size = tag_byte_size(wire_tag);
+        }
+    }
+    // String: no type tags, read blob.
+    else if constexpr (std::is_same_v<T, std::string_view>) {
+        auto span = r.read_blob();
+        return {reinterpret_cast<const char*>(span.data()), span.size()};
+    }
+    // Span: no type tags, read blob.
+    else if constexpr (std::is_same_v<T, std::span<const uint8_t>>) {
+        return r.read_blob();
+    }
+    // unique_ptr<Geometry>: no type tags, read blob as WKB/WKT.
+    else if constexpr (std::is_same_v<T, std::unique_ptr<geos::geom::Geometry>>) {
+        auto span = r.read_blob();
+        if (span.empty()) return nullptr;
+        if (ch::is_wkb(span)) return ch::read_wkb(span);
+        return ch::read_wkt(span);
+    }
+    // Geometry*: no type tags, read blob as WKB/WKT (steals ownership).
+    else if constexpr (std::is_same_v<T, geos::geom::Geometry*>) {
+        auto span = r.read_blob();
+        if (span.empty()) return nullptr;
+        try { return ch::read_wkb(span).release(); }
+        catch (...) { return ch::read_wkt(span).release(); }
+    }
+    // Geometry const*: delegates to non-const.
+    else if constexpr (std::is_same_v<T, geos::geom::Geometry const*>) {
+        return unpack_arg<geos::geom::Geometry*>(r, tags_it);
+    }
+    // std::optional<T>: consume Nullable tag, recurse into T.
+    else if constexpr (std::is_same_v<T, std::optional<typename T::value_type>>) {
+        if (tags_it != r.type_tags.end()) ++tags_it;  // consume Nullable tag
+        return unpack_arg<typename T::value_type>(r, tags_it);
+    }
+    // std::vector<T>: consume Array tag, recurse into T.
+    else if constexpr (std::is_same_v<T, std::vector<typename T::value_type>>) {
+        return unpack_arg_vector<typename T::value_type>(r, tags_it);
+    }
+    else {
+        static_assert(sizeof(T) == 0, "unpack_arg: unsupported type");
+    }
 }
 
 template <>
 inline std::vector<std::unique_ptr<geos::geom::Geometry>>
-unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(ColBinaryReader& r) {
+unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(ColBinaryReader& r, std::vector<TypeTag>::const_iterator tags_it) {
+    if (tags_it != r.type_tags.end()) ++tags_it;  // consume Array tag
     std::vector<std::unique_ptr<Geometry>> result;
 
     if (!r.data_start || !r.data_end) return result;
@@ -562,6 +743,73 @@ unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(ColBinaryReader& 
     return result;
 }
 
+// Generic std::vector<T> unpacking: consumes Array tag, recurses into T.
+// Wire format: [N u64 per-row counts][u32[M+1] cumul offsets][T-serialized data]
+template <typename T>
+std::vector<T> unpack_arg_vector(ColBinaryReader& r, std::vector<TypeTag>::const_iterator tags_it) {
+    if (tags_it != r.type_tags.end()) ++tags_it;  // consume Array tag
+    std::vector<T> result;
+
+    if (!r.data_start || !r.data_end) return result;
+
+    if (r.is_const) {
+        // [u64 M][u32[M+1] cumul offsets][data]
+        const uint8_t* p = r.data_start;
+        const uint8_t* end = r.data_end;
+        uint64_t M = 0;
+        if (p + 8 <= end) {
+            std::memcpy(&M, p, 8); p += 8;
+        }
+        if (M == 0 || p + (M + 1) * 4 > end) return result;
+        const uint32_t* offs = reinterpret_cast<const uint32_t*>(p);
+        const uint8_t* data = p + (M + 1) * 4;
+        result.reserve(static_cast<size_t>(M));
+        for (uint64_t i = 0; i < M; ++i) {
+            uint32_t o0 = offs[i], o1 = offs[i + 1];
+            if (o0 > o1 || data + o1 > end) { result.push_back(T{}); continue; }
+            ColBinaryInfo elem_ci;
+            elem_ci.is_const = true;
+            elem_ci.data = data + o0;
+            elem_ci.data_size = o1 - o0;
+            ColBinaryReader elem_r = ColBinaryReader::from_col(elem_ci, 1);
+            result.push_back(unpack_arg<T>(elem_r, tags_it));
+        }
+    } else {
+        // [N u64 per-row counts][u32[total_M+1] cumul offsets][data]
+        const uint8_t* p = r.data_start;
+        const uint8_t* end = r.data_end;
+        std::vector<uint64_t> row_starts;
+        row_starts.reserve(r.stored_rows + 1);
+        row_starts.push_back(0);
+        uint64_t total_M = 0;
+        for (uint32_t i = 0; i < r.stored_rows && p + 8 <= end; ++i) {
+            uint64_t count = 0;
+            std::memcpy(&count, p, 8); p += 8;
+            total_M += count;
+            row_starts.push_back(total_M);
+        }
+        if (total_M == 0 || p + (total_M + 1) * 4 > end) return result;
+        const uint32_t* offs = reinterpret_cast<const uint32_t*>(p);
+        const uint8_t* data = p + (total_M + 1) * 4;
+        for (uint32_t row = 0; row < r.stored_rows; ++row) {
+            uint64_t elem_start = row < row_starts.size() ? row_starts[row] : 0;
+            uint64_t elem_end = (row + 1) < row_starts.size() ? row_starts[row + 1] : 0;
+            if (elem_start >= elem_end || elem_end > total_M) continue;
+            for (uint64_t i = elem_start; i < elem_end; ++i) {
+                uint32_t o0 = offs[i], o1 = offs[i + 1];
+                if (o0 > o1 || data + o1 > end) { result.push_back(T{}); continue; }
+                ColBinaryInfo elem_ci;
+                elem_ci.is_const = true;
+                elem_ci.data = data + o0;
+                elem_ci.data_size = o1 - o0;
+                ColBinaryReader elem_r = ColBinaryReader::from_col(elem_ci, 1);
+                result.push_back(unpack_arg<T>(elem_r, tags_it));
+            }
+        }
+    }
+    return result;
+}
+
 // ── col_binary_impl_worker: return-type dispatch ─────────────────────────────
 
 template <typename Ret, size_t N, typename Invoke>
@@ -590,7 +838,7 @@ struct col_binary_impl_worker<bool, N, Invoke> {
 
         // ── A-const path ────────────────────────────────────────────────────
         if (readers[0].is_const && prep_a && n > 0) {
-            auto span_a = unpack_arg<std::span<const uint8_t>>(readers[0]);
+            auto span_a = unpack_arg<std::span<const uint8_t>>(readers[0], readers[0].tag_iter());
             if (span_a.empty() && n > 1) {
                 for (uint32_t i = 0; i < n; ++i)
                     pack_result(out, false);
@@ -644,7 +892,7 @@ struct col_binary_impl_worker<bool, N, Invoke> {
 
         // ── B-const path ────────────────────────────────────────────────────
         if (readers[1].is_const && prep_b && n > 0) {
-            auto span_b = unpack_arg<std::span<const uint8_t>>(readers[1]);
+            auto span_b = unpack_arg<std::span<const uint8_t>>(readers[1], readers[1].tag_iter());
             BBox bbox_b = wkb_bbox(span_b);
             auto geom_b = read_wkb(span_b);
             auto pb = PGF::prepare(geom_b.get());
@@ -695,13 +943,13 @@ struct col_binary_impl_worker<bool, N, Invoke> {
         // ── 3-arg dist path (st_dwithin) ────────────────────────────────────
         if constexpr (N >= 3) {
             if (readers[0].is_const && prep_a_dist && n > 0) {
-                auto span_a = unpack_arg<std::span<const uint8_t>>(readers[0]);
+                auto span_a = unpack_arg<std::span<const uint8_t>>(readers[0], readers[0].tag_iter());
                 BBox bbox_a = wkb_bbox(span_a);
                 auto geom_a = read_wkb(span_a);
                 auto pa = PGF::prepare(geom_a.get());
                 for (uint32_t i = 0; i < n; ++i) {
                     auto span_b = readers[1].read_blob();
-                    double dist = unpack_arg<double>(readers[2]);
+                    double dist = unpack_arg<double>(readers[2], readers[2].tag_iter());
                     if (!bbox_a.intersects(wkb_bbox(span_b).expanded(dist))) {
                         pack_result(out, false); continue;
                     }
@@ -710,13 +958,13 @@ struct col_binary_impl_worker<bool, N, Invoke> {
                 return;
             }
             if (readers[1].is_const && prep_b_dist && n > 0) {
-                auto span_b = unpack_arg<std::span<const uint8_t>>(readers[1]);
+                auto span_b = unpack_arg<std::span<const uint8_t>>(readers[1], readers[1].tag_iter());
                 BBox bbox_b = wkb_bbox(span_b);
                 auto geom_b = read_wkb(span_b);
                 auto pb = PGF::prepare(geom_b.get());
                 for (uint32_t i = 0; i < n; ++i) {
                     auto span_a = readers[0].read_blob();
-                    double dist = unpack_arg<double>(readers[2]);
+                    double dist = unpack_arg<double>(readers[2], readers[2].tag_iter());
                     if (!wkb_bbox(span_a).intersects(bbox_b.expanded(dist))) {
                         pack_result(out, false); continue;
                     }
@@ -760,7 +1008,7 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
 
     auto invoke = [&readers, impl]() {
         return [&]<size_t... I>(std::index_sequence<I...>) {
-            return impl(unpack_arg<std::decay_t<Args>>(readers[I])...);
+            return impl(unpack_arg<std::decay_t<Args>>(readers[I], readers[I].tag_iter())...);
         }(std::make_index_sequence<nargs>{});
     };
 
@@ -769,19 +1017,33 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
         out = clickhouse_create_buffer(28);
         out->clear();
 
-        // Output header: num_cols(u32LE) + num_rows(u32LE) + flags(u8) + data_size(u64LE)
+        // Output header: num_cols(u32LE) + num_rows(u32LE) + flags(u8) + type_tag + data_size(u64LE)
         writeBinaryLE32(1u, *out);
         writeBinaryLE32(static_cast<uint32_t>(n), *out);
         out->push_back(0x00);  // flags: 0 (non-const output)
+        out->push_back(static_cast<uint8_t>(ret_type_tag<std::decay_t<Ret>>::value));
 
         size_t data_size_pos = out->size();
         writeBinaryLE64(0u, *out);  // placeholder; patched after data is written
 
-        col_binary_impl_worker<Ret, nargs, decltype(invoke)>::run(
-            *out, n, func_name, invoke, readers,
-            bbox_op, early_ret,
-            prep_a, prep_b, prep_a_dist, prep_b_dist,
-            prep_a_point, prep_b_point);
+        // Per-row: fresh tag iterators, then unpack all arguments.
+        for (uint32_t i = 0; i < n; ++i) {
+            std::array<std::vector<TypeTag>::const_iterator, nargs> tag_iters;
+            for (size_t j = 0; j < nargs; ++j)
+                tag_iters[j] = readers[j].tag_iter();
+
+            auto invoke_row = [&readers, &tag_iters, impl]() {
+                return [&]<size_t... I>(std::index_sequence<I...>) {
+                    return impl(unpack_arg<std::decay_t<Args>>(readers[I], tag_iters[I])...);
+                }(std::make_index_sequence<nargs>{});
+            };
+
+            col_binary_impl_worker<Ret, nargs, decltype(invoke_row)>::run(
+                *out, 1, func_name, invoke_row, readers,
+                bbox_op, early_ret,
+                prep_a, prep_b, prep_a_dist, prep_b_dist,
+                prep_a_point, prep_b_point);
+        }
 
         uint64_t data_size = static_cast<uint64_t>(out->size() - data_size_pos - 8);
         for (int i = 0; i < 8; ++i)

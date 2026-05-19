@@ -41,13 +41,16 @@ TEST(ColBinaryVarint, WriteReadRoundTrip) {
 // Each column has: flags(u8), data_size(u64LE), data.
 static raw_buffer* make_col_binary_buf(uint32_t num_rows, uint32_t num_cols,
                                         const std::vector<std::vector<uint8_t>>& col_data,
-                                        uint8_t col_flags = 0) {
+                                        uint8_t col_flags = 0,
+                                        const std::vector<std::vector<ch::TypeTag>>& col_type_tags = {}) {
      raw_buffer* buf = clickhouse_create_buffer(0);
      buf->clear();
      writeBinaryLE32(num_cols, *buf);
      writeBinaryLE32(num_rows, *buf);
      for (uint32_t i = 0; i < num_cols; ++i) {
          buf->push_back(col_flags);
+         const auto& tags = (i < col_type_tags.size()) ? col_type_tags[i] : std::vector<ch::TypeTag>{};
+         write_type_tags(*buf, tags);
          uint64_t data_size = static_cast<uint64_t>(col_data[i].size());
          for (uint32_t j = 0; j < 8; ++j)
              buf->push_back(static_cast<uint8_t>(data_size >> (j * 8)));
@@ -77,7 +80,7 @@ static raw_buffer* make_col_binary_buf(uint32_t num_rows, uint32_t num_cols,
 
 TEST(ColBinaryParse, SingleCol) {
     std::vector<uint8_t> data = {0x01, 0x02, 0x03};
-    auto* buf = make_col_binary_buf(3, 1, {data});
+    auto* buf = make_col_binary_buf(3, 1, {data}, 0, {{TypeTag::Int8}});
 
     auto cb = parse_col_binary(buf);
     EXPECT_EQ(cb.num_rows, 3u);
@@ -96,7 +99,7 @@ TEST(ColBinaryParse, MultiCol) {
     std::vector<uint8_t> col0 = {0xAA, 0xBB};
     std::vector<uint8_t> col1 = {0x01, 0x02, 0x03};
     std::vector<uint8_t> col2 = {0xFF};
-    auto* buf = make_col_binary_buf(2, 3, {col0, col1, col2});
+    auto* buf = make_col_binary_buf(2, 3, {col0, col1, col2}, 0, {{TypeTag::Int8}, {TypeTag::Int8}, {TypeTag::Int8}});
 
     auto cb = parse_col_binary(buf);
     EXPECT_EQ(cb.num_rows, 2u);
@@ -111,7 +114,7 @@ TEST(ColBinaryParse, MultiCol) {
 
 TEST(ColBinaryParse, ConstFlag) {
     std::vector<uint8_t> data = {0x42};
-    auto* buf = make_col_binary_buf(5, 1, {data}, 0x01); // IS_CONST flag
+    auto* buf = make_col_binary_buf(5, 1, {data}, 0x01, {{TypeTag::Int8}}); // IS_CONST flag
 
     auto cb = parse_col_binary(buf);
     EXPECT_EQ(cb.num_rows, 5u);
@@ -125,7 +128,7 @@ TEST(ColBinaryParse, ConstFlag) {
 TEST(ColBinaryParse, LargeDataSize) {
     // data_size = 0x10000000 (fits in u64)
     std::vector<uint8_t> data(0x100, 0xAB);
-    auto* buf = make_col_binary_buf(1, 1, {data});
+    auto* buf = make_col_binary_buf(1, 1, {data}, 0, {{TypeTag::Int8}});
 
     auto cb = parse_col_binary(buf);
     EXPECT_EQ(cb.num_rows, 1u);
@@ -150,9 +153,9 @@ TEST(ColBinaryReader, GetStringView) {
     ci.data_size = col_data.size();
     ColBinaryReader reader = ColBinaryReader::from_col(ci, 2);
 
-    auto s0 = unpack_arg<std::string_view>(reader);
+    auto s0 = unpack_arg<std::string_view>(reader, reader.tag_iter());
     EXPECT_EQ(std::string(s0), "hello");
-    auto s1 = unpack_arg<std::string_view>(reader);
+    auto s1 = unpack_arg<std::string_view>(reader, reader.tag_iter());
     EXPECT_EQ(std::string(s1), "world");
 }
 
@@ -167,8 +170,8 @@ TEST(ColBinaryReader, GetDouble) {
     ci.data_size = data.size();
     ColBinaryReader reader = ColBinaryReader::from_col(ci, 2);
 
-    EXPECT_DOUBLE_EQ(unpack_arg<double>(reader), 3.14);
-    EXPECT_DOUBLE_EQ(unpack_arg<double>(reader), 2.71);
+    EXPECT_DOUBLE_EQ(unpack_arg<double>(reader, reader.tag_iter()), 3.14);
+    EXPECT_DOUBLE_EQ(unpack_arg<double>(reader, reader.tag_iter()), 2.71);
 }
 
 TEST(ColBinaryReader, GetInt32) {
@@ -182,8 +185,8 @@ TEST(ColBinaryReader, GetInt32) {
     ci.data_size = data.size();
     ColBinaryReader reader = ColBinaryReader::from_col(ci, 2);
 
-    EXPECT_EQ(unpack_arg<int32_t>(reader), 42);
-    EXPECT_EQ(unpack_arg<int32_t>(reader), -1);
+    EXPECT_EQ(unpack_arg<int32_t>(reader, reader.tag_iter()), 42);
+    EXPECT_EQ(unpack_arg<int32_t>(reader, reader.tag_iter()), -1);
 }
 
 TEST(ColBinaryReader, GetGeometry) {
@@ -196,7 +199,7 @@ TEST(ColBinaryReader, GetGeometry) {
     ci.data_size = col_data.size();
     ColBinaryReader reader = ColBinaryReader::from_col(ci, 1);
 
-    auto result = unpack_arg<std::unique_ptr<geos::geom::Geometry>>(reader);
+    auto result = unpack_arg<std::unique_ptr<geos::geom::Geometry>>(reader, reader.tag_iter());
     ASSERT_NE(result, nullptr);
     EXPECT_EQ(result->getGeometryTypeId(), geos::geom::GEOS_POINT);
     EXPECT_DOUBLE_EQ(static_cast<const geos::geom::Point*>(result.get())->getX(), 5.0);
@@ -216,7 +219,7 @@ TEST(ColBinaryReader, ConstDouble) {
 
     // Should return the same value for every call
     for (int i = 0; i < 100; ++i) {
-        EXPECT_DOUBLE_EQ(unpack_arg<double>(reader), 3.14);
+        EXPECT_DOUBLE_EQ(unpack_arg<double>(reader, reader.tag_iter()), 3.14);
     }
 }
 
@@ -238,7 +241,7 @@ TEST(ColBinaryReader, ConstGeometry) {
     ColBinaryReader reader = ColBinaryReader::from_col(ci, 50);
 
     for (int i = 0; i < 50; ++i) {
-        auto result = unpack_arg<std::unique_ptr<geos::geom::Geometry>>(reader);
+        auto result = unpack_arg<std::unique_ptr<geos::geom::Geometry>>(reader, reader.tag_iter());
         ASSERT_NE(result, nullptr);
         EXPECT_DOUBLE_EQ(static_cast<const geos::geom::Point*>(result.get())->getX(), 1.0);
         EXPECT_DOUBLE_EQ(static_cast<const geos::geom::Point*>(result.get())->getY(), 2.0);
@@ -278,7 +281,7 @@ TEST(ColBinaryImpl, BoolHeaderOrder) {
     col1_data.insert(col1_data.end(), col1_offsets.begin(), col1_offsets.end());
     col1_data.insert(col1_data.end(), col1_payload.begin(), col1_payload.end());
 
-    auto* buf = make_col_binary_buf(n, 2, {col0_data, col1_data});
+    auto* buf = make_col_binary_buf(n, 2, {col0_data, col1_data}, 0, {{TypeTag::String}, {TypeTag::String}});
     auto* result = col_binary_impl_wrapper("st_contains_cb", buf, n, st_contains_impl,
         bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
@@ -296,6 +299,7 @@ TEST(ColBinaryImpl, BoolHeaderOrder) {
     EXPECT_EQ(v32, n);
 
     EXPECT_EQ(*p++, 0u); // flags
+    EXPECT_EQ(*p++, static_cast<uint8_t>(TypeTag::Int8)); // type tag for bool return
 
     EXPECT_TRUE(readBinaryLE64(p, end, v64));
     EXPECT_EQ(v64, static_cast<uint64_t>(n)); // data_size = n bool bytes
@@ -346,14 +350,16 @@ static raw_buffer* make_col_binary_geom_buf(uint32_t num_rows,
     writeBinaryLE32(2, *buf);
     writeBinaryLE32(num_rows, *buf);
 
-    // Col0: flags + data_size(u64) + data
+    // Col0: flags + type_tags + data_size(u64) + data
     buf->push_back(col0_flags);
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
-    // Col1
+    // Col1: flags + type_tags + data_size(u64) + data
     buf->push_back(col1_flags);
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
     for (auto b : col1_data) buf->push_back(b);
@@ -504,7 +510,7 @@ TEST(ColBinaryImpl, DoubleReturn) {
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(double));
     }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0);
+    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, {{TypeTag::Float64}});
     auto* result = col_binary_impl_wrapper("double_identity_cb", buf, 3, double_identity_impl);
 
     auto cb = parse_col_binary(result);
@@ -548,7 +554,7 @@ TEST(ColBinaryImpl, GeometryReturn) {
         clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
     }
 
-    auto* buf = make_col_binary_buf(2, 1, {col_data});
+    auto* buf = make_col_binary_buf(2, 1, {col_data}, 0, {{TypeTag::String}});
     auto* result = col_binary_impl_wrapper("geom_identity_cb", buf, 2, geom_identity_impl);
 
     auto cb = parse_col_binary(result);
@@ -598,7 +604,7 @@ TEST(ColBinaryImpl, Int32Return) {
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(int32_t));
     }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0);
+    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, {{TypeTag::Int32}});
     auto* result = col_binary_impl_wrapper("int32_identity_cb", buf, 3, int32_identity_impl);
 
     auto cb = parse_col_binary(result);
@@ -628,7 +634,7 @@ TEST(ColBinaryImpl, Uint32Return) {
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(uint32_t));
     }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0);
+    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, {{TypeTag::UInt32}});
     auto* result = col_binary_impl_wrapper("uint32_identity_cb", buf, 3, uint32_identity_impl);
 
     auto cb = parse_col_binary(result);
@@ -691,18 +697,21 @@ static raw_buffer* make_col_binary_geom3(uint32_t num_rows,
 
     // Col0: geom
     buf->push_back(const_col_idx == 0 ? 0x01 : 0);
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
     // Col1: geom
     buf->push_back(const_col_idx == 1 ? 0x01 : 0);
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
     for (auto b : col1_data) buf->push_back(b);
 
     // Col2: double
     buf->push_back(0);
+    buf->push_back(static_cast<uint8_t>(TypeTag::Float64));
     uint64_t ds2 = col2_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds2 >> (j * 8)));
     for (auto b : col2_data) buf->push_back(b);
@@ -815,6 +824,8 @@ static raw_buffer* make_col_binary_array_col(uint32_t num_rows,
     col_data.insert(col_data.end(), chars_data.begin(), chars_data.end());
 
     buf->push_back(0); // non-const, Array(String)
+    buf->push_back(static_cast<uint8_t>(TypeTag::Array));
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds = col_data.size();
     for (uint32_t j = 0; j < 8; ++j)
         buf->push_back(static_cast<uint8_t>(ds >> (j * 8)));
@@ -853,6 +864,8 @@ static raw_buffer* make_col_binary_array_col_const(uint32_t num_rows,
     col_data.insert(col_data.end(), chars_data.begin(), chars_data.end());
 
     buf->push_back(0x01); // const, Array(String)
+    buf->push_back(static_cast<uint8_t>(TypeTag::Array));
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds = static_cast<uint64_t>(col_data.size());
     for (uint32_t j = 0; j < 8; ++j)
         buf->push_back(static_cast<uint8_t>(ds >> (j * 8)));
@@ -911,7 +924,7 @@ TEST(ColBinaryImpl, ArrayDebug_DirectUnpack) {
     auto cb = parse_col_binary(buf);
     ColBinaryReader reader = ColBinaryReader::from_col(cb.cols[0], 5);
 
-    auto result = unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(reader);
+    auto result = unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(reader, reader.tag_iter());
     EXPECT_EQ(result.size(), 3u);
     for (auto& g : result) ASSERT_NE(g, nullptr);
 
@@ -954,12 +967,14 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Predicate) {
 
     // Col0: non-const
     buf->push_back(0);
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
     // Col1: const
     buf->push_back(0x01);
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
     for (auto b : col1_data) buf->push_back(b);
@@ -1014,18 +1029,21 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Dwithin) {
 
     // Col0: non-const geom
     buf->push_back(0);
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
     // Col1: const geom
     buf->push_back(0x01);
+    buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
     for (auto b : col1_data) buf->push_back(b);
 
     // Col2: non-const double
     buf->push_back(0);
+    buf->push_back(static_cast<uint8_t>(TypeTag::Float64));
     uint64_t ds2 = col2_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds2 >> (j * 8)));
     for (auto b : col2_data) buf->push_back(b);
