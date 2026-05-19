@@ -1028,24 +1028,11 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
         size_t data_size_pos = out->size();
         writeBinaryLE64(0u, *out);  // placeholder; patched after data is written
 
-        // Per-row: fresh tag iterators, then unpack all arguments.
-        for (uint32_t i = 0; i < n; ++i) {
-            std::array<std::vector<TypeTag>::const_iterator, nargs> tag_iters;
-            for (size_t j = 0; j < nargs; ++j)
-                tag_iters[j] = readers[j].tag_iter();
-
-            auto invoke_row = [&readers, &tag_iters, impl]() {
-                return [&]<size_t... I>(std::index_sequence<I...>) {
-                    return impl(unpack_arg<std::decay_t<Args>>(readers[I], tag_iters[I])...);
-                }(std::make_index_sequence<nargs>{});
-            };
-
-            col_binary_impl_worker<Ret, nargs, decltype(invoke_row)>::run(
-                *out, 1, func_name, invoke_row, readers,
-                bbox_op, early_ret,
-                prep_a, prep_b, prep_a_dist, prep_b_dist,
-                prep_a_point, prep_b_point);
-        }
+        col_binary_impl_worker<Ret, nargs, decltype(invoke)>::run(
+            *out, n, func_name, invoke, readers,
+            bbox_op, early_ret,
+            prep_a, prep_b, prep_a_dist, prep_b_dist,
+            prep_a_point, prep_b_point);
 
         uint64_t data_size = static_cast<uint64_t>(out->size() - data_size_pos - 8);
         for (int i = 0; i < 8; ++i)
@@ -1086,7 +1073,13 @@ raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
     out->clear();
     writeBinaryLE32(1u, *out);
     writeBinaryLE32(num_rows, *out);
-    out->push_back(0x00);
+    out->push_back(0x00);  // flags
+    // type_tags: Array(Tuple(UInt64, Float64)) → [Array, Tuple, UInt64, Float64]
+    out->push_back(4); out->push_back(0); out->push_back(0); out->push_back(0);
+    out->push_back(static_cast<uint8_t>(TypeTag::Array));
+    out->push_back(static_cast<uint8_t>(TypeTag::Tuple));
+    out->push_back(static_cast<uint8_t>(TypeTag::UInt64));
+    out->push_back(static_cast<uint8_t>(TypeTag::Float64));
     size_t data_size_pos = out->size();
     writeBinaryLE64(0ull, *out);
 
@@ -1102,14 +1095,9 @@ raw_buffer* st_knn_cb(raw_buffer* ptr, uint32_t num_rows) {
                 const uint8_t* cend = col_c.data + col_c.data_size;
                 uint64_t M = 0;
                 std::vector<std::span<const uint8_t>> cands;
-                // Read all per-row counts (for const, each count = M_total).
-                const uint8_t* counts_end = p + num_rows * 8;
-                if (p + 8 <= cend && counts_end <= cend) {
-                    for (uint32_t i = 0; i < num_rows; ++i) {
-                        uint64_t count = 0;
-                        std::memcpy(&count, p, 8); p += 8;
-                        M = count;
-                    }
+                // Const column stores exactly 1 copy: [u64 count][u32[M+1] offsets][chars]
+                if (p + 8 <= cend) {
+                    std::memcpy(&M, p, 8); p += 8;
                     if (M > 0 && p + (M + 1) * 4 <= cend) {
                         const uint32_t* str_offs = reinterpret_cast<const uint32_t*>(p);
                         p += (M + 1) * 4;
