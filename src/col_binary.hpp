@@ -5,12 +5,13 @@
 // Input wire layout (CH → WASM):
 //   num_columns (u32LE) | num_rows (u32LE)
 //   For each column:
-//     flags (u8, bit0=IS_CONST) | type_tags (recursive stream) | data_size (u64LE) | data
+//     flags (u8, bit0=IS_CONST) | type_tags_size (u32LE) | type_tags (N bytes) | data_size (u64LE) | data
+//   type_tags_size == 0 → no type tags (backward compatible).
 //   Type tags: Nullable/Array/Tuple are containers (have children),
-//   all others are leaves. Stream ends at first leaf. Empty = no coercion.
+//   all others are leaves. Full recursive stream for complex nested types.
 //
 // Output wire layout (WASM → CH, always single column):
-//   num_columns (u32LE) | num_rows (u32LE) | flags (u8) | data_size (u64LE) | data
+//   num_columns (u32LE) | num_rows (u32LE) | flags (u8) | type_tags_size (u32LE) | type_tags + data_size (u64LE) | data
 
 #include <algorithm>
 #include <array>
@@ -48,6 +49,17 @@ using ColPrepDistOp = bool (*)(const geos::geom::prep::PreparedGeometry*,
 using ColPrepPointOp = bool (*)(geos::algorithm::locate::IndexedPointInAreaLocator*,
                                  double, double);
 
+// ── Binary helpers ─────────────────────────────────────────────────────────────
+
+static inline bool readBinaryLE32(const uint8_t*& p, const uint8_t* end, uint32_t& out) {
+    if (p + 4 > end) return false;
+    out = 0;
+    for (int i = 0; i < 4; ++i)
+        out |= static_cast<uint32_t>(p[i]) << (i * 8);
+    p += 4;
+    return true;
+}
+
 // ── Type tags ─────────────────────────────────────────────────────────────────
 // ClickHouse native type tags for auto-coercion on the WASM side.
 // Scalar tags: 0x01–0x0A, String=0x0B, Nullable=0x0C, Array=0x0D, Tuple=0x0E
@@ -69,24 +81,20 @@ enum class TypeTag : uint8_t {
     Tuple   = 0x0E,
 };
 
-// Read a recursive type tag stream from the wire.
+// Read a size-prefixed type tag stream from the wire.
+// Reads type_tags_size (u32LE) bytes of type tags.
 // Returns the vector of type tags for this column.
-// For scalars: one tag (e.g., 0x05 for Int32).
-// For Nullable: [Nullable, inner_tag].
-// For Array: [Array, element_tag].
-// For Tuple: [Tuple, field1_tag, field2_tag, ...].
-// Stops at first leaf scalar.
-static inline std::vector<TypeTag> read_type_tags(const uint8_t*& p, const uint8_t* end) {
+// type_tags_size == 0 → empty vector (backward compatible).
+static inline std::vector<TypeTag> read_type_tags(const uint8_t*& p, const uint8_t* end, uint32_t& out_size) {
+    out_size = 0;
+    if (!readBinaryLE32(p, end, out_size)) return {};
+    if (out_size == 0) return {};
+    if (p + out_size > end) return {};
     std::vector<TypeTag> tags;
-    while (p < end) {
-        uint8_t byte = *p++;
-        tags.push_back(static_cast<TypeTag>(byte));
-        if (byte != static_cast<uint8_t>(TypeTag::Nullable) &&
-            byte != static_cast<uint8_t>(TypeTag::Array) &&
-            byte != static_cast<uint8_t>(TypeTag::Tuple)) {
-            break;
-        }
-    }
+    tags.reserve(out_size);
+    for (uint32_t i = 0; i < out_size; ++i)
+        tags.push_back(static_cast<TypeTag>(p[i]));
+    p += out_size;
     return tags;
 }
 
@@ -130,6 +138,7 @@ template <> struct ret_type_tag<std::string_view> { static constexpr TypeTag val
 template <> struct ret_type_tag<std::string>    { static constexpr TypeTag value = TypeTag::String; };
 template <> struct ret_type_tag<std::span<const uint8_t>> { static constexpr TypeTag value = TypeTag::String; };
 template <> struct ret_type_tag<std::unique_ptr<geos::geom::Geometry>> { static constexpr TypeTag value = TypeTag::String; };
+template <> struct ret_type_tag<raw_buffer>   { static constexpr TypeTag value = TypeTag::String; };
 
 // Get the byte size for a type tag.
 static inline size_t tag_byte_size(TypeTag tag) {
@@ -147,10 +156,11 @@ static inline size_t tag_byte_size(TypeTag tag) {
 // ── ColBinaryBuf ─────────────────────────────────────────────────────────────
 
 struct ColBinaryInfo {
-    bool           is_const;
+    bool            is_const;
+    uint32_t        type_tags_size;  // number of type tag bytes (0 = none)
     std::vector<TypeTag> type_tags;  // recursive stream for auto-coercion
-    uint64_t       data_size;
-    const uint8_t* data;
+    uint64_t        data_size;
+    const uint8_t*  data;
 
     // O(1) data_size for u32 offset format: (N+1)*4 + last_offset.
     // Callers: compute this before building the column data block.
@@ -216,15 +226,6 @@ static inline bool readBinaryLE64(const uint8_t*& p, const uint8_t* end, uint64_
     return true;
 }
 
-static inline bool readBinaryLE32(const uint8_t*& p, const uint8_t* end, uint32_t& out) {
-    if (p + 4 > end) return false;
-    out = 0;
-    for (int i = 0; i < 4; ++i)
-        out |= static_cast<uint32_t>(p[i]) << (i * 8);
-    p += 4;
-    return true;
-}
-
 // ── parse_col_binary: ColumnBinary format ─────────────────────────────────────
 
 inline ColBinaryBuf parse_col_binary(const raw_buffer* buf) {
@@ -248,8 +249,8 @@ inline ColBinaryBuf parse_col_binary(const raw_buffer* buf) {
         uint8_t flags = *p++;
         ci.is_const = (flags & 0x01) != 0;
 
-        // type tags (recursive, ends at leaf scalar)
-        ci.type_tags = read_type_tags(p, end);
+        // type_tags_size (u32LE) + type_tags
+        ci.type_tags = read_type_tags(p, end, ci.type_tags_size);
 
         // data_size (u64LE)
         if (!readBinaryLE64(p, end, v64)) ch::panic("parse_col_binary: truncated data_size");
@@ -1017,10 +1018,11 @@ raw_buffer* col_binary_impl_wrapper(const char* func_name,
         out = clickhouse_create_buffer(28);
         out->clear();
 
-        // Output header: num_cols(u32LE) + num_rows(u32LE) + flags(u8) + type_tag + data_size(u64LE)
+        // Output header: num_cols(u32LE) + num_rows(u32LE) + flags(u8) + type_tags_size(u32LE) + type_tag + data_size(u64LE)
         writeBinaryLE32(1u, *out);
         writeBinaryLE32(static_cast<uint32_t>(n), *out);
         out->push_back(0x00);  // flags: 0 (non-const output)
+        out->push_back(1); out->push_back(0); out->push_back(0); out->push_back(0); // type_tags_size = 1
         out->push_back(static_cast<uint8_t>(ret_type_tag<std::decay_t<Ret>>::value));
 
         size_t data_size_pos = out->size();

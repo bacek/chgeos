@@ -38,11 +38,11 @@ TEST(ColBinaryVarint, WriteReadRoundTrip) {
 // ── Helper: build a ColumnBinary-format raw_buffer ────────────────────────────
 
 // Build a ColumnBinary-format raw_buffer from num_rows, num_cols, and per-column data.
-// Each column has: flags(u8), data_size(u64LE), data.
+// Each column has: flags(u8), type_tags_size(u32LE), type_tags(N bytes), data_size(u64LE), data.
 static raw_buffer* make_col_binary_buf(uint32_t num_rows, uint32_t num_cols,
-                                        const std::vector<std::vector<uint8_t>>& col_data,
-                                        uint8_t col_flags = 0,
-                                        const std::vector<std::vector<ch::TypeTag>>& col_type_tags = {}) {
+                                         const std::vector<std::vector<uint8_t>>& col_data,
+                                         uint8_t col_flags = 0,
+                                         const std::vector<std::vector<ch::TypeTag>>& col_type_tags = {}) {
      raw_buffer* buf = clickhouse_create_buffer(0);
      buf->clear();
      writeBinaryLE32(num_cols, *buf);
@@ -50,7 +50,10 @@ static raw_buffer* make_col_binary_buf(uint32_t num_rows, uint32_t num_cols,
      for (uint32_t i = 0; i < num_cols; ++i) {
          buf->push_back(col_flags);
          const auto& tags = (i < col_type_tags.size()) ? col_type_tags[i] : std::vector<ch::TypeTag>{};
-         write_type_tags(*buf, tags);
+         uint32_t tags_size = static_cast<uint32_t>(tags.size());
+         writeBinaryLE32(tags_size, *buf);
+         for (uint32_t j = 0; j < tags_size; ++j)
+             buf->push_back(static_cast<uint8_t>(tags[j]));
          uint64_t data_size = static_cast<uint64_t>(col_data[i].size());
          for (uint32_t j = 0; j < 8; ++j)
              buf->push_back(static_cast<uint8_t>(data_size >> (j * 8)));
@@ -299,6 +302,10 @@ TEST(ColBinaryImpl, BoolHeaderOrder) {
     EXPECT_EQ(v32, n);
 
     EXPECT_EQ(*p++, 0u); // flags
+    // type_tags_size (u32LE) = 1
+    uint32_t ttags_sz;
+    EXPECT_TRUE(readBinaryLE32(p, end, ttags_sz));
+    EXPECT_EQ(ttags_sz, 1u);
     EXPECT_EQ(*p++, static_cast<uint8_t>(TypeTag::Int8)); // type tag for bool return
 
     EXPECT_TRUE(readBinaryLE64(p, end, v64));
@@ -350,15 +357,17 @@ static raw_buffer* make_col_binary_geom_buf(uint32_t num_rows,
     writeBinaryLE32(2, *buf);
     writeBinaryLE32(num_rows, *buf);
 
-    // Col0: flags + type_tags + data_size(u64) + data
+    // Col0: flags + type_tags_size(u32LE) + type_tags + data_size(u64) + data
     buf->push_back(col0_flags);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
     for (auto b : col0_data) buf->push_back(b);
 
-    // Col1: flags + type_tags + data_size(u64) + data
+    // Col1: flags + type_tags_size(u32LE) + type_tags + data_size(u64) + data
     buf->push_back(col1_flags);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
@@ -697,6 +706,7 @@ static raw_buffer* make_col_binary_geom3(uint32_t num_rows,
 
     // Col0: geom
     buf->push_back(const_col_idx == 0 ? 0x01 : 0);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
@@ -704,6 +714,7 @@ static raw_buffer* make_col_binary_geom3(uint32_t num_rows,
 
     // Col1: geom
     buf->push_back(const_col_idx == 1 ? 0x01 : 0);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
@@ -711,6 +722,7 @@ static raw_buffer* make_col_binary_geom3(uint32_t num_rows,
 
     // Col2: double
     buf->push_back(0);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::Float64));
     uint64_t ds2 = col2_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds2 >> (j * 8)));
@@ -824,6 +836,7 @@ static raw_buffer* make_col_binary_array_col(uint32_t num_rows,
     col_data.insert(col_data.end(), chars_data.begin(), chars_data.end());
 
     buf->push_back(0); // non-const, Array(String)
+    buf->push_back(2); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 2
     buf->push_back(static_cast<uint8_t>(TypeTag::Array));
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds = col_data.size();
@@ -864,6 +877,7 @@ static raw_buffer* make_col_binary_array_col_const(uint32_t num_rows,
     col_data.insert(col_data.end(), chars_data.begin(), chars_data.end());
 
     buf->push_back(0x01); // const, Array(String)
+    buf->push_back(2); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 2
     buf->push_back(static_cast<uint8_t>(TypeTag::Array));
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds = static_cast<uint64_t>(col_data.size());
@@ -967,6 +981,7 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Predicate) {
 
     // Col0: non-const
     buf->push_back(0);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
@@ -974,6 +989,7 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Predicate) {
 
     // Col1: const
     buf->push_back(0x01);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
@@ -1029,6 +1045,7 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Dwithin) {
 
     // Col0: non-const geom
     buf->push_back(0);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds0 = col0_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
@@ -1036,6 +1053,7 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Dwithin) {
 
     // Col1: const geom
     buf->push_back(0x01);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::String));
     uint64_t ds1 = col1_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
@@ -1043,6 +1061,7 @@ TEST(ColBinaryImpl, BConst_NativeFormat_Dwithin) {
 
     // Col2: non-const double
     buf->push_back(0);
+    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
     buf->push_back(static_cast<uint8_t>(TypeTag::Float64));
     uint64_t ds2 = col2_data.size();
     for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds2 >> (j * 8)));
