@@ -553,22 +553,33 @@ static inline void pack_result(raw_buffer& buf, uint32_t v) {
     buf.append(reinterpret_cast<const uint8_t*>(&v), 4);
 }
 
-static inline void pack_result(raw_buffer& buf, std::unique_ptr<geos::geom::Geometry> g) {
-    if (!g) { writeVarUInt(0u, buf); return; }
-    auto wkb = write_ewkb(g);
-    writeVarUInt(static_cast<uint64_t>(wkb.size()), buf);
-    buf.append(wkb.data(), static_cast<uint32_t>(wkb.size()));
-}
+struct ColCBBytesWriter {
+    raw_buffer& out;
+    uint32_t    offs_base;
+    uint32_t    rows_written = 0;
 
-static inline void pack_result(raw_buffer& buf, std::string_view s) {
-    writeVarUInt(static_cast<uint64_t>(s.size()), buf);
-    buf.append(reinterpret_cast<const uint8_t*>(s.data()), static_cast<uint32_t>(s.size()));
-}
+    ColCBBytesWriter(raw_buffer& buf, uint32_t n) : out(buf) {
+        offs_base = static_cast<uint32_t>(buf.size());
+        buf.resize(offs_base + (n + 1u) * 4u);
+        const uint32_t zero = 0;
+        std::memcpy(buf.data() + offs_base, &zero, 4);
+    }
 
-static inline void pack_result(raw_buffer& buf, raw_buffer v) {
-    writeVarUInt(static_cast<uint64_t>(v.size()), buf);
-    buf.append(v.data(), v.size());
-}
+    void push_bytes(const uint8_t* data, uint32_t len) {
+        uint32_t prev;
+        std::memcpy(&prev, out.data() + offs_base + rows_written * 4u, 4);
+        uint32_t next = prev + len;
+        if (len > 0) out.append(data, len);
+        std::memcpy(out.data() + offs_base + (rows_written + 1u) * 4u, &next, 4);
+        ++rows_written;
+    }
+
+    void push_geom(std::unique_ptr<geos::geom::Geometry> g) {
+        if (!g) { push_bytes(nullptr, 0); return; }
+        auto wkb = write_ewkb(g);
+        push_bytes(wkb.data(), static_cast<uint32_t>(wkb.size()));
+    }
+};
 
 // ── unpack_arg: deserialize one argument from ColBinaryReader ────────────────
 // Type tags are consumed hierarchically: each specialization consumes the tag
@@ -806,8 +817,29 @@ struct col_binary_impl_worker {
                     ColPrepOp, ColPrepOp,
                     ColPrepDistOp, ColPrepDistOp,
                     ColPrepPointOp, ColPrepPointOp) {
-        for (uint32_t i = 0; i < n; ++i)
-            pack_result(out, invoke());
+        if constexpr (
+            std::is_same_v<Ret, std::unique_ptr<geos::geom::Geometry>> ||
+            std::is_same_v<Ret, std::string> ||
+            std::is_same_v<Ret, std::string_view> ||
+            std::is_same_v<Ret, raw_buffer>)
+        {
+            ColCBBytesWriter w(out, n);
+            for (uint32_t i = 0; i < n; ++i) {
+                auto val = invoke();
+                if constexpr (std::is_same_v<Ret, std::unique_ptr<geos::geom::Geometry>>)
+                    w.push_geom(std::move(val));
+                else if constexpr (std::is_same_v<Ret, raw_buffer>)
+                    w.push_bytes(val.data(), static_cast<uint32_t>(val.size()));
+                else {
+                    std::string_view sv(val);
+                    w.push_bytes(reinterpret_cast<const uint8_t*>(sv.data()),
+                                 static_cast<uint32_t>(sv.size()));
+                }
+            }
+        } else {
+            for (uint32_t i = 0; i < n; ++i)
+                pack_result(out, invoke());
+        }
     }
 };
 
