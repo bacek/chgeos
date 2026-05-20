@@ -208,13 +208,11 @@ static inline void writeVarUInt(uint64_t n, raw_buffer& buf) {
 }
 
 static inline void writeBinaryLE64(uint64_t n, raw_buffer& buf) {
-    for (uint32_t i = 0; i < 8; ++i)
-        buf.push_back(static_cast<uint8_t>(n >> (i * 8)));
+    buf.append(reinterpret_cast<const uint8_t*>(&n), 8);
 }
 
 static inline void writeBinaryLE32(uint32_t n, raw_buffer& buf) {
-    for (uint32_t i = 0; i < 4; ++i)
-        buf.push_back(static_cast<uint8_t>(n >> (i * 8)));
+    buf.append(reinterpret_cast<const uint8_t*>(&n), 4);
 }
 
 static inline bool readBinaryLE64(const uint8_t*& p, const uint8_t* end, uint64_t& out) {
@@ -544,45 +542,32 @@ static inline void pack_result(raw_buffer& buf, bool v) {
 }
 
 static inline void pack_result(raw_buffer& buf, double v) {
-    uint8_t bytes[8];
-    std::memcpy(bytes, &v, 8);
-    for (uint32_t i = 0; i < 8; ++i)
-        buf.push_back(bytes[i]);
+    buf.append(reinterpret_cast<const uint8_t*>(&v), 8);
 }
 
 static inline void pack_result(raw_buffer& buf, int32_t v) {
-    uint8_t bytes[4];
-    std::memcpy(bytes, &v, 4);
-    for (uint32_t i = 0; i < 4; ++i)
-        buf.push_back(bytes[i]);
+    buf.append(reinterpret_cast<const uint8_t*>(&v), 4);
 }
 
 static inline void pack_result(raw_buffer& buf, uint32_t v) {
-    uint8_t bytes[4];
-    std::memcpy(bytes, &v, 4);
-    for (uint32_t i = 0; i < 4; ++i)
-        buf.push_back(bytes[i]);
+    buf.append(reinterpret_cast<const uint8_t*>(&v), 4);
 }
 
 static inline void pack_result(raw_buffer& buf, std::unique_ptr<geos::geom::Geometry> g) {
     if (!g) { writeVarUInt(0u, buf); return; }
     auto wkb = write_ewkb(g);
     writeVarUInt(static_cast<uint64_t>(wkb.size()), buf);
-    for (size_t i = 0; i < wkb.size(); ++i)
-        buf.push_back(wkb[i]);
+    buf.append(wkb.data(), static_cast<uint32_t>(wkb.size()));
 }
 
 static inline void pack_result(raw_buffer& buf, std::string_view s) {
-    uint32_t len = static_cast<uint32_t>(s.size());
-    writeVarUInt(static_cast<uint64_t>(len), buf);
-    for (uint32_t i = 0; i < len; ++i)
-        buf.push_back(static_cast<uint8_t>(s[i]));
+    writeVarUInt(static_cast<uint64_t>(s.size()), buf);
+    buf.append(reinterpret_cast<const uint8_t*>(s.data()), static_cast<uint32_t>(s.size()));
 }
 
 static inline void pack_result(raw_buffer& buf, raw_buffer v) {
     writeVarUInt(static_cast<uint64_t>(v.size()), buf);
-    for (size_t i = 0; i < v.size(); ++i)
-        buf.push_back(v[i]);
+    buf.append(v.data(), v.size());
 }
 
 // ── unpack_arg: deserialize one argument from ColBinaryReader ────────────────

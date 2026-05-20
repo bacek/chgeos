@@ -2187,5 +2187,5 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS String
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_aggregate=1;
+SETTINGS serialization_format = 'ColumnBinary';
 
