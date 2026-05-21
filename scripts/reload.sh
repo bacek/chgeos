@@ -11,7 +11,7 @@ echo "==> Drop functions"
 grep -oE "^CREATE OR REPLACE FUNCTION [a-z0-9_]+" "$REPO/clickhouse/create.sql" \
     | sed 's/CREATE OR REPLACE FUNCTION /DROP FUNCTION IF EXISTS /' \
     | sed 's/$/ ;/' \
-    | "$CH" client --port 19000 --multiquery
+    | "$CH" client --port 19000 --multiquery --ignore-error || true
 
 echo "==> Delete module"
 "$CH" client --port 19000 --query "DELETE FROM system.webassembly_modules WHERE name='chgeos'"

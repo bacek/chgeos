@@ -16,11 +16,33 @@ add_link_options($<$<CONFIG:Debug>:-O0>)
 # and all dependencies are compiled with the same exception ABI.
 # -fwasm-exceptions: WASM opcodes instead of Emscripten JS invoke_* wrappers (which
 #   ClickHouse's WasmTime runtime doesn't provide as host imports).
-# -sWASM_LEGACY_EXCEPTIONS=0: new-style exnref/try_table opcodes required for
-#   wasmtime configured with wasm_exceptions(true).
+# New-style exnref/try_table opcodes are required for wasmtime with wasm_exceptions(true).
+# The flag name changed between emcc versions:
+#   emcc 3.x: -sWASM_EXNREF=1
+#   emcc 5.x: -sWASM_LEGACY_EXCEPTIONS=0  (renamed in 5.0.4; also add LTO + inline cap)
+# -mllvm -inline-threshold=50: LLVM 23 over-inlines CentroidKNNIndex::search; the cap
+#   recovers ~22% on Q12 vs uncapped emcc5 (-flto=full without the cap).
 if(CMAKE_CROSSCOMPILING)
-  add_compile_options(-fexceptions -fwasm-exceptions -flto -sWASM_LEGACY_EXCEPTIONS=0)
-  add_link_options(-fexceptions -fwasm-exceptions -flto -sWASM_LEGACY_EXCEPTIONS=0
+  execute_process(
+    COMMAND emcc --version
+    OUTPUT_VARIABLE EMCC_VERSION_STR
+    ERROR_QUIET
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  string(REGEX MATCH "([0-9]+)\\.[0-9]+\\.[0-9]+" _emcc_m "${EMCC_VERSION_STR}")
+  set(EMCC_MAJOR "${CMAKE_MATCH_1}")
+  message(STATUS "emcc: ${EMCC_VERSION_STR} (major=${EMCC_MAJOR})")
+
+  if(EMCC_MAJOR EQUAL 3)
+    set(EMCC_EXNREF -sWASM_EXNREF=1)
+    set(EMCC_LTO)
+  else()
+    set(EMCC_EXNREF -sWASM_LEGACY_EXCEPTIONS=0)
+    set(EMCC_LTO -flto=full -mllvm -inline-threshold=50)
+  endif()
+
+  add_compile_options(-fexceptions -fwasm-exceptions ${EMCC_EXNREF} ${EMCC_LTO})
+  add_link_options(-fexceptions -fwasm-exceptions ${EMCC_EXNREF} ${EMCC_LTO}
                    -sNO_FILESYSTEM=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4294901760)
 endif()
 
