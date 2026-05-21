@@ -24,6 +24,7 @@ import socket
 import subprocess
 import sys
 import os
+import threading
 from datetime import datetime, timezone
 
 # ---------------------------------------------------------------------------
@@ -198,7 +199,7 @@ WITH
         dist AS distance_to_building
  FROM knn_expanded
  ORDER BY distance_to_building ASC, b_buildingkey ASC
- {FUEL}""",
+ {FUEL_SORT}""",
     ),
 ]
 
@@ -286,12 +287,29 @@ Usage:
 
 
 def run_query(ch, port, query):
-    """Run a single query, returning (stdout_text, stderr_text, returncode)."""
-    result = subprocess.run(
+    """Run a query; stream stdout to count rows without buffering."""
+    proc = subprocess.Popen(
         [ch, "client", f"--port={port}", "--time", "-q", query],
-        capture_output=True, text=True, errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
     )
-    return result.stdout, result.stderr, result.returncode
+    stderr_buf = []
+
+    def _read_stderr():
+        stderr_buf.append(proc.stderr.read())
+
+    t = threading.Thread(target=_read_stderr, daemon=True)
+    t.start()
+
+    row_count = 0
+    for chunk in iter(lambda: proc.stdout.read(65536), b""):
+        row_count += chunk.count(b"\n")
+    proc.stdout.close()
+
+    t.join()
+    proc.wait()
+    stderr = stderr_buf[0].decode("utf-8", errors="replace") if stderr_buf else ""
+    return row_count, stderr, proc.returncode
 
 
 def extract_ms(stderr, timeout):
@@ -336,14 +354,10 @@ def write_json_line(output_path, suite_dict):
 
 def run_query_once(ch, port, query, timeout):
     """Run a query and return (ms, rows_or_none, status)."""
-    stdout, stderr, rc = run_query(ch, port, query)
+    row_count, stderr, rc = run_query(ch, port, query)
     ms = extract_ms(stderr, timeout)
     st = status_label(ms, rc, timeout)
-    rows = None
-    if st == "OK" and ms < timeout * 1000 - 500:
-        lines = stdout.strip().splitlines()
-        if lines and lines[0].strip():
-            rows = len(lines)
+    rows = row_count if (st == "OK" and ms < timeout * 1000 - 500 and row_count > 0) else None
     return ms, rows, st
 
 
@@ -392,6 +406,11 @@ def main():
     fuel5 = (
         "SETTINGS webassembly_udf_max_fuel=0, max_execution_time="
         f"{timeout}, query_plan_execute_functions_after_sorting=0"
+        f"{', ' + extra_settings if extra_settings else ''}"
+    )
+    fuel_sort = (
+        "SETTINGS webassembly_udf_max_fuel=0, max_execution_time="
+        f"{timeout}"
         f"{', ' + extra_settings if extra_settings else ''}"
     )
 
@@ -443,7 +462,7 @@ def main():
 
         for i in range(runs):
             # Build the query with table vars and wire-format suffix
-            tq = tpl.format(**{**table_vars, "FUEL": fuel, "FUEL5": fuel5})
+            tq = tpl.format(**{**table_vars, "FUEL": fuel, "FUEL5": fuel5, "FUEL_SORT": fuel_sort})
             if wire_protocol == "mp":
                 suffix = "_mp"
             elif wire_protocol == "buffers":
@@ -456,7 +475,7 @@ def main():
 
             if i == 0:
                 # First run: capture rows
-                stdout, stderr, rc = run_query(ch, port, tq)
+                row_count, stderr, rc = run_query(ch, port, tq)
                 ms = extract_ms(stderr, timeout)
                 st = status_label(ms, rc, timeout)
 
@@ -464,10 +483,8 @@ def main():
                     errored = True
                     break
 
-                if st == "OK" and ms < timeout * 1000 - 500:
-                    lines = stdout.strip().splitlines()
-                    if lines and lines[0].strip():
-                        rows = len(lines)
+                if st == "OK" and ms < timeout * 1000 - 500 and row_count > 0:
+                    rows = row_count
 
                 if ms >= timeout * 1000 - 500:
                     timed_out = True
