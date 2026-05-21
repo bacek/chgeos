@@ -954,11 +954,12 @@ inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
     try {
         if (col_c.is_const) {
             auto wkbs = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, 0);
+            ch::CentroidKNNIndex index(wkbs);
             return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
                 if (col_q.is_null(row)) return {};
                 ch::BBox pt = ch::wkb_bbox(col_q.get_bytes(row));
                 if (pt.is_empty()) return {};
-                return ch::st_knn_centroid(col_q.get_bytes(row), wkbs, k);
+                return index.query(pt.xmin, pt.ymin, k);
             });
         } else {
             return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {

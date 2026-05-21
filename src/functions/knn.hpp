@@ -80,7 +80,7 @@ class CentroidKNNIndex
                          const std::pair<double,uint64_t>& b)
     { return a.first < b.first; }
 
-    void search(size_t lo, size_t hi, int depth,
+    void __attribute__((noinline)) search(size_t lo, size_t hi, int depth,
                 double qx, double qy, uint32_t k,
                 std::vector<std::pair<double,uint64_t>>& heap) const
     {

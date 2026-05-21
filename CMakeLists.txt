@@ -35,10 +35,11 @@ if(CMAKE_CROSSCOMPILING)
 
   if(EMCC_MAJOR EQUAL 3)
     set(EMCC_EXNREF -sWASM_EXNREF=1)
-    set(EMCC_LTO)
+    set(EMCC_LTO -flto=full)
   else()
     set(EMCC_EXNREF -sWASM_LEGACY_EXCEPTIONS=0)
-    set(EMCC_LTO -flto=full -mllvm -inline-threshold=50)
+    set(EMCC_LTO -flto=full)
+    # set(EMCC_LTO -flto=full -mllvm -inline-threshold=50)
   endif()
 
   add_compile_options(-fexceptions -fwasm-exceptions ${EMCC_EXNREF} ${EMCC_LTO})
