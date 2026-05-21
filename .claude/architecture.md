@@ -102,6 +102,20 @@ Adding a new function:
 3. Add `CREATE OR REPLACE FUNCTION name_mp` / `name_col` in `clickhouse/create.sql`
 4. Add the canonical alias `CREATE OR REPLACE FUNCTION name AS (...) -> name_col(...)` (or `_mp`)
 
+## Key files
+
+- `src/clickhouse_types.hpp` — generated, do not edit. Regenerate: `python3 scripts/gen_clickhouse_types.py ../ClickHouse`
+- `src/geom/geography.hpp` — Geography = Tuple(Int32 srid, Geometry), namespace ch::geography
+- `scripts/gen_clickhouse_types.py` — parses ClickHouse TypeId.h + DataTypeCustomGeo.cpp
+- `clickhouse/create.sql` — all 44 CREATE FUNCTION definitions for ClickHouse WASM UDFs
+
+## Runtime stubs
+
+Native (`clickhouse_throw`, `clickhouse_random`, `clickhouse_log`) in `tests/test_functions.cpp`.
+WASM-only (`__cxa_*`, `getentropy`, `__assert_fail`) in `src/mem.cpp` under `#ifdef __wasi__`.
+CH WasmTime provides WASI preview1 stubs via `define_wasi()` + `set_wasi()` in `WasmTimeRuntime.cpp`.
+`chgeos` executable only built when cross-compiling (native build skips it).
+
 ## ColumnBinary wire format (`src/col_binary.hpp`)
 
 Fourth wire format, newer than COLUMNAR_V1. Symmetric layout: input and output use the same frame.
