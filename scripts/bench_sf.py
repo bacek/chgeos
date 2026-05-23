@@ -2,15 +2,20 @@
 """Geospatial benchmark suite for ClickHouse.
 
 Usage:
-    python3 scripts/bench_sf.py [path/to/clickhouse] [sf1|sf10] [--native] [--wire-protocol col|mp|buffers|cb] [--settings "key=val, key2=val2"] [QUERY]
+    python3 scripts/bench_sf.py [--ch clickhouse] [--sf sf1|sf10] [--native]
+        [--wire-protocol col|mp|buffers|cb] [--settings "key=val, key2=val2"]
+        [--query Q1] [--query Q7 ...]   # repeatable
+        [--queries Q1,Q7]               # comma-separated alternative
 
-SF (optional): scale factor — sf1 (default) or sf10.
+--sf: scale factor — sf1 (default) or sf10.
 --native: read from native MergeTree tables (sf1.trip etc.) instead of parquet.
           Run scripts/import_sf.sh once beforehand to populate them.
---wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix).
+--wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp
+        suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix).
         Appends the appropriate suffix to spatial function names for the selected wire format.
 --settings: comma-separated "key=value" pairs appended to SETTINGS clause of each query.
-QUERY (optional): run only the named query, e.g. Q1, Q7
+--query: run only this query; may be repeated: --query Q1 --query Q7
+--queries: comma-separated shorthand: --queries Q1,Q7  (merged with --query values)
 --json: write results to benchmark_results.json (JSON Lines, one BenchmarkSuite per line)
 --output: output file path for --json (default: <sf>/benchmark_results.json)
 
@@ -275,10 +280,10 @@ Usage:
     parser.add_argument("--wire-protocol", default="col", choices=["col", "mp", "buffers", "cb"],
                         help="Wire format: 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix)")
     parser.add_argument("--settings", default=None)
-    parser.add_argument("--query", default=None,
-                        help="Run only this query (e.g. Q1, Q7)")
+    parser.add_argument("--query", action="append", dest="query", metavar="QUERY",
+                        help="Run only this query; may be repeated: --query Q1 --query Q7")
     parser.add_argument("--queries", default=None,
-                        help="Comma-separated list of queries to run (e.g. Q1,Q7)")
+                        help="Comma-separated shorthand: --queries Q1,Q7 (merged with --query)")
     parser.add_argument("--json", action="store_true",
                         help="Write results to benchmark_results.json (JSON Lines)")
     parser.add_argument("--output", default=None,
@@ -386,12 +391,14 @@ def main():
     port = args.port
     timeout = args.timeout
     extra_settings = args.settings
-    query_filter = args.query
     wire_protocol = args.wire_protocol
 
-    # Parse --queries (comma-separated, Sedona-compatible)
+    # Merge --query (repeatable) and --queries (comma-separated) into one set.
+    query_filter: set[str] = set()
+    if args.query:
+        query_filter.update(q.strip().upper() for q in args.query)
     if args.queries:
-        query_filter = ",".join(q.strip().upper() for q in args.queries.split(","))
+        query_filter.update(q.strip().upper() for q in args.queries.split(","))
 
     json_flag = args.json
     output_path = args.output if args.output else (
@@ -452,7 +459,7 @@ def main():
     results = []
 
     for label, tpl in QUERIES:
-        if query_filter and label != query_filter:
+        if query_filter and label not in query_filter:
             continue
 
         times = []
