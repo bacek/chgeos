@@ -17,6 +17,73 @@
 - `columnar_impl_wrapper(buf, n, fn_impl, ...)` — single generic template
 - Registered via `CH_UDF_COL` / `CH_UDF_COL_BBOX2` / `CH_UDF_COL_PRED3` macros
 
+### Wire format
+
+**BufHeader** (8 bytes): `num_rows` (u32) + `num_cols` (u32)
+
+**ColDescriptor** (20 bytes):
+```
+type           : u32  — ColType | COL_IS_CONST | COL_IS_REPEAT
+null_offset    : u32  — offset to u8[row_count] null map; 0=no nulls
+offsets_offset : u32  — offset to u32[row_count+1] start offsets; 0 for fixed-width
+data_offset    : u32  — offset to raw column data
+data_size      : u32  — total bytes in the data block
+```
+
+**ColType enum:**
+
+| Value | Constant     | Meaning |
+|-------|-------------|---------|
+| 0     | COL_BYTES       | String: offsets[N+1] + null-terminated bytes |
+| 1     | COL_NULL_BYTES  | Nullable(String): null_map + offsets + bytes |
+| 2     | COL_FIXED8      | UInt8/Int8: u8[N] |
+| 3     | COL_NULL_FIXED8 | Nullable UInt8/Int8 |
+| 4     | COL_FIXED32     | UInt32/Int32/Float32: u32[N] |
+| 5     | COL_NULL_FIXED32| Nullable fixed32 |
+| 6     | COL_FIXED64     | UInt64/Int64/Float64: u64[N] |
+| 7     | COL_NULL_FIXED64| Nullable fixed64 |
+| 8     | COL_COMPLEX     | Array(T)/Tuple(T...) — recursive format |
+| 9     | COL_VARIANT     | Variant(...) — discriminated union |
+| 0x40  | COL_IS_REPEAT   | Cyclic with period R in offsets_offset |
+| 0x80  | COL_IS_CONST    | One stored row, broadcast to num_rows |
+
+**COL_IS_REPEAT** — column is cyclic with period R. Row `i` maps to `stored_row[i % R]`.
+For string columns the R+1 wire offsets are embedded at the start of the data block.
+CH detects period by scanning up to 8192 rows; only uses repeat if R unique rows fit under 64 MB.
+
+**COL_COMPLEX** (Array/Tuple) — recursive layout:
+- `Array(T)`: `uint32[N+1]` outer offsets (cumulative element counts) → element data
+- `Tuple(T0,T1,...)`: field data concatenated (no outer offsets)
+- `String`: `uint32[N+1]` offsets + null-terminated bytes
+- `Fixed`: packed `T[N]`
+
+**COL_VARIANT** (discriminated union, used for geometry) — wire layout:
+- `null_offset` → discriminators array (N bytes, 0xFF = NULL)
+- `offsets_offset` → row offsets within sub-column (N × u32)
+- `data_offset` → variant header: `uint32 K` + K × `{global_discriminator(1) + pad(3) + ColDescriptor(20)}`
+- Each record's ColDescriptor points to sub-column data at absolute buffer offsets
+- CH stores `sub_row_count` in `inner.null_offset` for WASM navigation
+
+Geo discriminator order (CH global alphabetical): 0=LineString, 1=MultiLineString, 2=MultiPolygon, 3=Point, 4=Polygon, 5=Ring
+
+Sub-column wire layouts (COL_COMPLEX recursive):
+- Point: `Tuple(Float64, Float64)` → `x[M] || y[M]`
+- LineString/Ring: `Array(Tuple)` → `outer_offs[M+1] + x[V] || y[V]`
+- Polygon: `Array(Array(Tuple))` → `ring_offs[M+1] + vert_offs[R+1] + x[V] || y[V]`
+- MultiPolygon: `Array(Array(Array(Tuple)))` → `poly_offs[M+1] + ring_offs[P+1] + vert_offs[R+1] + x[V] || y[V]`
+- MultiLineString: same as Polygon
+
+**Output writers:**
+- `col_write_fixed_header<T>()` — single fixed-width column output
+- `ColBytesWriter` — streaming bytes writer (null_map + offsets + data)
+- `write_complex_col<T>()` — complex output with two-pass collection
+
+**CH-side** (`ColumnarV1Wire.h` in ClickHouse):
+- `buildColDescriptor()` — walks IColumn tree, fills ColDescriptor with absolute buffer offsets
+- `writeColData()` — serializes column data into pre-allocated buffer
+- `readColumnarOutput()` — decodes WASM output buffer into MutableColumnPtr (recursive for COL_COMPLEX)
+- `detectPeriod()` — finds cyclic period for COL_IS_REPEAT optimization
+
 ## Source layout
 
 ```

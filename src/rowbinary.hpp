@@ -20,6 +20,7 @@
 #include <tuple>
 #include <type_traits>
 
+#include "arena.hpp"
 #include "clickhouse.hpp"
 #include "geom/wkb.hpp"
 #include "mem.hpp"
@@ -160,13 +161,16 @@ inline void rb_pack_result(raw_buffer * buf, const raw_buffer & bytes) {
 template <typename Ret, typename... Args>
 raw_buffer * rowbinary_impl_wrapper(raw_buffer * ptr, uint32_t num_rows,
                                     Ret (*impl)(Args...)) {
+    ch::g_arena.reset();
     raw_buffer * buf = clickhouse_create_buffer(num_rows ? num_rows : 1);
     buf->clear();  // reset logical size; capacity kept for efficiency
     try {
         const uint8_t * in     = ptr->begin();
         const uint8_t * in_end = ptr->end();
+        size_t m = ch::g_arena.mark();
 
         for (uint32_t row_num = 0; row_num < num_rows; ++row_num) {
+            ch::g_arena.reset(m);
             std::tuple<std::decay_t<Args>...> args{};
             std::apply([&in, &in_end](auto &... a) {
                 (rb_unpack_arg(in, in_end, a), ...);

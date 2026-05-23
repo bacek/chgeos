@@ -4,6 +4,7 @@ endif()
 
 add_executable(chgeos_tests
   test_functions.cpp
+  test_arena.cpp
   test_mem.cpp
   test_unpack.cpp
   test_bbox_wrapper.cpp
@@ -20,6 +21,7 @@ add_executable(chgeos_tests
   test_col_binary.cpp
   ${CMAKE_SOURCE_DIR}/src/geom/wkb.cpp
   ${CMAKE_SOURCE_DIR}/src/mem.cpp
+  ${CMAKE_SOURCE_DIR}/src/arena.cpp
 )
 
 target_include_directories(chgeos_tests PRIVATE

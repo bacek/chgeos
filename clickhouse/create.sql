@@ -728,7 +728,7 @@ SETTINGS serialization_format = 'RowBinary';
 -- COLUMNAR_V1 variants of aggregate functions (COL_COMPLEX Array(String) input).
 CREATE OR REPLACE FUNCTION st_union_agg
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ARGUMENTS (geoms Array(String)) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC
 SETTINGS is_aggregate = 1;
@@ -737,28 +737,27 @@ SETTINGS is_aggregate = 1;
 -- Scalar String arg → CH wraps to Array(String) at runtime.
 CREATE OR REPLACE FUNCTION st_collect_agg
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (geoms String) RETURNS Nullable(String)
+ARGUMENTS (geoms Array(String)) RETURNS String
 ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_aggregate = 1;
+DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_extent_agg
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ARGUMENTS (geoms Array(String)) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC
 SETTINGS is_aggregate = 1;
 
 CREATE OR REPLACE FUNCTION st_makeline_agg
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ARGUMENTS (geoms Array(String)) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC
 SETTINGS is_aggregate = 1;
 
 CREATE OR REPLACE FUNCTION st_convexhull_agg
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (geoms Array(String)) RETURNS Nullable(String)
+ARGUMENTS (geoms Array(String)) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC
 SETTINGS is_aggregate = 1;
@@ -1089,146 +1088,146 @@ DETERMINISTIC;
 -- Geometry output (2 geometry args) → Nullable(String)
 CREATE OR REPLACE FUNCTION st_intersection
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_union
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_difference
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_makeline
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_symdifference
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_collect
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_closestpoint
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_shortestline
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_sharedpaths
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS Nullable(String)
+ARGUMENTS (a String, b String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 -- Geometry output (1 geometry arg) → Nullable(String)
 CREATE OR REPLACE FUNCTION st_convexhull
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_envelope
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_centroid
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_makevalid
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_boundary
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_unaryunion
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_reverse
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_normalize
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_node
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_linmerge
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_polygonize
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_clusterintersecting
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_extent
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_interiorpoint
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_expand
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, units Float64) RETURNS Nullable(String)
+ARGUMENTS (wkb String, units Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
@@ -1272,171 +1271,171 @@ DETERMINISTIC;
 -- Geometry constructors → Nullable(String)
 CREATE OR REPLACE FUNCTION st_startpoint
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_endpoint
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_makebox2d
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (low_left String, up_right String) RETURNS Nullable(String)
+ARGUMENTS (low_left String, up_right String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_geometryn
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, n Int32) RETURNS Nullable(String)
+ARGUMENTS (wkb String, n Int32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_exteriorring
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_interiorringn
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, n Int32) RETURNS Nullable(String)
+ARGUMENTS (wkb String, n Int32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_pointn
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, n Int32) RETURNS Nullable(String)
+ARGUMENTS (wkb String, n Int32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_minimumboundingcircle
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String) RETURNS Nullable(String)
+ARGUMENTS (wkb String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_snap
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String, tolerance Float64) RETURNS Nullable(String)
+ARGUMENTS (a String, b String, tolerance Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_offsetcurve
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, distance Float64) RETURNS Nullable(String)
+ARGUMENTS (wkb String, distance Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_delaunaytriangles
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, tolerance Float64, only_edges Int32) RETURNS Nullable(String)
+ARGUMENTS (wkb String, tolerance Float64, only_edges Int32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_voronoidiagram
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, tolerance Float64, only_edges Int32) RETURNS Nullable(String)
+ARGUMENTS (wkb String, tolerance Float64, only_edges Int32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_makepoint
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (x Float64, y Float64) RETURNS Nullable(String)
+ARGUMENTS (x Float64, y Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_makepoint3d
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (x Float64, y Float64, z Float64) RETURNS Nullable(String)
+ARGUMENTS (x Float64, y Float64, z Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_makepolygon
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (shell String) RETURNS Nullable(String)
+ARGUMENTS (shell String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_addpoint
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (line String, point String, pos Int32) RETURNS Nullable(String)
+ARGUMENTS (line String, point String, pos Int32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_removepoint
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (line String, pos Int32) RETURNS Nullable(String)
+ARGUMENTS (line String, pos Int32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_setpoint
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (line String, pos Int32, point String) RETURNS Nullable(String)
+ARGUMENTS (line String, pos Int32, point String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 -- Processing → Nullable(String)
 CREATE OR REPLACE FUNCTION st_buffer
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, radius Float64) RETURNS Nullable(String)
+ARGUMENTS (wkb String, radius Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_buffer_params
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, radius Float64, params String) RETURNS Nullable(String)
+ARGUMENTS (wkb String, radius Float64, params String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_simplify
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, tolerance Float64) RETURNS Nullable(String)
+ARGUMENTS (wkb String, tolerance Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_segmentize
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, max_length Float64) RETURNS Nullable(String)
+ARGUMENTS (wkb String, max_length Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_subdivide
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, max_vertices Int32) RETURNS Nullable(String)
+ARGUMENTS (wkb String, max_vertices Int32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 -- Transforms → Nullable(String)
 CREATE OR REPLACE FUNCTION st_translate
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, dx Float64, dy Float64) RETURNS Nullable(String)
+ARGUMENTS (wkb String, dx Float64, dy Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_scale
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, xf Float64, yf Float64) RETURNS Nullable(String)
+ARGUMENTS (wkb String, xf Float64, yf Float64) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_setsrid
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, srid UInt32) RETURNS Nullable(String)
+ARGUMENTS (wkb String, srid UInt32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_transform
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, srid UInt32) RETURNS Nullable(String)
+ARGUMENTS (wkb String, srid UInt32) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
 CREATE OR REPLACE FUNCTION st_transform_proj
 LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (wkb String, pipeline String) RETURNS Nullable(String)
+ARGUMENTS (wkb String, pipeline String) RETURNS String
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
@@ -1459,16 +1458,7 @@ ARGUMENTS (query String, candidates Array(String), k UInt32) RETURNS Array(Tuple
 ABI COLUMNAR_V1
 DETERMINISTIC;
 
--- ---------------------------------------------------------------------------
--- st_knn_cb: k-nearest-neighbour (ColumnBinary wire format)
--- ---------------------------------------------------------------------------
-
-CREATE OR REPLACE FUNCTION st_knn_cb
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (query String, candidates Array(String), k UInt32) RETURNS Array(Tuple(UInt64, Float64))
-ABI BUFFERED_V1
-DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary';
+CREATE OR REPLACE FUNCTION st_knn_cb AS (a, b, c) -> st_knn(a, b, c);
 
 -- ---------------------------------------------------------------------------
 -- Remaining aliases — no COLUMNAR_V1 implementation, delegate to _mp
@@ -2189,3 +2179,19 @@ ABI BUFFERED_V1
 DETERMINISTIC
 SETTINGS serialization_format = 'ColumnBinary';
 
+
+-- ---------------------------------------------------------------------------
+-- _col aliases for COLUMNAR_V1 (benchmark compat)
+-- ---------------------------------------------------------------------------
+
+CREATE OR REPLACE FUNCTION st_x_col AS (a) -> st_x(a);
+CREATE OR REPLACE FUNCTION st_y_col AS (a) -> st_y(a);
+CREATE OR REPLACE FUNCTION st_area_col AS (a) -> st_area(a);
+CREATE OR REPLACE FUNCTION st_distance_col AS (a, b) -> st_distance(a, b);
+CREATE OR REPLACE FUNCTION st_dwithin_col AS (a, b, c) -> st_dwithin(a, b, c);
+CREATE OR REPLACE FUNCTION st_intersects_col AS (a, b) -> st_intersects(a, b);
+CREATE OR REPLACE FUNCTION st_within_col AS (a, b) -> st_within(a, b);
+CREATE OR REPLACE FUNCTION st_length_col AS (a) -> st_length(a);
+CREATE OR REPLACE FUNCTION st_makeline_col AS (a, b) -> st_makeline(a, b);
+CREATE OR REPLACE FUNCTION st_convexhull_col AS (a) -> st_convexhull(a);
+CREATE OR REPLACE FUNCTION st_intersection_col AS (a, b) -> st_intersection(a, b);

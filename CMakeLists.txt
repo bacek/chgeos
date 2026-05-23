@@ -55,7 +55,7 @@ option(BUILD_EXAMPLES "" OFF)
 add_subdirectory(third-party/msgpack23 msgpack23)
 
 if(CMAKE_CROSSCOMPILING)
-  add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/mem.cpp)
+  add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/mem.cpp src/arena.cpp)
   target_link_libraries(chgeos PRIVATE geos msgpack23)
   target_include_directories(chgeos PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/geos/capi

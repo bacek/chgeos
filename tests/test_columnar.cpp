@@ -90,7 +90,7 @@ static ColData null_bytes_col(bool is_const,
                               const std::vector<ch::Vector>& wkbs,
                               const std::vector<uint8_t>& nulls) {
     ColData col;
-    col.col_type = static_cast<uint32_t>(COL_NULL_BYTES) | (is_const ? static_cast<uint32_t>(COL_IS_CONST) : 0u);
+    col.col_type = static_cast<uint32_t>(COL_BYTES | COL_IS_NULLABLE) | (is_const ? static_cast<uint32_t>(COL_IS_CONST) : 0u);
     col.null_map = nulls;
     col.offsets.push_back(0u);
     for (size_t i = 0; i < wkbs.size(); ++i) {
@@ -401,15 +401,14 @@ static ColData complex_array_string_col(const std::vector<ch::Vector>& wkbs) {
 }
 
 // Read the geometry WKB from a COL_COMPLEX output buffer.
-// For a Geometry (nullable String) output, just reads the first (and only) non-null WKB.
+// Geometry output is COL_BYTES (non-nullable — use std::optional<> for nullable).
 static std::string read_geom_col_wkt(raw_buffer* buf) {
-    // Output is COL_NULL_BYTES (existing Geometry path)
     uint32_t num_rows;
     std::memcpy(&num_rows, buf->data(), 4);
     ColDescriptor d;
     std::memcpy(&d, buf->data() + HEADER_BYTES, sizeof(d));
     EXPECT_EQ(d.type & ~static_cast<uint32_t>(COL_IS_CONST),
-              static_cast<uint32_t>(COL_NULL_BYTES));
+              static_cast<uint32_t>(COL_BYTES));
     // Read first non-null row
     const uint32_t* offs = reinterpret_cast<const uint32_t*>(buf->data() + d.offsets_offset);
     const uint8_t*  data = buf->data() + d.data_offset;

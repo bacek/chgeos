@@ -21,7 +21,7 @@
 // │ Data blocks at offsets described above                                   │
 // └──────────────────────────────────────────────────────────────────────────┘
 //
-// Offsets (COL_BYTES / COL_NULL_BYTES):
+// Offsets (COL_BYTES, nullable or not):
 //   offsets[0..row_count] are start-based (offsets[0]=0).
 //   Data is stored with explicit null terminators (CH 26.4+ ColumnString has none;
 //   the CH-side serializer adds them so WASM get_bytes() can use end-start-1).
@@ -53,6 +53,7 @@
 #include <geos/geom/Polygon.h>
 
 #include "clickhouse.hpp"
+#include "arena.hpp"
 #include "col_prep_op.hpp"
 #include "functions/knn.hpp"
 #include "geom/wkb.hpp"
@@ -64,14 +65,11 @@ namespace ch {
 // ── Type tags ────────────────────────────────────────────────────────────────
 
 enum ColType : uint32_t {
-    COL_BYTES       = 0,  // String:           offsets[row_count+1] + data
-    COL_NULL_BYTES  = 1,  // Nullable(String): null_map + offsets + data
-    COL_FIXED8      = 2,  // UInt8/Int8:       u8[row_count]
-    COL_NULL_FIXED8 = 3,
-    COL_FIXED32     = 4,  // UInt32/Int32/Float32
-    COL_NULL_FIXED32= 5,
-    COL_FIXED64     = 6,  // UInt64/Int64/Float64
-    COL_NULL_FIXED64= 7,
+    COL_BYTES       = 0,  // String:            offsets[row_count+1] + data
+    COL_FIXED8      = 1,  // UInt8/Int8:        u8[row_count]
+    COL_FIXED16     = 2,  // UInt16/Int16:      u16[row_count]
+    COL_FIXED32     = 3,  // UInt32/Int32/Float32
+    COL_FIXED64     = 4,  // UInt64/Int64/Float64
     // COL_COMPLEX: generic Array(T) / Tuple(T...) — type-guided recursive format.
     // offsets_offset → uint32[N+1] outer offsets (for Array rows; 0 for Tuple/scalar).
     // data_offset    → recursive data block (layout determined by C++/CH declared type).
@@ -80,10 +78,13 @@ enum ColType : uint32_t {
     //   String:             uint32[N+1] offsets + bytes (null-terminated per COL_BYTES)
     //   vector<T> (Array):  uint32[N+1] outer_offsets → M total, then recursive(M, T)
     //   pair/tuple (Tuple): recursive(N, T0) ++ recursive(N, T1) ++ ...  (columnar)
-    COL_COMPLEX     = 8,
-    COL_VARIANT     = 9,  // Variant(...): disc[N] + row_offs[N] + header{K, records} + sub-data
+    COL_COMPLEX     = 5,
+    COL_VARIANT     = 6,  // Variant(...): disc[N] + row_offs[N] + header{K, records} + sub-data
 
-    COL_IS_CONST    = 0x80u, // flag: 1 stored row, broadcast to num_rows
+    // Flags — OR'd onto base type; base types occupy values 0–6 (bits 0-2 only),
+    // so bits 5-7 are free for flags.
+    COL_IS_NULLABLE = 0x20u, // Nullable(T): null_offset carries u8[row_count] null map
+    COL_IS_CONST    = 0x80u, // 1 stored row, broadcast to num_rows
     // COL_IS_REPEAT: column is cyclic with period R stored in offsets_offset.
     // Row i maps to stored_row[i % R].  For string columns the R+1 wire offsets
     // are embedded at the start of the data block (not at offsets_offset).
@@ -145,7 +146,7 @@ struct ColView {
         return null_map[effective_row(row)] == 0xFFu;
     }
 
-    // For COL_BYTES/COL_NULL_BYTES — excludes the trailing null terminator.
+    // For COL_BYTES (nullable or not) — excludes the trailing null terminator.
     std::span<const uint8_t> get_bytes(uint32_t row) const noexcept {
         uint32_t idx   = effective_row(row);
         uint32_t start = offsets[idx];
@@ -190,7 +191,7 @@ struct ColumnarBuf {
         bool has_repeat = (d.type & COL_IS_REPEAT) != 0;
         v.is_const  = (d.type & COL_IS_CONST) != 0;
         v.period    = has_repeat ? d.offsets_offset : 0u;
-        v.base_type = static_cast<ColType>(d.type & ~(COL_IS_CONST | COL_IS_REPEAT));
+        v.base_type = static_cast<ColType>(d.type & ~(COL_IS_CONST | COL_IS_REPEAT | COL_IS_NULLABLE));
         v.null_map  = d.null_offset ? base + d.null_offset : nullptr;
 
         if (has_repeat) {
@@ -198,7 +199,7 @@ struct ColumnarBuf {
             // For string columns, the R+1 wire offsets are embedded at data_offset.
             v.row_count = v.period;
             v.data      = base + d.data_offset;
-            if (v.base_type == COL_BYTES || v.base_type == COL_NULL_BYTES) {
+            if (v.base_type == COL_BYTES) {
                 v.offsets = reinterpret_cast<const uint32_t*>(v.data);
                 v.data    = v.data + (v.period + 1u) * sizeof(uint32_t);
             } else {
@@ -271,7 +272,7 @@ struct ColBytesWriter {
         std::memcpy(p + 4, &one, 4);
 
         ColDescriptor d{};
-        d.type           = is_nullable ? COL_NULL_BYTES : COL_BYTES;
+        d.type           = COL_BYTES | (is_nullable ? COL_IS_NULLABLE : 0u);
         d.null_offset    = is_nullable ? null_base : 0u;
         d.offsets_offset = offs_base;
         d.data_offset    = data_base;
@@ -631,13 +632,15 @@ template <typename T>
 T col_get_fixed_widened(const ColView& col, uint32_t row) noexcept {
     uint32_t idx = col.effective_row(row);
     switch (col.base_type) {
-        case COL_FIXED8:
-        case COL_NULL_FIXED8: {
+        case COL_FIXED8: {
             uint8_t v; std::memcpy(&v, col.data + idx, 1);
             return static_cast<T>(v);
         }
-        case COL_FIXED32:
-        case COL_NULL_FIXED32: {
+        case COL_FIXED16: {
+            int16_t v; std::memcpy(&v, col.data + idx * 2u, 2u);
+            return static_cast<T>(v);
+        }
+        case COL_FIXED32: {
             uint32_t v; std::memcpy(&v, col.data + idx * 4u, 4u);
             return static_cast<T>(v);
         }
@@ -695,6 +698,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 
     auto cb = parse_columnar(ptr);
     uint32_t n = cb.num_rows;
+    g_arena.reset();
     constexpr size_t nargs = sizeof...(Args);
 
     std::array<ColView, nargs> cols;
@@ -762,7 +766,9 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     }
 
                     auto  pa     = PGF::prepare(geom_a.get());
+                    size_t m_arena = g_arena.mark();
                     for (uint32_t i = 0; i < n; ++i) {
+                        g_arena.reset(m_arena);
                         if (cols[1].is_null(i)) { res[i] = 0u; continue; }
                         auto span_b = cols[1].get_bytes(i);
                         if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
@@ -806,7 +812,9 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     }
 
                     auto  pb     = PGF::prepare(geom_b.get());
+                    size_t m_arena = g_arena.mark();
                     for (uint32_t i = 0; i < n; ++i) {
+                        g_arena.reset(m_arena);
                         if (cols[0].is_null(i)) { res[i] = 0u; continue; }
                         auto span_a = cols[0].get_bytes(i);
                         if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
@@ -828,7 +836,9 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     BBox  bbox_a = wkb_bbox(span_a);
                     auto  geom_a = read_wkb(span_a);
                     auto  pa     = PGF::prepare(geom_a.get());
+                    size_t m_arena = g_arena.mark();
                     for (uint32_t i = 0; i < n; ++i) {
+                        g_arena.reset(m_arena);
                         if (cols[1].is_null(i)) { res[i] = 0u; continue; }
                         auto   span_b = cols[1].get_bytes(i);
                         double dist   = col_get_arg<double>(cols[2], i);
@@ -846,7 +856,9 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     BBox  bbox_b = wkb_bbox(span_b);
                     auto  geom_b = read_wkb(span_b);
                     auto  pb     = PGF::prepare(geom_b.get());
+                    size_t m_arena = g_arena.mark();
                     for (uint32_t i = 0; i < n; ++i) {
+                        g_arena.reset(m_arena);
                         if (cols[0].is_null(i)) { res[i] = 0u; continue; }
                         auto   span_a = cols[0].get_bytes(i);
                         double dist   = col_get_arg<double>(cols[2], i);
@@ -860,7 +872,9 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             }
 
             // Baseline
+            size_t m_base = g_arena.mark();
             for (uint32_t i = 0; i < n; ++i) {
+                g_arena.reset(m_base);
                 if (any_null(i)) { res[i] = 0u; continue; }
                 if constexpr (nargs >= 2) {
                     if (bbox_op && !has_variant &&
@@ -878,8 +892,11 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 8u);
             col_write_fixed_header<double>(out, n, COL_FIXED64);
             double* res = reinterpret_cast<double*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
-            for (uint32_t i = 0; i < n; ++i)
+            size_t m_base_d = g_arena.mark();
+            for (uint32_t i = 0; i < n; ++i) {
+                g_arena.reset(m_base_d);
                 res[i] = any_null(i) ? std::numeric_limits<double>::quiet_NaN() : invoke(i);
+            }
             return out;
 
         // ── int32_t output ────────────────────────────────────────────────────
@@ -887,14 +904,29 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 4u);
             col_write_fixed_header<int32_t>(out, n, COL_FIXED32);
             int32_t* res = reinterpret_cast<int32_t*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
-            for (uint32_t i = 0; i < n; ++i)
+            size_t m_base_i = g_arena.mark();
+            for (uint32_t i = 0; i < n; ++i) {
+                g_arena.reset(m_base_i);
                 res[i] = any_null(i) ? 0 : invoke(i);
+            }
             return out;
 
-        // ── Geometry output (nullable) ────────────────────────────────────────
+        // ── uint32_t output ───────────────────────────────────────────────────
+        } else if constexpr (std::is_same_v<Ret, uint32_t>) {
+            out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 4u);
+            col_write_fixed_header<uint32_t>(out, n, COL_FIXED32);
+            uint32_t* res = reinterpret_cast<uint32_t*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
+            size_t m_base_u = g_arena.mark();
+            for (uint32_t i = 0; i < n; ++i) {
+                g_arena.reset(m_base_u);
+                res[i] = any_null(i) ? 0u : invoke(i);
+            }
+            return out;
+
+        // ── Geometry output (non-nullable — use std::optional<...> for nullable) ─
         } else if constexpr (std::is_same_v<Ret, std::unique_ptr<geos::geom::Geometry>>) {
             out = clickhouse_create_buffer(0);
-            ColBytesWriter w(out, n);
+            ColBytesWriter w(out, n, /*nullable=*/false);
             for (uint32_t i = 0; i < n; ++i) {
                 if (any_null(i)) { w.push_null(); continue; }
                 w.push_geom(invoke(i));
@@ -936,6 +968,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 __attribute__((export_name("st_knn")))
 inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
 {
+    ch::g_arena.reset();
     using KVPair   = std::pair<uint64_t, double>;
     using KNNResult = std::vector<KVPair>;
 

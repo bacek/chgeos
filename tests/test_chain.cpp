@@ -131,7 +131,7 @@ static ColData null_bytes_col(bool is_const,
                                const std::vector<Vector>& wkbs,
                                const std::vector<uint8_t>& nulls) {
     ColData col;
-    col.col_type = static_cast<uint32_t>(COL_NULL_BYTES)
+    col.col_type = static_cast<uint32_t>(COL_BYTES | COL_IS_NULLABLE)
                  | (is_const ? static_cast<uint32_t>(COL_IS_CONST) : 0u);
     col.null_map = nulls;
     col.offsets.push_back(0u);

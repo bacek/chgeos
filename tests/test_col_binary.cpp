@@ -10,392 +10,377 @@
 
 using namespace ch;
 
-// ── Varint helpers ────────────────────────────────────────────────────────────
+static const std::string kSquare = "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))";
 
-TEST(ColBinaryVarint, WriteReadRoundTrip) {
-    std::vector<uint64_t> vals = {0u, 1u, 127u, 128u, 255u,
-                                   256u, 16383u, 16384u,
-                                   2097151u, 2097152u,
-                                   268435455u, 268435456u};
-    for (auto v : vals) {
-        raw_buffer* buf = clickhouse_create_buffer(0);
-        buf->clear();
-        writeVarUInt(v, *buf);
+// ── COLUMNAR_V1 helpers ───────────────────────────────────────────────────────
 
-        raw_buffer* out = clickhouse_create_buffer(0);
-        out->clear();
-        uint64_t decoded;
-        EXPECT_TRUE(readVarUInt(buf->data(), buf->data() + buf->size(), decoded));
-        out->resize(buf->size());
-        std::memcpy(out->data(), buf->data(), buf->size());
-
-        EXPECT_EQ(decoded, v);
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
-    }
+static void write_le32(std::vector<uint8_t>& buf, uint32_t v) {
+    for (int j = 0; j < 4; ++j) buf.push_back(static_cast<uint8_t>(v >> (j * 8)));
+}
+static void write_le32(raw_buffer& buf, uint32_t v) {
+    for (int j = 0; j < 4; ++j) buf.push_back(static_cast<uint8_t>(v >> (j * 8)));
 }
 
-// ── Helper: build a ColumnBinary-format raw_buffer ────────────────────────────
-
-// Build a ColumnBinary-format raw_buffer from num_rows, num_cols, and per-column data.
-// Each column has: flags(u8), type_tags_size(u32LE), type_tags(N bytes), data_size(u64LE), data.
-static raw_buffer* make_col_binary_buf(uint32_t num_rows, uint32_t num_cols,
-                                         const std::vector<std::vector<uint8_t>>& col_data,
-                                         uint8_t col_flags = 0,
-                                         const std::vector<std::vector<ch::TypeTag>>& col_type_tags = {}) {
-     raw_buffer* buf = clickhouse_create_buffer(0);
-     buf->clear();
-     writeBinaryLE32(num_cols, *buf);
-     writeBinaryLE32(num_rows, *buf);
-     for (uint32_t i = 0; i < num_cols; ++i) {
-         buf->push_back(col_flags);
-         const auto& tags = (i < col_type_tags.size()) ? col_type_tags[i] : std::vector<ch::TypeTag>{};
-         uint32_t tags_size = static_cast<uint32_t>(tags.size());
-         writeBinaryLE32(tags_size, *buf);
-         for (uint32_t j = 0; j < tags_size; ++j)
-             buf->push_back(static_cast<uint8_t>(tags[j]));
-         uint64_t data_size = static_cast<uint64_t>(col_data[i].size());
-         for (uint32_t j = 0; j < 8; ++j)
-             buf->push_back(static_cast<uint8_t>(data_size >> (j * 8)));
-         for (size_t j = 0; j < col_data[i].size(); ++j)
-             buf->push_back(col_data[i][j]);
-     }
-     return buf;
- }
-
- // Build a column buffer containing N varint-length strings (each: varint(len)+bytes).
- static std::vector<uint8_t> make_strings_col(const std::vector<std::string>& strs) {
-     std::vector<uint8_t> col;
-     for (auto& s : strs) {
-         uint32_t len = static_cast<uint32_t>(s.size());
-         raw_buffer* vb = clickhouse_create_buffer(0);
-         vb->clear();
-         writeVarUInt(len, *vb);
-         for (uint32_t i = 0; i < len; ++i)
-             vb->push_back(static_cast<uint8_t>(s[i]));
-         col.insert(col.end(), vb->data(), vb->data() + vb->size());
-         clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-     }
-     return col;
- }
-
- // ── ColBinaryBuf parsing ──────────────────────────────────────────────────────
-
-TEST(ColBinaryParse, SingleCol) {
-    std::vector<uint8_t> data = {0x01, 0x02, 0x03};
-    auto* buf = make_col_binary_buf(3, 1, {data}, 0, {{TypeTag::Int8}});
-
-    auto cb = parse_col_binary(buf);
-    EXPECT_EQ(cb.num_rows, 3u);
-    EXPECT_EQ(cb.num_cols, 1u);
-    EXPECT_EQ(cb.cols.size(), 1u);
-    EXPECT_FALSE(cb.cols[0].is_const);
-    EXPECT_EQ(cb.cols[0].data_size, 3u);
-    EXPECT_EQ(cb.cols[0].data[0], 0x01);
-    EXPECT_EQ(cb.cols[0].data[1], 0x02);
-    EXPECT_EQ(cb.cols[0].data[2], 0x03);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+static void write_le64(std::vector<uint8_t>& buf, uint64_t v) {
+    for (int j = 0; j < 8; ++j) buf.push_back(static_cast<uint8_t>(v >> (j * 8)));
+}
+static void write_le64(raw_buffer& buf, uint64_t v) {
+    for (int j = 0; j < 8; ++j) buf.push_back(static_cast<uint8_t>(v >> (j * 8)));
 }
 
-TEST(ColBinaryParse, MultiCol) {
-    std::vector<uint8_t> col0 = {0xAA, 0xBB};
-    std::vector<uint8_t> col1 = {0x01, 0x02, 0x03};
-    std::vector<uint8_t> col2 = {0xFF};
-    auto* buf = make_col_binary_buf(2, 3, {col0, col1, col2}, 0, {{TypeTag::Int8}, {TypeTag::Int8}, {TypeTag::Int8}});
-
-    auto cb = parse_col_binary(buf);
-    EXPECT_EQ(cb.num_rows, 2u);
-    EXPECT_EQ(cb.num_cols, 3u);
-    EXPECT_EQ(cb.cols.size(), 3u);
-    EXPECT_EQ(cb.cols[0].data_size, 2u);
-    EXPECT_EQ(cb.cols[1].data_size, 3u);
-    EXPECT_EQ(cb.cols[2].data_size, 1u);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-TEST(ColBinaryParse, ConstFlag) {
-    std::vector<uint8_t> data = {0x42};
-    auto* buf = make_col_binary_buf(5, 1, {data}, 0x01, {{TypeTag::Int8}}); // IS_CONST flag
-
-    auto cb = parse_col_binary(buf);
-    EXPECT_EQ(cb.num_rows, 5u);
-    EXPECT_EQ(cb.num_cols, 1u);
-    EXPECT_TRUE(cb.cols[0].is_const);
-    EXPECT_EQ(cb.cols[0].data_size, 1u);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-TEST(ColBinaryParse, LargeDataSize) {
-    // data_size = 0x10000000 (fits in u64)
-    std::vector<uint8_t> data(0x100, 0xAB);
-    auto* buf = make_col_binary_buf(1, 1, {data}, 0, {{TypeTag::Int8}});
-
-    auto cb = parse_col_binary(buf);
-    EXPECT_EQ(cb.num_rows, 1u);
-    EXPECT_EQ(cb.num_cols, 1u);
-    EXPECT_EQ(cb.cols[0].data_size, 0x100ULL);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-// ── ColBinaryReader ───────────────────────────────────────────────────────────
-
-// Helper: get next bytes from a ColBinaryReader.
-static std::span<const uint8_t> cb_next(ColBinaryReader& reader) {
-    return reader.read_blob();
-}
-
-TEST(ColBinaryReader, GetStringView) {
-    auto col_data = make_strings_col({"hello", "world"});
-    ColBinaryInfo ci;
-    ci.is_const = false;
-    ci.data = col_data.data();
-    ci.data_size = col_data.size();
-    ColBinaryReader reader = ColBinaryReader::from_col(ci, 2);
-
-    auto s0 = unpack_arg<std::string_view>(reader, reader.tag_iter());
-    EXPECT_EQ(std::string(s0), "hello");
-    auto s1 = unpack_arg<std::string_view>(reader, reader.tag_iter());
-    EXPECT_EQ(std::string(s1), "world");
-}
-
-TEST(ColBinaryReader, GetDouble) {
-    std::vector<uint8_t> data;
-    double vals[] = {3.14, 2.71};
-    data.insert(data.end(), reinterpret_cast<const uint8_t*>(vals),
-                reinterpret_cast<const uint8_t*>(vals) + 2 * sizeof(double));
-    ColBinaryInfo ci;
-    ci.is_const = false;
-    ci.data = data.data();
-    ci.data_size = data.size();
-    ColBinaryReader reader = ColBinaryReader::from_col(ci, 2);
-
-    EXPECT_DOUBLE_EQ(unpack_arg<double>(reader, reader.tag_iter()), 3.14);
-    EXPECT_DOUBLE_EQ(unpack_arg<double>(reader, reader.tag_iter()), 2.71);
-}
-
-TEST(ColBinaryReader, GetInt32) {
-    std::vector<uint8_t> data;
-    int32_t vals[] = {42, -1};
-    data.insert(data.end(), reinterpret_cast<const uint8_t*>(vals),
-                reinterpret_cast<const uint8_t*>(vals) + 2 * sizeof(int32_t));
-    ColBinaryInfo ci;
-    ci.is_const = false;
-    ci.data = data.data();
-    ci.data_size = data.size();
-    ColBinaryReader reader = ColBinaryReader::from_col(ci, 2);
-
-    EXPECT_EQ(unpack_arg<int32_t>(reader, reader.tag_iter()), 42);
-    EXPECT_EQ(unpack_arg<int32_t>(reader, reader.tag_iter()), -1);
-}
-
-TEST(ColBinaryReader, GetGeometry) {
-    auto g = geom("POINT (5 6)");
-    auto wkb = write_ewkb(g);
-    auto col_data = make_strings_col({std::string(wkb.begin(), wkb.end())});
-    ColBinaryInfo ci;
-    ci.is_const = false;
-    ci.data = col_data.data();
-    ci.data_size = col_data.size();
-    ColBinaryReader reader = ColBinaryReader::from_col(ci, 1);
-
-    auto result = unpack_arg<std::unique_ptr<geos::geom::Geometry>>(reader, reader.tag_iter());
-    ASSERT_NE(result, nullptr);
-    EXPECT_EQ(result->getGeometryTypeId(), geos::geom::GEOS_POINT);
-    EXPECT_DOUBLE_EQ(static_cast<const geos::geom::Point*>(result.get())->getX(), 5.0);
-    EXPECT_DOUBLE_EQ(static_cast<const geos::geom::Point*>(result.get())->getY(), 6.0);
-}
-
-TEST(ColBinaryReader, ConstDouble) {
-    std::vector<uint8_t> data;
-    double val = 3.14;
-    data.insert(data.end(), reinterpret_cast<const uint8_t*>(&val),
-                reinterpret_cast<const uint8_t*>(&val) + sizeof(double));
-    ColBinaryInfo ci;
-    ci.is_const = true;
-    ci.data = data.data();
-    ci.data_size = data.size();
-    ColBinaryReader reader = ColBinaryReader::from_col(ci, 100);
-
-    // Should return the same value for every call
-    for (int i = 0; i < 100; ++i) {
-        EXPECT_DOUBLE_EQ(unpack_arg<double>(reader, reader.tag_iter()), 3.14);
-    }
-}
-
-TEST(ColBinaryReader, ConstGeometry) {
-    auto g = geom("POINT (1 2)");
-    auto wkb = write_ewkb(g);
-    std::vector<uint8_t> col_data;
-    {
-        // Const String columns use u32[2] header: {o0=0, o1=len} + bytes.
-        uint32_t o0 = 0, o1 = static_cast<uint32_t>(wkb.size());
-        for (int j = 0; j < 4; ++j) col_data.push_back(static_cast<uint8_t>(o0 >> (j * 8)));
-        for (int j = 0; j < 4; ++j) col_data.push_back(static_cast<uint8_t>(o1 >> (j * 8)));
-        col_data.insert(col_data.end(), wkb.begin(), wkb.end());
-    }
-    ColBinaryInfo ci;
-    ci.is_const = true;
-    ci.data = col_data.data();
-    ci.data_size = col_data.size();
-    ColBinaryReader reader = ColBinaryReader::from_col(ci, 50);
-
-    for (int i = 0; i < 50; ++i) {
-        auto result = unpack_arg<std::unique_ptr<geos::geom::Geometry>>(reader, reader.tag_iter());
-        ASSERT_NE(result, nullptr);
-        EXPECT_DOUBLE_EQ(static_cast<const geos::geom::Point*>(result.get())->getX(), 1.0);
-        EXPECT_DOUBLE_EQ(static_cast<const geos::geom::Point*>(result.get())->getY(), 2.0);
-    }
-}
-
-// ── col_binary_impl_wrapper: bool return header format ────────────────────────
-
-TEST(ColBinaryImpl, BoolHeaderOrder) {
-    const uint32_t n = 5;
-    auto poly = wkt2wkb("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))");
-    auto pt   = wkt2wkb("POINT (0.5 0.5)");
-
-    // Build u32 offset format for each column
-    auto write_geom_col = [&](const std::vector<ch::Vector>& wkbs, std::vector<uint8_t>& offsets, std::vector<uint8_t>& payload) {
-        std::vector<uint32_t> off;
-        off.push_back(0);
-        for (uint32_t i = 0; i < n; ++i) {
-            const auto& wkb = wkbs[i % wkbs.size()];
-            payload.insert(payload.end(), wkb.data(), wkb.data() + wkb.size());
-            off.push_back(static_cast<uint32_t>(payload.size()));
-        }
-        for (uint32_t o : off) {
-            for (uint32_t j = 0; j < 4; ++j)
-                offsets.push_back(static_cast<uint8_t>(o >> (j * 8)));
-        }
-    };
-
-    std::vector<uint8_t> col0_offsets, col0_payload, col1_offsets, col1_payload;
-    std::vector<ch::Vector> polys(n, poly), pts(n, pt);
-    write_geom_col(polys, col0_offsets, col0_payload);
-    write_geom_col(pts, col1_offsets, col1_payload);
-
-    std::vector<uint8_t> col0_data, col1_data;
-    col0_data.insert(col0_data.end(), col0_offsets.begin(), col0_offsets.end());
-    col0_data.insert(col0_data.end(), col0_payload.begin(), col0_payload.end());
-    col1_data.insert(col1_data.end(), col1_offsets.begin(), col1_offsets.end());
-    col1_data.insert(col1_data.end(), col1_payload.begin(), col1_payload.end());
-
-    auto* buf = make_col_binary_buf(n, 2, {col0_data, col1_data}, 0, {{TypeTag::String}, {TypeTag::String}});
-    auto* result = col_binary_impl_wrapper("st_contains_cb", buf, n, st_contains_impl,
-        bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-
-    // Parse the output header: num_cols(u32LE) | num_rows(u32LE) | flags(u8) | data_size(u64LE) | data
-    const uint8_t* p = result->data();
-    const uint8_t* end = result->data() + result->size();
-    uint32_t v32;
-    uint64_t v64;
-
-    EXPECT_TRUE(readBinaryLE32(p, end, v32));
-    EXPECT_EQ(v32, 1u);
-
-    EXPECT_TRUE(readBinaryLE32(p, end, v32));
-    EXPECT_EQ(v32, n);
-
-    EXPECT_EQ(*p++, 0u); // flags
-    // type_tags_size (u32LE) = 1
-    uint32_t ttags_sz;
-    EXPECT_TRUE(readBinaryLE32(p, end, ttags_sz));
-    EXPECT_EQ(ttags_sz, 1u);
-    EXPECT_EQ(*p++, static_cast<uint8_t>(TypeTag::Int8)); // type tag for bool return
-
-    EXPECT_TRUE(readBinaryLE64(p, end, v64));
-    EXPECT_EQ(v64, static_cast<uint64_t>(n)); // data_size = n bool bytes
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
-}
-
-// ── col_binary_impl_wrapper: bool return with bbox + PreparedGeometry ─────────
-
-// Build a ColumnBinary-format input buffer for geometry predicates.
-// Uses u32 offset format: u32[N+1] offsets at data_start, raw bytes follow.
-static raw_buffer* make_col_binary_geom_buf(uint32_t num_rows,
-                                               const std::vector<ch::Vector>& col0_wkbs,
-                                               const std::vector<ch::Vector>& col1_wkbs,
-                                               uint32_t const_col_idx = UINT32_MAX) {
-    auto write_col = [&](const std::vector<ch::Vector>& wkbs, std::vector<uint8_t>& offsets, std::vector<uint8_t>& payload, bool is_const) {
-        uint32_t rows = is_const ? 1 : num_rows;
-        std::vector<uint32_t> off;
-        off.reserve(rows + 1);
-        off.push_back(0);
-        for (uint32_t i = 0; i < rows; ++i) {
-            const auto& wkb = wkbs.empty() ? wkbs[0] : wkbs[i % wkbs.size()];
-            payload.insert(payload.end(), wkb.data(), wkb.data() + wkb.size());
-            off.push_back(static_cast<uint32_t>(payload.size()));
-        }
-        for (uint32_t o : off) {
-            for (uint32_t j = 0; j < 4; ++j)
-                offsets.push_back(static_cast<uint8_t>(o >> (j * 8)));
-        }
-    };
-
-    std::vector<uint8_t> col0_offsets, col0_payload, col1_offsets, col1_payload;
-    write_col(col0_wkbs, col0_offsets, col0_payload, const_col_idx == 0);
-    write_col(col1_wkbs, col1_offsets, col1_payload, const_col_idx == 1);
-
-    // Combine offsets + payload for each column
-    std::vector<uint8_t> col0_data, col1_data;
-    col0_data.insert(col0_data.end(), col0_offsets.begin(), col0_offsets.end());
-    col0_data.insert(col0_data.end(), col0_payload.begin(), col0_payload.end());
-    col1_data.insert(col1_data.end(), col1_offsets.begin(), col1_offsets.end());
-    col1_data.insert(col1_data.end(), col1_payload.begin(), col1_payload.end());
-
-    uint8_t col0_flags = const_col_idx == 0 ? 0x01 : 0;
-    uint8_t col1_flags = const_col_idx == 1 ? 0x01 : 0;
-
+// Build a COLUMNAR_V1 raw_buffer from num_rows, num_cols, and per-column data.
+// Each column: ColDescriptor (type, null_offset=0, offsets_offset, data_offset, data_size) + data.
+// For COL_BYTES: data = u32[N+1] offsets + raw bytes.
+// For fixed types: data = raw bytes.
+static raw_buffer* make_col_buf(uint32_t num_rows, uint32_t num_cols,
+                                 const std::vector<std::vector<uint8_t>>& col_data,
+                                 const std::vector<uint32_t>& col_offsets, // per-column offsets for string data
+                                 const std::vector<uint32_t>& col_types) {
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
-    writeBinaryLE32(2, *buf);
-    writeBinaryLE32(num_rows, *buf);
 
-    // Col0: flags + type_tags_size(u32LE) + type_tags + data_size(u64) + data
-    buf->push_back(col0_flags);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds0 = col0_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
-    for (auto b : col0_data) buf->push_back(b);
+    // BufHeader
+    write_le32(*buf, num_rows);
+    write_le32(*buf, num_cols);
 
-    // Col1: flags + type_tags_size(u32LE) + type_tags + data_size(u64) + data
-    buf->push_back(col1_flags);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds1 = col1_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
-    for (auto b : col1_data) buf->push_back(b);
+    // Build data area: interleaved offsets + data per column
+    std::vector<uint8_t> data_area;
+    std::vector<uint32_t> desc_offsets; // byte offset of each ColDescriptor in the final buffer
+    desc_offsets.reserve(num_cols);
+
+    uint32_t header_end = 8u + num_cols * 20u;
+    uint32_t data_pos = header_end;
+
+    std::vector<uint8_t> all_descs;
+    all_descs.resize(num_cols * 20);
+
+    for (uint32_t i = 0; i < num_cols; ++i) {
+        uint32_t type = col_types[i];
+        uint32_t off_off = 0, data_off = 0;
+
+        if ((type & ~COL_IS_NULLABLE) == COL_BYTES || type == COL_COMPLEX) {
+            off_off = data_pos;
+            data_pos += (col_offsets[i] > 0 ? col_offsets[i] : (num_rows + 1)) * 4u;
+            // Pad to align
+            data_pos = (data_pos + 3u) & ~3u;
+            data_off = data_pos;
+            data_pos += static_cast<uint32_t>(col_data[i].size());
+        } else {
+            data_off = data_pos;
+            data_pos += static_cast<uint32_t>(col_data[i].size());
+        }
+
+        uint32_t d_off = static_cast<uint32_t>(all_descs.size());
+        write_le32(all_descs, type);
+        write_le32(all_descs, 0u); // null_offset
+        write_le32(all_descs, off_off);
+        write_le32(all_descs, data_off);
+        write_le32(all_descs, static_cast<uint32_t>(col_data[i].size()));
+    }
+
+    buf->append(all_descs.data(), static_cast<uint32_t>(all_descs.size()));
+
+    // Data area: for each column, write offsets (if any) then data
+    for (uint32_t i = 0; i < num_cols; ++i) {
+        uint32_t type = col_types[i];
+        if ((type & ~COL_IS_NULLABLE) == COL_BYTES || type == COL_COMPLEX) {
+            uint32_t num_offs = col_offsets[i] > 0 ? col_offsets[i] : (num_rows + 1);
+            for (uint32_t j = 0; j < num_offs; ++j)
+                write_le32(*buf, 0); // placeholder, fixed below
+            buf->append(col_data[i].data(), static_cast<uint32_t>(col_data[i].size()));
+        } else {
+            buf->append(col_data[i].data(), static_cast<uint32_t>(col_data[i].size()));
+        }
+    }
+
+    // Patch offsets into the data area
+    uint8_t* data_ptr = buf->data() + header_end;
+    uint32_t pos = 0;
+    for (uint32_t i = 0; i < num_cols; ++i) {
+        uint32_t type = col_types[i];
+        if ((type & ~COL_IS_NULLABLE) == COL_BYTES || type == COL_COMPLEX) {
+            uint32_t num_offs = col_offsets[i] > 0 ? col_offsets[i] : (num_rows + 1);
+            uint32_t* off_ptr = reinterpret_cast<uint32_t*>(data_ptr + pos);
+            for (uint32_t j = 0; j < num_offs; ++j)
+                off_ptr[j] = static_cast<uint32_t>(col_offsets[j] > 0 ? col_offsets[j] : 0);
+            pos += num_offs * 4u;
+            pos += static_cast<uint32_t>(col_data[i].size());
+            pos = (pos + 3u) & ~3u;
+        } else {
+            pos += static_cast<uint32_t>(col_data[i].size());
+        }
+    }
 
     return buf;
 }
 
-// Read bool output from col_binary_impl_wrapper result.
-static std::vector<uint8_t> read_cb_bool(raw_buffer* out, uint32_t n) {
-    auto cb = parse_col_binary(out);
+// Simpler helper: build COLUMNAR_V1 buffer with a single fixed-width column.
+static raw_buffer* make_col_fixed(uint32_t num_rows, uint8_t col_type,
+                                   const std::vector<uint8_t>& data) {
+    raw_buffer* buf = clickhouse_create_buffer(0);
+    buf->clear();
+
+    write_le32(*buf, num_rows);
+    write_le32(*buf, 1u);
+
+    // ColDescriptor
+    write_le32(*buf, col_type);
+    write_le32(*buf, 0u);     // null_offset
+    write_le32(*buf, 0u);     // offsets_offset
+    write_le32(*buf, 8u + 20u); // data_offset
+    write_le32(*buf, static_cast<uint32_t>(data.size()));
+
+    buf->append(data.data(), static_cast<uint32_t>(data.size()));
+    return buf;
+}
+
+// Build a COLUMNAR_V1 buffer with a single COL_BYTES (string) column.
+// col_data: raw string bytes; col_offsets: u32[N+1] start offsets.
+static raw_buffer* make_col_string(uint32_t num_rows,
+                                    const std::vector<uint8_t>& col_data,
+                                    const std::vector<uint32_t>& col_offsets) {
+    raw_buffer* buf = clickhouse_create_buffer(0);
+    buf->clear();
+
+    write_le32(*buf, num_rows);
+    write_le32(*buf, 1u);
+
+    uint32_t data_offset = 8u + 20u + (num_rows + 1u) * 4u;
+
+    // ColDescriptor
+    write_le32(*buf, COL_BYTES);
+    write_le32(*buf, 0u);     // null_offset
+    write_le32(*buf, 8u + 20u); // offsets_offset
+    write_le32(*buf, data_offset); // data_offset
+    write_le32(*buf, static_cast<uint32_t>(col_data.size()));
+
+    // Offsets
+    for (uint32_t o : col_offsets)
+        write_le32(*buf, o);
+
+    // Data
+    buf->append(col_data.data(), static_cast<uint32_t>(col_data.size()));
+    return buf;
+}
+
+// Build a 2-column COLUMNAR_V1 buffer for geometry predicates.
+// Uses COL_BYTES for geometry columns.
+static raw_buffer* make_col_geom_buf(uint32_t num_rows,
+                                      const std::vector<ch::Vector>& col0_wkbs,
+                                      const std::vector<ch::Vector>& col1_wkbs,
+                                      uint32_t const_col_idx = UINT32_MAX) {
+    raw_buffer* buf = clickhouse_create_buffer(0);
+    buf->clear();
+
+    write_le32(*buf, num_rows);
+    write_le32(*buf, 2u);
+
+    // Build data for each column — returns (offsets u32[], raw-wkb-bytes)
+    auto build_col = [&](const std::vector<ch::Vector>& wkbs, bool is_const) {
+        uint32_t rows = is_const ? 1u : num_rows;
+        std::vector<uint32_t> offsets;
+        offsets.reserve(rows + 1);
+        offsets.push_back(0);
+        for (uint32_t i = 0; i < rows; ++i) {
+            const auto& wkb = wkbs[i % wkbs.size()];
+            offsets.push_back(static_cast<uint32_t>(offsets.back() + wkb.size() + 1u)); // +1 null term
+        }
+        std::vector<uint8_t> data;
+        for (uint32_t i = 0; i < rows; ++i) {
+            const auto& wkb = wkbs[i % wkbs.size()];
+            data.insert(data.end(), wkb.begin(), wkb.end());
+            data.push_back(0); // null terminator
+        }
+        return std::make_pair(offsets, data);
+    };
+
+    auto [offs0, data0] = build_col(col0_wkbs, const_col_idx == 0);
+    auto [offs1, data1] = build_col(col1_wkbs, const_col_idx == 1);
+
+    uint32_t offsets0_off = 8u + 2u * 20u;  // header + 2 descriptors
+    uint32_t offsets1_off = offsets0_off + static_cast<uint32_t>(offs0.size()) * 4u;
+    uint32_t data0_off = offsets1_off + static_cast<uint32_t>(offs1.size()) * 4u;
+    uint32_t data1_off = data0_off + static_cast<uint32_t>(data0.size());
+
+    // ColDescriptor col0
+    write_le32(*buf, COL_BYTES | (const_col_idx == 0 ? COL_IS_CONST : 0u));
+    write_le32(*buf, 0u);
+    write_le32(*buf, offsets0_off);
+    write_le32(*buf, data0_off);
+    write_le32(*buf, static_cast<uint32_t>(data0.size()));
+
+    // ColDescriptor col1
+    write_le32(*buf, COL_BYTES | (const_col_idx == 1 ? COL_IS_CONST : 0u));
+    write_le32(*buf, 0u);
+    write_le32(*buf, offsets1_off);
+    write_le32(*buf, data1_off);
+    write_le32(*buf, static_cast<uint32_t>(data1.size()));
+
+    // Offsets + data
+    for (uint32_t o : offs0) write_le32(*buf, o);
+    for (uint32_t o : offs1) write_le32(*buf, o);
+    buf->append(data0.data(), static_cast<uint32_t>(data0.size()));
+    buf->append(data1.data(), static_cast<uint32_t>(data1.size()));
+
+    return buf;
+}
+
+// Build a 3-column COLUMNAR_V1 buffer: geom, geom, double
+static raw_buffer* make_col_geom3(uint32_t num_rows,
+    const std::vector<ch::Vector>& col0_wkbs,
+    const std::vector<ch::Vector>& col1_wkbs,
+    const std::vector<double>& col2_vals,
+    uint32_t const_col_idx = UINT32_MAX) {
+    raw_buffer* buf = clickhouse_create_buffer(0);
+    buf->clear();
+
+    write_le32(*buf, num_rows);
+    write_le32(*buf, 3u);
+
+    // Build geom column
+    auto build_geom_col = [&](const std::vector<ch::Vector>& wkbs, bool is_const) {
+        uint32_t rows = is_const ? 1u : num_rows;
+        std::vector<uint32_t> offsets;
+        offsets.push_back(0);
+        for (uint32_t i = 0; i < rows; ++i) {
+            const auto& wkb = wkbs[i % wkbs.size()];
+            offsets.push_back(static_cast<uint32_t>(offsets.back() + wkb.size() + 1u));
+        }
+        std::vector<uint8_t> data;
+        for (uint32_t i = 0; i < rows; ++i) {
+            const auto& wkb = wkbs[i % wkbs.size()];
+            data.insert(data.end(), wkb.begin(), wkb.end());
+            data.push_back(0);
+        }
+        return std::make_pair(offsets, data);
+    };
+
+    auto [offs0, data0] = build_geom_col(col0_wkbs, const_col_idx == 0);
+    auto [offs1, data1] = build_geom_col(col1_wkbs, const_col_idx == 1);
+
+    uint32_t offsets0_off = 8u + 60u;
+    uint32_t offsets1_off = offsets0_off + static_cast<uint32_t>(offs0.size()) * 4u;
+    uint32_t data0_off = offsets1_off + static_cast<uint32_t>(offs1.size()) * 4u;
+    uint32_t data1_off = data0_off + static_cast<uint32_t>(data0.size());
+    uint32_t data2_off = data1_off + static_cast<uint32_t>(data1.size());
+
+    // ColDescriptor col0
+    write_le32(*buf, COL_BYTES | (const_col_idx == 0 ? COL_IS_CONST : 0u));
+    write_le32(*buf, 0u);
+    write_le32(*buf, offsets0_off);
+    write_le32(*buf, data0_off);
+    write_le32(*buf, static_cast<uint32_t>(data0.size()));
+
+    // ColDescriptor col1
+    write_le32(*buf, COL_BYTES | (const_col_idx == 1 ? COL_IS_CONST : 0u));
+    write_le32(*buf, 0u);
+    write_le32(*buf, offsets1_off);
+    write_le32(*buf, data1_off);
+    write_le32(*buf, static_cast<uint32_t>(data1.size()));
+
+    // ColDescriptor col2 (fixed64, no offsets)
+    write_le32(*buf, COL_FIXED64);
+    write_le32(*buf, 0u);
+    write_le32(*buf, 0u);
+    write_le32(*buf, data2_off);
+    write_le32(*buf, static_cast<uint32_t>(col2_vals.size() * 8u));
+
+    // Offsets + data
+    for (uint32_t o : offs0) write_le32(*buf, o);
+    for (uint32_t o : offs1) write_le32(*buf, o);
+    buf->append(data0.data(), static_cast<uint32_t>(data0.size()));
+    buf->append(data1.data(), static_cast<uint32_t>(data1.size()));
+    for (auto v : col2_vals)
+        buf->append(reinterpret_cast<const uint8_t*>(&v), 8u);
+
+    return buf;
+}
+
+// Parse COLUMNAR_V1 output and read bool bytes.
+static std::vector<uint8_t> read_col_bool(raw_buffer* out, uint32_t n) {
+    auto cb = parse_columnar(out);
+    auto col = cb.col(0);
     std::vector<uint8_t> res(n);
-    std::memcpy(res.data(), cb.cols[0].data, n);
+    std::memcpy(res.data(), col.data, n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
     return res;
 }
 
-static const std::string kSquare = "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))";
+// ── parse_columnar: header parsing ────────────────────────────────────────────
 
-TEST(ColBinaryImpl, BoolNoOpt_MatchesBaseline) {
+TEST(ColumnarParse, SingleCol) {
+    std::vector<uint8_t> data = {0x01, 0x02, 0x03};
+    auto* buf = make_col_fixed(3, COL_FIXED8, data);
+
+    auto cb = parse_columnar(buf);
+    EXPECT_EQ(cb.num_rows, 3u);
+    EXPECT_EQ(cb.num_cols, 1u);
+
+    auto col = cb.col(0);
+    EXPECT_EQ(col.base_type, COL_FIXED8);
+    EXPECT_FALSE(col.is_const);
+    EXPECT_EQ(col.row_count, 3u);
+    EXPECT_EQ(col.data[0], 0x01);
+    EXPECT_EQ(col.data[1], 0x02);
+    EXPECT_EQ(col.data[2], 0x03);
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+}
+
+TEST(ColumnarParse, MultiCol) {
+    std::vector<uint8_t> col0 = {0xAA, 0xBB};
+    std::vector<uint8_t> col1 = {0x01, 0x02, 0x03};
+    std::vector<uint8_t> col2 = {0xFF};
+
+    raw_buffer* buf = clickhouse_create_buffer(0);
+    buf->clear();
+    write_le32(*buf, 2u); // num_rows
+    write_le32(*buf, 3u); // num_cols
+
+    // ColDescriptor col0
+    write_le32(*buf, COL_FIXED8);
+    write_le32(*buf, 0u);
+    write_le32(*buf, 0u);
+    write_le32(*buf, 8u + 60u);
+    write_le32(*buf, 2u);
+    // ColDescriptor col1
+    write_le32(*buf, COL_FIXED8);
+    write_le32(*buf, 0u);
+    write_le32(*buf, 0u);
+    write_le32(*buf, 8u + 60u + 2u);
+    write_le32(*buf, 3u);
+    // ColDescriptor col2
+    write_le32(*buf, COL_FIXED8);
+    write_le32(*buf, 0u);
+    write_le32(*buf, 0u);
+    write_le32(*buf, 8u + 60u + 5u);
+    write_le32(*buf, 1u);
+
+    buf->push_back(0xAA); buf->push_back(0xBB);
+    buf->push_back(0x01); buf->push_back(0x02); buf->push_back(0x03);
+    buf->push_back(0xFF);
+
+    auto cb = parse_columnar(buf);
+    EXPECT_EQ(cb.num_rows, 2u);
+    EXPECT_EQ(cb.num_cols, 3u);
+    EXPECT_EQ(cb.descs[0].data_size, 2u);
+    EXPECT_EQ(cb.descs[1].data_size, 3u);
+    EXPECT_EQ(cb.descs[2].data_size, 1u);
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+}
+
+// ── columnar_impl_wrapper: bool return ────────────────────────────────────────
+
+TEST(ColumnarImpl, BoolNoOpt_MatchesBaseline) {
     auto poly   = wkt2wkb(kSquare);
     auto pt_in  = wkt2wkb("POINT (0.5 0.5)");
     auto pt_out = wkt2wkb("POINT (2.0 2.0)");
     const uint32_t n = 2;
 
-    auto* buf = make_col_binary_geom_buf(n, {poly, poly}, {pt_in, pt_out});
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_contains_cb", buf, n, st_contains_impl),
+    auto* buf = make_col_geom_buf(n, {poly, poly}, {pt_in, pt_out});
+    auto got = read_col_bool(
+        columnar_impl_wrapper(buf, n, st_contains_impl),
         n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 
@@ -403,7 +388,7 @@ TEST(ColBinaryImpl, BoolNoOpt_MatchesBaseline) {
     EXPECT_EQ(got[1], 0u);
 }
 
-TEST(ColBinaryImpl, BoolAConst_MatchesBaseline) {
+TEST(ColumnarImpl, BoolAConst_MatchesBaseline) {
     auto poly   = wkt2wkb(kSquare);
     auto pt_in  = wkt2wkb("POINT (0.5 0.5)");
     auto pt_out = wkt2wkb("POINT (2.0 2.0)");
@@ -411,9 +396,9 @@ TEST(ColBinaryImpl, BoolAConst_MatchesBaseline) {
     const uint32_t n = 3;
 
     std::vector<ch::Vector> col0_aconst(n, poly);
-    auto* buf_aconst = make_col_binary_geom_buf(n, col0_aconst, {pt_in, pt_out, pt_bnd});
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_contains_aconst_cb", buf_aconst, n, st_contains_impl,
+    auto* buf_aconst = make_col_geom_buf(n, col0_aconst, {pt_in, pt_out, pt_bnd});
+    auto got = read_col_bool(
+        columnar_impl_wrapper(buf_aconst, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_aconst));
@@ -422,9 +407,9 @@ TEST(ColBinaryImpl, BoolAConst_MatchesBaseline) {
     EXPECT_EQ(got[1], 0u);
     EXPECT_EQ(got[2], 0u);
 
-    auto* buf_base = make_col_binary_geom_buf(n, {poly, poly, poly}, {pt_in, pt_out, pt_bnd});
-    auto base = read_cb_bool(
-        col_binary_impl_wrapper("st_contains_base_cb", buf_base, n, st_contains_impl,
+    auto* buf_base = make_col_geom_buf(n, {poly, poly, poly}, {pt_in, pt_out, pt_bnd});
+    auto base = read_col_bool(
+        columnar_impl_wrapper(buf_base, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_base));
@@ -432,16 +417,16 @@ TEST(ColBinaryImpl, BoolAConst_MatchesBaseline) {
     EXPECT_EQ(got, base);
 }
 
-TEST(ColBinaryImpl, BoolBConst_MatchesBaseline) {
+TEST(ColumnarImpl, BoolBConst_MatchesBaseline) {
     auto pt    = wkt2wkb("POINT (0.5 0.5)");
     auto big   = wkt2wkb("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))");
     auto small = wkt2wkb("POLYGON ((2 2, 3 2, 3 3, 2 3, 2 2))");
     const uint32_t n = 2;
 
     std::vector<ch::Vector> col1_bconst(n, pt);
-    auto* buf_bconst = make_col_binary_geom_buf(n, {big, small}, col1_bconst);
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_contains_bconst_cb", buf_bconst, n, st_contains_impl,
+    auto* buf_bconst = make_col_geom_buf(n, {big, small}, col1_bconst);
+    auto got = read_col_bool(
+        columnar_impl_wrapper(buf_bconst, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_bconst));
@@ -449,9 +434,9 @@ TEST(ColBinaryImpl, BoolBConst_MatchesBaseline) {
     EXPECT_EQ(got[0], 1u);
     EXPECT_EQ(got[1], 0u);
 
-    auto* buf_base = make_col_binary_geom_buf(n, {big, small}, {pt, pt});
-    auto base = read_cb_bool(
-        col_binary_impl_wrapper("st_contains_base_cb", buf_base, n, st_contains_impl,
+    auto* buf_base = make_col_geom_buf(n, {big, small}, {pt, pt});
+    auto base = read_col_bool(
+        columnar_impl_wrapper(buf_base, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_base));
@@ -459,14 +444,14 @@ TEST(ColBinaryImpl, BoolBConst_MatchesBaseline) {
     EXPECT_EQ(got, base);
 }
 
-TEST(ColBinaryImpl, BoolEarlyRet_Disjoint) {
+TEST(ColumnarImpl, BoolEarlyRet_Disjoint) {
     auto poly   = wkt2wkb(kSquare);
     auto far_pt = wkt2wkb("POINT (100 100)");
     const uint32_t n = 1;
 
-    auto* buf = make_col_binary_geom_buf(n, {poly}, {far_pt});
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_disjoint_cb", buf, n, st_disjoint_impl,
+    auto* buf = make_col_geom_buf(n, {poly}, {far_pt});
+    auto got = read_col_bool(
+        columnar_impl_wrapper(buf, n, st_disjoint_impl,
             nullptr, true),
         n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
@@ -474,14 +459,14 @@ TEST(ColBinaryImpl, BoolEarlyRet_Disjoint) {
     EXPECT_EQ(got[0], 1u);
 }
 
-TEST(ColBinaryImpl, BoolBboxShortCircuit) {
+TEST(ColumnarImpl, BoolBboxShortCircuit) {
     auto poly   = wkt2wkb(kSquare);
     auto far_pt = wkt2wkb("POINT (100 100)");
     const uint32_t n = 1;
 
-    auto* buf = make_col_binary_geom_buf(n, {poly}, {far_pt});
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_contains_cb", buf, n, st_contains_impl,
+    auto* buf = make_col_geom_buf(n, {poly}, {far_pt});
+    auto got = read_col_bool(
+        columnar_impl_wrapper(buf, n, st_contains_impl,
             bbox_op_contains, false),
         n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
@@ -489,15 +474,15 @@ TEST(ColBinaryImpl, BoolBboxShortCircuit) {
     EXPECT_EQ(got[0], 0u);
 }
 
-TEST(ColBinaryImpl, BoolAConstBboxShortCircuit) {
+TEST(ColumnarImpl, BoolAConstBboxShortCircuit) {
     auto poly   = wkt2wkb(kSquare);
     auto far_pt = wkt2wkb("POINT (100 100)");
     auto near_pt = wkt2wkb("POINT (0.5 0.5)");
     const uint32_t n = 2;
 
-    auto* buf = make_col_binary_geom_buf(n, {poly}, {near_pt, far_pt});
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_contains_cb", buf, n, st_contains_impl,
+    auto* buf = make_col_geom_buf(n, {poly}, {near_pt, far_pt});
+    auto got = read_col_bool(
+        columnar_impl_wrapper(buf, n, st_contains_impl,
             bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
         n);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
@@ -506,31 +491,29 @@ TEST(ColBinaryImpl, BoolAConstBboxShortCircuit) {
     EXPECT_EQ(got[1], 0u);
 }
 
-// ── col_binary_impl_wrapper: double return ────────────────────────────────────
+// ── columnar_impl_wrapper: double return ──────────────────────────────────────
 
 static double double_identity_impl(double x) { return x; }
 
-TEST(ColBinaryImpl, DoubleReturn) {
+TEST(ColumnarImpl, DoubleReturn) {
     std::vector<uint8_t> col_data;
     double vals[] = {1.5, -2.5, 0.0};
-    for (auto v : vals) {
+    for (auto v : vals)
         col_data.insert(col_data.end(),
                         reinterpret_cast<const uint8_t*>(&v),
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(double));
-    }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, {{TypeTag::Float64}});
-    auto* result = col_binary_impl_wrapper("double_identity_cb", buf, 3, double_identity_impl);
+    auto* buf = make_col_fixed(3, COL_FIXED64, col_data);
+    auto* result = columnar_impl_wrapper(buf, 3, double_identity_impl);
 
-    auto cb = parse_col_binary(result);
-    EXPECT_EQ(cb.num_rows, 3u);
-    EXPECT_EQ(cb.num_cols, 1u);
-    EXPECT_EQ(cb.cols[0].data_size, 24u);
+    auto cb = parse_columnar(result);
+    auto col = cb.col(0);
+    EXPECT_EQ(col.row_count, 3u);
 
     double r0, r1, r2;
-    std::memcpy(&r0, cb.cols[0].data, 8);
-    std::memcpy(&r1, cb.cols[0].data + 8, 8);
-    std::memcpy(&r2, cb.cols[0].data + 16, 8);
+    std::memcpy(&r0, col.data, 8);
+    std::memcpy(&r1, col.data + 8, 8);
+    std::memcpy(&r2, col.data + 16, 8);
     EXPECT_DOUBLE_EQ(r0, 1.5);
     EXPECT_DOUBLE_EQ(r1, -2.5);
     EXPECT_DOUBLE_EQ(r2, 0.0);
@@ -538,40 +521,34 @@ TEST(ColBinaryImpl, DoubleReturn) {
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
 }
 
-// ── col_binary_impl_wrapper: geometry return ──────────────────────────────────
+// ── columnar_impl_wrapper: geometry return ────────────────────────────────────
 
 static std::unique_ptr<geos::geom::Geometry> geom_identity_impl(
     std::unique_ptr<geos::geom::Geometry> g) {
     return g;
 }
 
-TEST(ColBinaryImpl, GeometryReturn) {
+TEST(ColumnarImpl, GeometryReturn) {
     auto wkb1 = wkt2wkb("POINT (1 2)");
     auto wkb2 = wkt2wkb("POINT (3 4)");
 
-    std::vector<uint8_t> col_data;
-    std::vector<ch::Vector> wkbs;
-    wkbs.push_back(wkb1);
-    wkbs.push_back(wkb2);
-    for (auto& wkb : wkbs) {
-        uint32_t len = static_cast<uint32_t>(wkb.size());
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(len, *vb);
-        vb->append(wkb.data(), len);
-        col_data.insert(col_data.end(), vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-    }
+    std::vector<uint32_t> offsets = {0, static_cast<uint32_t>(wkb1.size() + 1),
+                                      static_cast<uint32_t>(wkb1.size() + 1 + wkb2.size() + 1)};
+    std::vector<uint8_t> data;
+    data.insert(data.end(), wkb1.begin(), wkb1.end());
+    data.push_back(0);
+    data.insert(data.end(), wkb2.begin(), wkb2.end());
+    data.push_back(0);
 
-    auto* buf = make_col_binary_buf(2, 1, {col_data}, 0, {{TypeTag::String}});
-    auto* result = col_binary_impl_wrapper("geom_identity_cb", buf, 2, geom_identity_impl);
+    auto* buf = make_col_string(2, data, offsets);
+    auto* result = columnar_impl_wrapper(buf, 2, geom_identity_impl);
 
-    auto cb = parse_col_binary(result);
-    ColBinaryReader reader = ColBinaryReader::from_col(cb.cols[0], 2);
-    auto r0 = reader.read_blob();
-    auto r1 = reader.read_blob();
-    auto gr0 = read_wkb(r0);
-    auto gr1 = read_wkb(r1);
+    auto cb = parse_columnar(result);
+    auto col = cb.col(0);
+    auto s0 = col.get_bytes(0);
+    auto s1 = col.get_bytes(1);
+    auto gr0 = read_wkb(s0);
+    auto gr1 = read_wkb(s1);
     ASSERT_NE(gr0, nullptr);
     ASSERT_NE(gr1, nullptr);
     EXPECT_DOUBLE_EQ(static_cast<const geos::geom::Point*>(gr0.get())->getX(), 1.0);
@@ -580,19 +557,19 @@ TEST(ColBinaryImpl, GeometryReturn) {
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
 }
 
-// ── col_binary_impl_wrapper: string return ────────────────────────────────────
+// ── columnar_impl_wrapper: string return ──────────────────────────────────────
 
 static std::string string_ok_impl() { return "ok"; }
 
-TEST(ColBinaryImpl, StringReturn) {
-    auto* buf = make_col_binary_buf(3, 0, {});
-    auto* result = col_binary_impl_wrapper("string_ok_cb", buf, 3, string_ok_impl);
+TEST(ColumnarImpl, StringReturn) {
+    auto* buf = make_col_fixed(3, COL_FIXED8, {});
+    auto* result = columnar_impl_wrapper(buf, 3, string_ok_impl);
 
-    auto cb = parse_col_binary(result);
-    ColBinaryReader reader = ColBinaryReader::from_col(cb.cols[0], 3);
-    auto s0 = reader.read_blob();
-    auto s1 = reader.read_blob();
-    auto s2 = reader.read_blob();
+    auto cb = parse_columnar(result);
+    auto col = cb.col(0);
+    auto s0 = col.get_bytes(0);
+    auto s1 = col.get_bytes(1);
+    auto s2 = col.get_bytes(2);
     EXPECT_EQ(std::string(s0.begin(), s0.end()), "ok");
     EXPECT_EQ(std::string(s1.begin(), s1.end()), "ok");
     EXPECT_EQ(std::string(s2.begin(), s2.end()), "ok");
@@ -600,29 +577,29 @@ TEST(ColBinaryImpl, StringReturn) {
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
 }
 
-// ── col_binary_impl_wrapper: int32 return ─────────────────────────────────────
+// ── columnar_impl_wrapper: int32 return ───────────────────────────────────────
 
 static int32_t int32_identity_impl(int32_t x) { return x; }
 
-TEST(ColBinaryImpl, Int32Return) {
+TEST(ColumnarImpl, Int32Return) {
     std::vector<uint8_t> col_data;
     int32_t vals[] = {100, -200, 0};
-    for (auto v : vals) {
+    for (auto v : vals)
         col_data.insert(col_data.end(),
                         reinterpret_cast<const uint8_t*>(&v),
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(int32_t));
-    }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, {{TypeTag::Int32}});
-    auto* result = col_binary_impl_wrapper("int32_identity_cb", buf, 3, int32_identity_impl);
+    auto* buf = make_col_fixed(3, COL_FIXED32, col_data);
+    auto* result = columnar_impl_wrapper(buf, 3, int32_identity_impl);
 
-    auto cb = parse_col_binary(result);
-    EXPECT_EQ(cb.cols[0].data_size, 12u);
+    auto cb = parse_columnar(result);
+    auto col = cb.col(0);
+    EXPECT_EQ(col.row_count, 3u);
 
     int32_t r0, r1, r2;
-    std::memcpy(&r0, cb.cols[0].data, 4);
-    std::memcpy(&r1, cb.cols[0].data + 4, 4);
-    std::memcpy(&r2, cb.cols[0].data + 8, 4);
+    std::memcpy(&r0, col.data, 4);
+    std::memcpy(&r1, col.data + 4, 4);
+    std::memcpy(&r2, col.data + 8, 4);
     EXPECT_EQ(r0, 100);
     EXPECT_EQ(r1, -200);
     EXPECT_EQ(r2, 0);
@@ -630,29 +607,29 @@ TEST(ColBinaryImpl, Int32Return) {
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
 }
 
-// ── col_binary_impl_wrapper: uint32 return ────────────────────────────────────
+// ── columnar_impl_wrapper: uint32 return ──────────────────────────────────────
 
 static uint32_t uint32_identity_impl(uint32_t x) { return x; }
 
-TEST(ColBinaryImpl, Uint32Return) {
+TEST(ColumnarImpl, Uint32Return) {
     std::vector<uint8_t> col_data;
     uint32_t vals[] = {100u, 200u, 0u};
-    for (auto v : vals) {
+    for (auto v : vals)
         col_data.insert(col_data.end(),
                         reinterpret_cast<const uint8_t*>(&v),
                         reinterpret_cast<const uint8_t*>(&v) + sizeof(uint32_t));
-    }
 
-    auto* buf = make_col_binary_buf(3, 1, {col_data}, 0, {{TypeTag::UInt32}});
-    auto* result = col_binary_impl_wrapper("uint32_identity_cb", buf, 3, uint32_identity_impl);
+    auto* buf = make_col_fixed(3, COL_FIXED32, col_data);
+    auto* result = columnar_impl_wrapper(buf, 3, uint32_identity_impl);
 
-    auto cb = parse_col_binary(result);
-    EXPECT_EQ(cb.cols[0].data_size, 12u);
+    auto cb = parse_columnar(result);
+    auto col = cb.col(0);
+    EXPECT_EQ(col.row_count, 3u);
 
     uint32_t r0, r1, r2;
-    std::memcpy(&r0, cb.cols[0].data, 4);
-    std::memcpy(&r1, cb.cols[0].data + 4, 4);
-    std::memcpy(&r2, cb.cols[0].data + 8, 4);
+    std::memcpy(&r0, col.data, 4);
+    std::memcpy(&r1, col.data + 4, 4);
+    std::memcpy(&r2, col.data + 8, 4);
     EXPECT_EQ(r0, 100u);
     EXPECT_EQ(r1, 200u);
     EXPECT_EQ(r2, 0u);
@@ -660,78 +637,9 @@ TEST(ColBinaryImpl, Uint32Return) {
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
 }
 
-// ── col_binary_impl_wrapper: st_dwithin ───────────────────────────────────────
+// ── columnar_impl_wrapper: st_dwithin ─────────────────────────────────────────
 
-// Build a 3-col ColumnBinary buffer: geom, geom, double
-static raw_buffer* make_col_binary_geom3(uint32_t num_rows,
-    const std::vector<ch::Vector>& col0_wkbs,
-    const std::vector<ch::Vector>& col1_wkbs,
-    const std::vector<double>& col2_vals,
-    uint32_t const_col_idx = UINT32_MAX) {
-    auto write_col = [&](const std::vector<ch::Vector>& wkbs, std::vector<uint8_t>& out, bool is_const) {
-        uint32_t rows = is_const ? 1 : num_rows;
-        for (uint32_t i = 0; i < rows; ++i) {
-            const auto& wkb = wkbs.empty() ? wkbs[0] : wkbs[i % wkbs.size()];
-            uint32_t len = static_cast<uint32_t>(wkb.size());
-            if (is_const) {
-                // CH native format for const String: u32[2] {0, len} + raw bytes
-                uint32_t o0 = 0, o1 = len;
-                for (int j = 0; j < 4; ++j) out.push_back(static_cast<uint8_t>(o0 >> (j * 8)));
-                for (int j = 0; j < 4; ++j) out.push_back(static_cast<uint8_t>(o1 >> (j * 8)));
-                out.insert(out.end(), wkb.data(), wkb.data() + wkb.size());
-            } else {
-                raw_buffer* vb = clickhouse_create_buffer(0);
-                vb->clear();
-                writeVarUInt(len, *vb);
-                vb->append(wkb.data(), len);
-                out.insert(out.end(), vb->data(), vb->data() + vb->size());
-                clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-            }
-        }
-    };
-
-    std::vector<uint8_t> col0_data, col1_data, col2_data;
-    write_col(col0_wkbs, col0_data, const_col_idx == 0);
-    write_col(col1_wkbs, col1_data, const_col_idx == 1);
-    for (auto v : col2_vals) {
-        col2_data.insert(col2_data.end(),
-                         reinterpret_cast<const uint8_t*>(&v),
-                         reinterpret_cast<const uint8_t*>(&v) + sizeof(double));
-    }
-
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    writeBinaryLE32(3, *buf);
-    writeBinaryLE32(num_rows, *buf);
-
-    // Col0: geom
-    buf->push_back(const_col_idx == 0 ? 0x01 : 0);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds0 = col0_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
-    for (auto b : col0_data) buf->push_back(b);
-
-    // Col1: geom
-    buf->push_back(const_col_idx == 1 ? 0x01 : 0);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds1 = col1_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
-    for (auto b : col1_data) buf->push_back(b);
-
-    // Col2: double
-    buf->push_back(0);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::Float64));
-    uint64_t ds2 = col2_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds2 >> (j * 8)));
-    for (auto b : col2_data) buf->push_back(b);
-
-    return buf;
-}
-
-TEST(ColBinaryImpl, BoolAConstDist_MatchesBaseline) {
+TEST(ColumnarImpl, BoolAConstDist_MatchesBaseline) {
     auto origin  = wkt2wkb("POINT (0 0)");
     auto near_pt = wkt2wkb("POINT (3 0)");
     auto far_pt  = wkt2wkb("POINT (10 0)");
@@ -741,9 +649,9 @@ TEST(ColBinaryImpl, BoolAConstDist_MatchesBaseline) {
     std::vector<double> col2_vals(n, kDist);
     std::vector<ch::Vector> col0_aconst(n, origin);
 
-    auto* buf = make_col_binary_geom3(n, col0_aconst, {near_pt, far_pt}, col2_vals, 0);
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_dwithin_cb", buf, n, st_dwithin_impl,
+    auto* buf = make_col_geom3(n, col0_aconst, {near_pt, far_pt}, col2_vals, 0);
+    auto got = read_col_bool(
+        columnar_impl_wrapper(buf, n, st_dwithin_impl,
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
@@ -752,11 +660,10 @@ TEST(ColBinaryImpl, BoolAConstDist_MatchesBaseline) {
     EXPECT_EQ(got[0], 1u);
     EXPECT_EQ(got[1], 0u);
 
-    // Baseline: non-const A
     std::vector<ch::Vector> col0_base = {origin, origin};
-    auto* buf_base = make_col_binary_geom3(n, col0_base, {near_pt, far_pt}, col2_vals);
-    auto base = read_cb_bool(
-        col_binary_impl_wrapper("st_dwithin_base_cb", buf_base, n, st_dwithin_impl,
+    auto* buf_base = make_col_geom3(n, col0_base, {near_pt, far_pt}, col2_vals);
+    auto base = read_col_bool(
+        columnar_impl_wrapper(buf_base, n, st_dwithin_impl,
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
@@ -765,7 +672,7 @@ TEST(ColBinaryImpl, BoolAConstDist_MatchesBaseline) {
     EXPECT_EQ(got, base);
 }
 
-TEST(ColBinaryImpl, BoolBConstDist_MatchesBaseline) {
+TEST(ColumnarImpl, BoolBConstDist_MatchesBaseline) {
     auto near_pt = wkt2wkb("POINT (3 0)");
     auto far_pt  = wkt2wkb("POINT (10 0)");
     auto origin  = wkt2wkb("POINT (0 0)");
@@ -775,9 +682,9 @@ TEST(ColBinaryImpl, BoolBConstDist_MatchesBaseline) {
     std::vector<double> col2_vals(n, kDist);
     std::vector<ch::Vector> col1_bconst(n, origin);
 
-    auto* buf = make_col_binary_geom3(n, {near_pt, far_pt}, col1_bconst, col2_vals, 1);
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_dwithin_bconst_cb", buf, n, st_dwithin_impl,
+    auto* buf = make_col_geom3(n, {near_pt, far_pt}, col1_bconst, col2_vals, 1);
+    auto got = read_col_bool(
+        columnar_impl_wrapper(buf, n, st_dwithin_impl,
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
@@ -786,11 +693,10 @@ TEST(ColBinaryImpl, BoolBConstDist_MatchesBaseline) {
     EXPECT_EQ(got[0], 1u);
     EXPECT_EQ(got[1], 0u);
 
-    // Baseline: non-const B
     std::vector<ch::Vector> col1_base = {origin, origin};
-    auto* buf_base = make_col_binary_geom3(n, {near_pt, far_pt}, col1_base, col2_vals);
-    auto base = read_cb_bool(
-        col_binary_impl_wrapper("st_dwithin_base_cb", buf_base, n, st_dwithin_impl,
+    auto* buf_base = make_col_geom3(n, {near_pt, far_pt}, col1_base, col2_vals);
+    auto base = read_col_bool(
+        columnar_impl_wrapper(buf_base, n, st_dwithin_impl,
             nullptr, false, nullptr, nullptr,
             prep_a_st_dwithin, prep_b_st_dwithin),
         n);
@@ -799,281 +705,69 @@ TEST(ColBinaryImpl, BoolBConstDist_MatchesBaseline) {
     EXPECT_EQ(got, base);
 }
 
-// ── Array(String) with cumulative offsets ─────────────────────────────────────
+// ── COL_BYTES string column ───────────────────────────────────────────────────
 
-// Helper: build a ColumnBinary buffer with a single Array(String) column.
-// CH wire format: [N u64 per-row counts][u32[total_M+1] cumul str offsets][chars+nulls]
-static raw_buffer* make_col_binary_array_col(uint32_t num_rows,
-                                              const std::vector<std::vector<std::string>>& rows) {
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    writeBinaryLE32(1, *buf);
-    writeBinaryLE32(num_rows, *buf);
+TEST(ColumnarImpl, StringCol_GetBytes) {
+    // Build: offsets = {0, 6, 12}, data = "hello\0world\0"
+    std::vector<uint32_t> offsets = {0u, 6u, 12u};
+    std::vector<uint8_t> data;
+    data.insert(data.end(), "hello", "hello" + 5);
+    data.push_back(0);
+    data.insert(data.end(), "world", "world" + 5);
+    data.push_back(0);
 
-    // Build flat string list — CH ColumnBinaryOutputFormat does NOT write null terminators.
-    std::string chars_data;
-    std::vector<uint32_t> str_offsets = {0};
-    for (uint32_t i = 0; i < num_rows; ++i) {
-        for (auto& s : rows[i]) {
-            chars_data += s;
-            str_offsets.push_back(static_cast<uint32_t>(chars_data.size()));
-        }
-    }
+    auto* buf = make_col_string(2, data, offsets);
 
-    std::vector<uint8_t> col_data;
-    // N u64LE per-row element counts.
-    for (uint32_t i = 0; i < num_rows; ++i) {
-        uint64_t c = rows[i].size();
-        for (int j = 0; j < 8; ++j)
-            col_data.push_back(static_cast<uint8_t>(c >> (j * 8)));
-    }
-    // u32[total_M+1] cumulative string offsets.
-    for (uint32_t o : str_offsets) {
-        for (int j = 0; j < 4; ++j)
-            col_data.push_back(static_cast<uint8_t>(o >> (j * 8)));
-    }
-    // Chars (CH ColumnBinaryOutputFormat does not write null terminators).
-    col_data.insert(col_data.end(), chars_data.begin(), chars_data.end());
+    auto cb = parse_columnar(buf);
+    auto col = cb.col(0);
+    EXPECT_EQ(col.base_type, COL_BYTES);
+    EXPECT_EQ(col.row_count, 2u);
 
-    buf->push_back(0); // non-const, Array(String)
-    buf->push_back(2); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 2
-    buf->push_back(static_cast<uint8_t>(TypeTag::Array));
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds = col_data.size();
-    for (uint32_t j = 0; j < 8; ++j)
-        buf->push_back(static_cast<uint8_t>(ds >> (j * 8)));
-    for (auto b : col_data) buf->push_back(b);
+    auto s0 = col.get_bytes(0);
+    auto s1 = col.get_bytes(1);
+    EXPECT_EQ(std::string(s0.begin(), s0.end()), "hello");
+    EXPECT_EQ(std::string(s1.begin(), s1.end()), "world");
 
-    return buf;
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 }
 
-// Helper: build a const Array(String) column buffer.
-// CH wire format (1 row): [u64 M][u32[M+1] cumul str offsets][chars+nulls]
-static raw_buffer* make_col_binary_array_col_const(uint32_t num_rows,
-                                                    const std::vector<std::string>& one_row) {
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    writeBinaryLE32(1, *buf);
-    writeBinaryLE32(num_rows, *buf);
+// ── COL_IS_CONST flag ─────────────────────────────────────────────────────────
 
-    uint64_t M = one_row.size();
-    std::string chars_data;
-    std::vector<uint32_t> str_offsets = {0};
-    for (auto& s : one_row) {
-        chars_data += s;
-        str_offsets.push_back(static_cast<uint32_t>(chars_data.size()));
-    }
-
-    std::vector<uint8_t> col_data;
-    // u64 M
-    for (int j = 0; j < 8; ++j)
-        col_data.push_back(static_cast<uint8_t>(M >> (j * 8)));
-    // u32[M+1] cumulative string offsets
-    for (uint32_t o : str_offsets) {
-        for (int j = 0; j < 4; ++j)
-            col_data.push_back(static_cast<uint8_t>(o >> (j * 8)));
-    }
-    // chars (CH ColumnBinaryOutputFormat does not write null terminators)
-    col_data.insert(col_data.end(), chars_data.begin(), chars_data.end());
-
-    buf->push_back(0x01); // const, Array(String)
-    buf->push_back(2); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 2
-    buf->push_back(static_cast<uint8_t>(TypeTag::Array));
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds = static_cast<uint64_t>(col_data.size());
-    for (uint32_t j = 0; j < 8; ++j)
-        buf->push_back(static_cast<uint8_t>(ds >> (j * 8)));
-    for (auto b : col_data) buf->push_back(b);
-
-    return buf;
-}
-
-static uint32_t array_size_impl(std::vector<std::unique_ptr<geos::geom::Geometry>> geoms) {
-    return static_cast<uint32_t>(geoms.size());
-}
-
-TEST(ColBinaryImpl, ArrayNonConst_CumulativeOffsets) {
-    std::vector<std::vector<std::string>> rows = {
-        {"POINT(1 2)", "POINT(3 4)"},
-        {"POINT(5 6)"},
-        {}
-    };
-    auto* buf = make_col_binary_array_col(3, rows);
-    auto* result = col_binary_impl_wrapper("array_size_cb", buf, 3, array_size_impl);
-    auto cb = parse_col_binary(result);
-    uint32_t r0, r1, r2;
-    std::memcpy(&r0, cb.cols[0].data, 4);
-    std::memcpy(&r1, cb.cols[0].data + 4, 4);
-    std::memcpy(&r2, cb.cols[0].data + 8, 4);
-
-    EXPECT_EQ(r0, 2u);
-    EXPECT_EQ(r1, 1u);
-    EXPECT_EQ(r2, 0u);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
-}
-
-TEST(ColBinaryImpl, ArrayConst_CumulativeOffsets) {
-    std::vector<std::string> one_row = {"POINT(1 2)", "POINT(3 4)", "POINT(5 6)"};
+TEST(ColumnarImpl, ConstFlag) {
+    auto poly = wkt2wkb(kSquare);
     const uint32_t n = 5;
-    auto* buf = make_col_binary_array_col_const(n, one_row);
 
-    auto* result = col_binary_impl_wrapper("array_size_const_cb", buf, n, array_size_impl);
-    auto cb = parse_col_binary(result);
-    for (uint32_t i = 0; i < n; ++i) {
-        uint32_t r;
-        std::memcpy(&r, cb.cols[0].data + i * 4, 4);
-        EXPECT_EQ(r, 3u) << "row " << i;
-    }
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(result));
-}
-
-TEST(ColBinaryImpl, ArrayDebug_DirectUnpack) {
-    // Const Array(String) with 3 WKT strings.
-    // CH format: [u64 M][u32[M+1] cumul str offsets][chars] (no null terminators)
-    const std::vector<std::string> strs = {"POINT(0 0)", "POINT(1 1)", "POINT(2 2)"};
-    auto* buf = make_col_binary_array_col_const(5, strs);
-
-    auto cb = parse_col_binary(buf);
-    ColBinaryReader reader = ColBinaryReader::from_col(cb.cols[0], 5);
-
-    auto result = unpack_arg<std::vector<std::unique_ptr<geos::geom::Geometry>>>(reader, reader.tag_iter());
-    EXPECT_EQ(result.size(), 3u);
-    for (auto& g : result) ASSERT_NE(g, nullptr);
-
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
-
-// ── BConst_NativeFormat: const col with Native format ─────────────────────────
-
-TEST(ColBinaryImpl, BConst_NativeFormat_Predicate) {
-    auto big   = wkt2wkb("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))");
-    auto small = wkt2wkb("POLYGON ((2 2, 3 2, 3 3, 2 3, 2 2))");
-    auto pt    = wkt2wkb("POINT (0.5 0.5)");
-    const uint32_t n = 2;
-
-    std::vector<uint8_t> col0_data;
-    for (uint32_t i = 0; i < n; ++i) {
-        const auto& wkb = (i == 0) ? big : small;
-        uint32_t len = static_cast<uint32_t>(wkb.size());
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(len, *vb);
-        vb->append(wkb.data(), len);
-        col0_data.insert(col0_data.end(), vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-    }
-
-    // const col1: CH native format u32[2] {0, len} + raw WKB bytes
-    std::vector<uint8_t> col1_data;
-    {
-        uint32_t o0 = 0, o1 = static_cast<uint32_t>(pt.size());
-        for (int j = 0; j < 4; ++j) col1_data.push_back(static_cast<uint8_t>(o0 >> (j * 8)));
-        for (int j = 0; j < 4; ++j) col1_data.push_back(static_cast<uint8_t>(o1 >> (j * 8)));
-        col1_data.insert(col1_data.end(), pt.begin(), pt.end());
-    }
+    // Build const geom column: 1 row of WKB with null terminator
+    std::vector<uint32_t> offsets = {0u, static_cast<uint32_t>(poly.size() + 1u)};
+    std::vector<uint8_t> data;
+    for (uint32_t o : offsets) write_le32(data, o);
+    data.insert(data.end(), poly.begin(), poly.end());
+    data.push_back(0);
 
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
-    writeBinaryLE32(2, *buf);
-    writeBinaryLE32(n, *buf);
+    write_le32(*buf, n);
+    write_le32(*buf, 1u);
 
-    // Col0: non-const
-    buf->push_back(0);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds0 = col0_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
-    for (auto b : col0_data) buf->push_back(b);
+    uint32_t off_off = 8u + 20u;
+    uint32_t data_off = off_off + 2u * 4u;
 
-    // Col1: const
-    buf->push_back(0x01);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds1 = col1_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
-    for (auto b : col1_data) buf->push_back(b);
+    // ColDescriptor with COL_IS_CONST
+    write_le32(*buf, static_cast<uint32_t>(COL_BYTES | COL_IS_CONST));
+    write_le32(*buf, 0u);
+    write_le32(*buf, off_off);
+    write_le32(*buf, data_off);
+    write_le32(*buf, static_cast<uint32_t>(data.size()));
 
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_contains_bconst_native", buf, n, st_contains_impl,
-            bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains),
-        n);
+    for (uint32_t o : offsets) write_le32(*buf, o);
+    buf->append(data.data(), static_cast<uint32_t>(data.size()));
 
-    EXPECT_EQ(got[0], 1u);
-    EXPECT_EQ(got[1], 0u);
-    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
-}
+    auto cb = parse_columnar(buf);
+    auto col = cb.col(0);
+    EXPECT_TRUE(col.is_const);
+    EXPECT_EQ(col.row_count, 1u);
+    EXPECT_EQ(col.get_bytes(0).size(), poly.size());
+    EXPECT_EQ(col.get_bytes(4).size(), poly.size()); // same data for all rows
 
-TEST(ColBinaryImpl, BConst_NativeFormat_Dwithin) {
-    auto near_pt = wkt2wkb("POINT (3 0)");
-    auto far_pt  = wkt2wkb("POINT (10 0)");
-    auto origin  = wkt2wkb("POINT (0 0)");
-    constexpr double kDist = 5.0;
-    const uint32_t n = 2;
-
-    std::vector<uint8_t> col0_data;
-    for (uint32_t i = 0; i < n; ++i) {
-        const auto& wkb = (i == 0) ? near_pt : far_pt;
-        uint32_t len = static_cast<uint32_t>(wkb.size());
-        raw_buffer* vb = clickhouse_create_buffer(0);
-        vb->clear();
-        writeVarUInt(len, *vb);
-        vb->append(wkb.data(), len);
-        col0_data.insert(col0_data.end(), vb->data(), vb->data() + vb->size());
-        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(vb));
-    }
-
-    std::vector<uint8_t> col1_data;
-    {
-        uint32_t o0 = 0, o1 = static_cast<uint32_t>(origin.size());
-        for (int j = 0; j < 4; ++j) col1_data.push_back(static_cast<uint8_t>(o0 >> (j * 8)));
-        for (int j = 0; j < 4; ++j) col1_data.push_back(static_cast<uint8_t>(o1 >> (j * 8)));
-        col1_data.insert(col1_data.end(), origin.begin(), origin.end());
-    }
-
-    std::vector<uint8_t> col2_data;
-    for (uint32_t i = 0; i < n; ++i)
-        col2_data.insert(col2_data.end(),
-                         reinterpret_cast<const uint8_t*>(&kDist),
-                         reinterpret_cast<const uint8_t*>(&kDist) + sizeof(double));
-
-    raw_buffer* buf = clickhouse_create_buffer(0);
-    buf->clear();
-    writeBinaryLE32(3, *buf);
-    writeBinaryLE32(n, *buf);
-
-    // Col0: non-const geom
-    buf->push_back(0);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds0 = col0_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds0 >> (j * 8)));
-    for (auto b : col0_data) buf->push_back(b);
-
-    // Col1: const geom
-    buf->push_back(0x01);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::String));
-    uint64_t ds1 = col1_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds1 >> (j * 8)));
-    for (auto b : col1_data) buf->push_back(b);
-
-    // Col2: non-const double
-    buf->push_back(0);
-    buf->push_back(1); buf->push_back(0); buf->push_back(0); buf->push_back(0); // type_tags_size = 1
-    buf->push_back(static_cast<uint8_t>(TypeTag::Float64));
-    uint64_t ds2 = col2_data.size();
-    for (uint32_t j = 0; j < 8; ++j) buf->push_back(static_cast<uint8_t>(ds2 >> (j * 8)));
-    for (auto b : col2_data) buf->push_back(b);
-
-    auto got = read_cb_bool(
-        col_binary_impl_wrapper("st_dwithin_bconst_native", buf, n, st_dwithin_impl,
-            nullptr, false, nullptr, nullptr,
-            prep_a_st_dwithin, prep_b_st_dwithin),
-        n);
-
-    EXPECT_EQ(got[0], 1u);
-    EXPECT_EQ(got[1], 0u);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 }

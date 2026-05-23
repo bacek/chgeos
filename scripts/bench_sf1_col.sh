@@ -45,7 +45,7 @@ run_once() {
     local query="$1"
     local tmpf; tmpf=$(mktemp)
     local rc=0
-    "${CH}" client --port "${PORT}" --time -q "${query}" || rc=$?
+    "${CH}" client --port "${PORT}" --time -q "${query}" >/dev/null 2>"${tmpf}" || rc=$?
     local secs; secs=$(grep -E '^[0-9]+(\.[0-9]+)?$' "${tmpf}" | tail -1)
     rm -f "${tmpf}"
     [[ -z "${secs}" ]] && secs="${TIMEOUT}"
