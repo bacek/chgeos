@@ -68,4 +68,13 @@ clickhouse_destroy_buffer(uint8_t *buf) {
   free(raw);
 }
 
+__attribute__((export_name("clickhouse_reallocate_buffer")))
+ch::raw_buffer *
+clickhouse_reallocate_buffer(ch::raw_buffer *old_buf, uint32_t new_size) {
+  if (!old_buf)
+    return new ch::raw_buffer(new_size);
+  old_buf->resize(new_size);
+  return old_buf;
+}
+
 }
