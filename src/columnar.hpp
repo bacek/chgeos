@@ -85,10 +85,6 @@ enum ColType : uint32_t {
     // so bits 5-7 are free for flags.
     COL_IS_NULLABLE = 0x20u, // Nullable(T): null_offset carries u8[row_count] null map
     COL_IS_CONST    = 0x80u, // 1 stored row, broadcast to num_rows
-    // COL_IS_REPEAT: column is cyclic with period R stored in offsets_offset.
-    // Row i maps to stored_row[i % R].  For string columns the R+1 wire offsets
-    // are embedded at the start of the data block (not at offsets_offset).
-    COL_IS_REPEAT   = 0x40u,
 };
 
 // ── Type traits for complex (Array/Tuple) C++ types ─────────────────────────
@@ -127,8 +123,7 @@ static constexpr uint32_t COL_DESC_BYTES = 20;  // sizeof ColDescriptor
 struct ColView {
     ColType         base_type;
     bool            is_const;
-    uint32_t        period;       // COL_IS_REPEAT period R; 0 = not cyclic
-    uint32_t        row_count;    // stored rows (1 if const, R if repeat, N otherwise)
+    uint32_t        row_count;    // stored rows (1 if const, N otherwise)
     const uint8_t*  null_map;     // nullable: null_map[i]!=0 → NULL; nullptr = non-nullable
     const uint32_t* offsets;      // start-based; nullptr for fixed-width
     const uint8_t*  data;
@@ -137,7 +132,6 @@ struct ColView {
     // Map logical row to stored row index.
     uint32_t effective_row(uint32_t row) const noexcept {
         if (is_const) return 0u;
-        if (period)   return row % period;
         return row;
     }
 
@@ -164,10 +158,10 @@ struct ColView {
     }
 
     // True when every logical row carries the same bytes.
-    // Covers: COL_IS_CONST, COL_IS_REPEAT with period==1, and the legacy
-    // cross-join pattern where CH repeats the same WKB N times without a flag.
+    // Covers: COL_IS_CONST, and the legacy cross-join pattern where CH
+    // repeats the same WKB N times (uniform offsets + identical first/last element).
     bool is_effectively_const_bytes() const noexcept {
-        if (is_const || period == 1u) return true;
+        if (is_const) return true;
         if (!offsets || row_count < 2) return false;
         uint32_t elem_stride = offsets[1];
         if (elem_stride == 0) return false;
@@ -188,28 +182,12 @@ struct ColumnarBuf {
         ColDescriptor d;
         std::memcpy(&d, descs + i, sizeof(d));
         ColView v;
-        bool has_repeat = (d.type & COL_IS_REPEAT) != 0;
         v.is_const  = (d.type & COL_IS_CONST) != 0;
-        v.period    = has_repeat ? d.offsets_offset : 0u;
-        v.base_type = static_cast<ColType>(d.type & ~(COL_IS_CONST | COL_IS_REPEAT | COL_IS_NULLABLE));
+        v.base_type = static_cast<ColType>(d.type & ~(COL_IS_CONST | COL_IS_NULLABLE));
         v.null_map  = d.null_offset ? base + d.null_offset : nullptr;
-
-        if (has_repeat) {
-            // offsets_offset carries the period R, not a byte offset.
-            // For string columns, the R+1 wire offsets are embedded at data_offset.
-            v.row_count = v.period;
-            v.data      = base + d.data_offset;
-            if (v.base_type == COL_BYTES) {
-                v.offsets = reinterpret_cast<const uint32_t*>(v.data);
-                v.data    = v.data + (v.period + 1u) * sizeof(uint32_t);
-            } else {
-                v.offsets = nullptr;
-            }
-        } else {
-            v.row_count = v.is_const ? 1u : num_rows;
-            v.offsets   = d.offsets_offset ? reinterpret_cast<const uint32_t*>(base + d.offsets_offset) : nullptr;
-            v.data      = base + d.data_offset;
-        }
+        v.row_count = v.is_const ? 1u : num_rows;
+        v.offsets   = d.offsets_offset ? reinterpret_cast<const uint32_t*>(base + d.offsets_offset) : nullptr;
+        v.data      = base + d.data_offset;
         v.base = base;
         return v;
     }
