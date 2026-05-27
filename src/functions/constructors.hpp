@@ -27,12 +27,12 @@
 namespace ch {
 
 // I/O converters: these take raw text/bytes, not decoded geometry.
-inline raw_buffer st_geomfromtext_impl(std::span<const uint8_t> input) {
-  return write_ewkb(read_wkt(input));
+inline std::unique_ptr<Geometry> st_geomfromtext_impl(std::span<const uint8_t> input) {
+  return read_wkt(input);
 }
 
-inline raw_buffer st_geomfromwkb_impl(std::span<const uint8_t> input) {
-  return write_ewkb(read_wkb(input));
+inline std::unique_ptr<Geometry> st_geomfromwkb_impl(std::span<const uint8_t> input) {
+  return read_wkb(input);
 }
 
 inline std::unique_ptr<Geometry> st_extent_impl(std::unique_ptr<Geometry> geometry) {
