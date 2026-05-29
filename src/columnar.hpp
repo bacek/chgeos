@@ -137,7 +137,7 @@ struct ColView {
 
     bool is_null(uint32_t row) const noexcept {
         if (!null_map) return false;
-        return null_map[effective_row(row)] == 0xFFu;
+        return null_map[effective_row(row)] != 0u;
     }
 
     // For COL_BYTES (nullable or not) — excludes the trailing null terminator.
