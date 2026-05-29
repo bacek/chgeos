@@ -53,7 +53,6 @@
 #include <geos/geom/Polygon.h>
 
 #include "clickhouse.hpp"
-#include "arena.hpp"
 #include "col_prep_op.hpp"
 #include "functions/knn.hpp"
 #include "geom/wkb.hpp"
@@ -676,7 +675,6 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 
     auto cb = parse_columnar(ptr);
     uint32_t n = cb.num_rows;
-    g_arena.reset();
     constexpr size_t nargs = sizeof...(Args);
 
     std::array<ColView, nargs> cols;
@@ -744,9 +742,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     }
 
                     auto  pa     = PGF::prepare(geom_a.get());
-                    size_t m_arena = g_arena.mark();
                     for (uint32_t i = 0; i < n; ++i) {
-                        g_arena.reset(m_arena);
                         if (cols[1].is_null(i)) { res[i] = 0u; continue; }
                         auto span_b = cols[1].get_bytes(i);
                         if (bbox_op && !bbox_op(bbox_a, wkb_bbox(span_b))) {
@@ -790,9 +786,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     }
 
                     auto  pb     = PGF::prepare(geom_b.get());
-                    size_t m_arena = g_arena.mark();
                     for (uint32_t i = 0; i < n; ++i) {
-                        g_arena.reset(m_arena);
                         if (cols[0].is_null(i)) { res[i] = 0u; continue; }
                         auto span_a = cols[0].get_bytes(i);
                         if (bbox_op && !bbox_op(wkb_bbox(span_a), bbox_b)) {
@@ -814,9 +808,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     BBox  bbox_a = wkb_bbox(span_a);
                     auto  geom_a = read_wkb(span_a);
                     auto  pa     = PGF::prepare(geom_a.get());
-                    size_t m_arena = g_arena.mark();
                     for (uint32_t i = 0; i < n; ++i) {
-                        g_arena.reset(m_arena);
                         if (cols[1].is_null(i)) { res[i] = 0u; continue; }
                         auto   span_b = cols[1].get_bytes(i);
                         double dist   = col_get_arg<double>(cols[2], i);
@@ -834,9 +826,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     BBox  bbox_b = wkb_bbox(span_b);
                     auto  geom_b = read_wkb(span_b);
                     auto  pb     = PGF::prepare(geom_b.get());
-                    size_t m_arena = g_arena.mark();
                     for (uint32_t i = 0; i < n; ++i) {
-                        g_arena.reset(m_arena);
                         if (cols[0].is_null(i)) { res[i] = 0u; continue; }
                         auto   span_a = cols[0].get_bytes(i);
                         double dist   = col_get_arg<double>(cols[2], i);
@@ -850,9 +840,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             }
 
             // Baseline
-            size_t m_base = g_arena.mark();
             for (uint32_t i = 0; i < n; ++i) {
-                g_arena.reset(m_base);
                 if (any_null(i)) { res[i] = 0u; continue; }
                 if constexpr (nargs >= 2) {
                     if (bbox_op && !has_variant &&
@@ -870,9 +858,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 8u);
             col_write_fixed_header<double>(out, n, COL_FIXED64);
             double* res = reinterpret_cast<double*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
-            size_t m_base_d = g_arena.mark();
             for (uint32_t i = 0; i < n; ++i) {
-                g_arena.reset(m_base_d);
                 res[i] = any_null(i) ? std::numeric_limits<double>::quiet_NaN() : invoke(i);
             }
             return out;
@@ -882,9 +868,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 4u);
             col_write_fixed_header<int32_t>(out, n, COL_FIXED32);
             int32_t* res = reinterpret_cast<int32_t*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
-            size_t m_base_i = g_arena.mark();
             for (uint32_t i = 0; i < n; ++i) {
-                g_arena.reset(m_base_i);
                 res[i] = any_null(i) ? 0 : invoke(i);
             }
             return out;
@@ -894,9 +878,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 4u);
             col_write_fixed_header<uint32_t>(out, n, COL_FIXED32);
             uint32_t* res = reinterpret_cast<uint32_t*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
-            size_t m_base_u = g_arena.mark();
             for (uint32_t i = 0; i < n; ++i) {
-                g_arena.reset(m_base_u);
                 res[i] = any_null(i) ? 0u : invoke(i);
             }
             return out;
@@ -946,7 +928,6 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 __attribute__((export_name("st_knn")))
 inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
 {
-    ch::g_arena.reset();
     using KVPair   = std::pair<uint64_t, double>;
     using KNNResult = std::vector<KVPair>;
 

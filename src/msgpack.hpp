@@ -14,7 +14,6 @@
 #include <msgpack23/msgpack23.h>
 #include <vector>
 
-#include "arena.hpp"
 #include "clickhouse.hpp"
 #include "geom/chgeom.hpp"
 #include "geom/wkb.hpp"
@@ -109,7 +108,6 @@ void unpack_arg(msgpack23::Unpacker<B> &u,
 template <typename Ret, typename... Args>
 raw_buffer *impl_wrapper(raw_buffer *ptr, uint32_t num_rows,
                          Ret (*impl)(Args...)) {
-  ch::g_arena.reset();
   raw_buffer *buf = clickhouse_create_buffer(1024);
   try {
     auto raw = raw_buffer_back_inserter(buf);
