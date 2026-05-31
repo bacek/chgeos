@@ -33,3 +33,8 @@ Two data modes — run setup scripts once each:
 Wire protocol selection with "--wire-protocol" argument. Valid options:
 * "col" for COLUMNAR_V1
 * "cb" for ColumnBinary
+
+## Manual benchmark query running.
+
+Files are symlinked into ClickHouse's user_directory. For direct query via ClickHouse client use
+relative path to it like file('sf1/trip.parquet')
