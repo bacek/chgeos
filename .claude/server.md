@@ -38,3 +38,5 @@ Wire protocol selection with "--wire-protocol" argument. Valid options:
 
 Files are symlinked into ClickHouse's user_directory. For direct query via ClickHouse client use
 relative path to it like file('sf1/trip.parquet')
+
+Test server is running on port 19000.

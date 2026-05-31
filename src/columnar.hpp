@@ -23,9 +23,9 @@
 //
 // Offsets (COL_BYTES, nullable or not):
 //   offsets[0..row_count] are start-based (offsets[0]=0).
-//   Data is stored with explicit null terminators (CH 26.4+ ColumnString has none;
-//   the CH-side serializer adds them so WASM get_bytes() can use end-start-1).
-//   String i bytes: data[offsets[i] .. offsets[i+1]-2], len = offsets[i+1]-offsets[i]-1.
+//   No null terminators on the wire. ColumnString has no null terminators internally
+//   (see ColumnString.h); the wire matches exactly.
+//   String i bytes: data[offsets[i] .. offsets[i+1]-1], len = offsets[i+1]-offsets[i].
 //
 // SQL: ABI COLUMNAR_V1  (no serialization_format needed)
 
@@ -74,7 +74,7 @@ enum ColType : uint32_t {
     // data_offset    → recursive data block (layout determined by C++/CH declared type).
     // Recursive layout per type:
     //   scalar T:           T[N]  (packed, fixed width)
-    //   String:             uint32[N+1] offsets + bytes (null-terminated per COL_BYTES)
+    //   String:             uint32[N+1] offsets + bytes (no null terminator, same as COL_BYTES)
     //   vector<T> (Array):  uint32[N+1] outer_offsets → M total, then recursive(M, T)
     //   pair/tuple (Tuple): recursive(N, T0) ++ recursive(N, T1) ++ ...  (columnar)
     COL_COMPLEX     = 5,
@@ -139,12 +139,12 @@ struct ColView {
         return null_map[effective_row(row)] != 0u;
     }
 
-    // For COL_BYTES (nullable or not) — excludes the trailing null terminator.
+    // For COL_BYTES — exact byte span, no null terminator on wire.
     std::span<const uint8_t> get_bytes(uint32_t row) const noexcept {
         uint32_t idx   = effective_row(row);
         uint32_t start = offsets[idx];
         uint32_t end   = offsets[idx + 1];
-        uint32_t len   = (end > start + 1) ? end - start - 1 : 0u;
+        uint32_t len   = end - start;
         return {data + start, len};
     }
 
@@ -165,7 +165,7 @@ struct ColView {
         uint32_t elem_stride = offsets[1];
         if (elem_stride == 0) return false;
         if (offsets[row_count] != elem_stride * row_count) return false;
-        uint32_t wkb_len = elem_stride > 0 ? elem_stride - 1 : 0;
+        uint32_t wkb_len = elem_stride;
         uint32_t last_start = offsets[row_count - 1];
         return std::memcmp(data, data + last_start, wkb_len) == 0;
     }
@@ -332,7 +332,7 @@ void write_complex_data(raw_buffer* out, uint32_t n, GetVal get_val) {
             out->push_back(0u);
         }
     } else if constexpr (std::is_same_v<T, std::unique_ptr<geos::geom::Geometry>>) {
-        // Two-pass: collect WKBs, then offsets + bytes (null-terminated)
+        // Two-pass: collect WKBs, then offsets + bytes (no null terminator)
         std::vector<std::vector<uint8_t>> wkbs(n);
         for (uint32_t i = 0; i < n; ++i) {
             auto g = get_val(i);
@@ -341,12 +341,10 @@ void write_complex_data(raw_buffer* out, uint32_t n, GetVal get_val) {
         std::vector<uint32_t> offs(n + 1u);
         offs[0] = 0u;
         for (uint32_t i = 0; i < n; ++i)
-            offs[i + 1u] = offs[i] + static_cast<uint32_t>(wkbs[i].size()) + 1u;
+            offs[i + 1u] = offs[i] + static_cast<uint32_t>(wkbs[i].size());
         out->append(reinterpret_cast<const uint8_t*>(offs.data()), (n + 1u) * 4u);
-        for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t i = 0; i < n; ++i)
             out->append(wkbs[i].data(), static_cast<uint32_t>(wkbs[i].size()));
-            out->push_back(0u);
-        }
     } else if constexpr (is_vector_v<T>) {
         using ElemT = typename T::value_type;
         // Collect all rows, write outer offsets, flatten elements, recurse.
@@ -389,8 +387,17 @@ raw_buffer* write_complex_col(uint32_t n, GetVal get_val) {
     const uint32_t one = 1u;
     std::memcpy(p + 4, &one, 4);
     ColDescriptor d{};
-    d.type        = static_cast<uint32_t>(COL_COMPLEX);
-    d.data_offset = HEADER_BYTES + COL_DESC_BYTES;
+    d.type = static_cast<uint32_t>(COL_COMPLEX);
+    if constexpr (is_vector_v<Ret>) {
+        // Array: write_complex_data<vector<T>> appends outer_offs (n+1 u32s) first,
+        // then nested data.  Point the descriptor at each section.
+        d.offsets_offset = HEADER_BYTES + COL_DESC_BYTES;
+        d.data_offset    = HEADER_BYTES + COL_DESC_BYTES + (n + 1u) * 4u;
+    } else {
+        // Tuple/pair/scalar: no outer offsets, data starts immediately.
+        d.offsets_offset = 0u;
+        d.data_offset    = HEADER_BYTES + COL_DESC_BYTES;
+    }
     std::memcpy(p + HEADER_BYTES, &d, sizeof(d));
 
     std::vector<Ret> vals(n);
@@ -431,7 +438,7 @@ std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
         for (uint32_t j = outer_start; j < outer_end; ++j) {
             uint32_t s   = inner_offs[j];
             uint32_t e   = inner_offs[j + 1];
-            uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;  // strip null term
+            uint32_t len = e - s;
             std::span<const uint8_t> sp{chars + s, len};
             if constexpr (std::is_same_v<ElemT, std::span<const uint8_t>>)
                 result.push_back(sp);
@@ -449,7 +456,7 @@ std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
         for (uint32_t j = outer_start; j < outer_end; ++j) {
             uint32_t s   = inner_offs[j];
             uint32_t e   = inner_offs[j + 1];
-            uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
+            uint32_t len = e - s;
             result.push_back(std::string(reinterpret_cast<const char*>(chars + s), len));
         }
     }
