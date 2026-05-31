@@ -26,8 +26,10 @@ Data: `../spatial-bench/sf1/` (6M rows) and `../spatial-bench/sf10/` (60M rows).
 Two data modes — run setup scripts once each:
 ```bash
 ./scripts/link_bench_data.sh   # parquet mode: symlinks sf1/sf10 into user_files/
-./scripts/import_sf.sh ../ClickHouse/build/programs/clickhouse sf1   # native mode
-./scripts/import_sf.sh ../ClickHouse/build/programs/clickhouse sf10  # native mode
+./scripts/import_sf.sh --ch ../ClickHouse/build/programs/clickhouse --sf sf1   # native mode
+./scripts/import_sf.sh --ch ../ClickHouse/build/programs/clickhouse --sf sf10  # native mode
 ```
 
-Use `scripts/bench_sf.py`. See memory for invocation flags and rules.
+Wire protocol selection with "--wire-protocol" argument. Valid options:
+* "col" for COLUMNAR_V1
+* "cb" for ColumnBinary
