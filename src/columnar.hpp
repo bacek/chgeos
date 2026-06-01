@@ -10,13 +10,13 @@
 // │   num_rows : u32                                                         │
 // │   num_cols : u32                                                         │
 // ├──────────────────────────────────────────────────────────────────────────┤
-// │ ColDescriptor[num_cols] (20 bytes each)                                  │
-// │   type           : u32  — ColType | COL_IS_CONST flag                   │
-// │   null_offset    : u32  — offset to u8[row_count] null map; 0=no nulls  │
-// │   offsets_offset : u32  — offset to u32[row_count+1] start offsets;     │
+// │ ColDescriptor[num_cols] (40 bytes each)                                  │
+// │   type           : u64  — ColType | COL_IS_CONST flag                   │
+// │   null_offset    : u64  — offset to u8[row_count] null map; 0=no nulls  │
+// │   offsets_offset : u64  — offset to u32[row_count+1] start offsets;     │
 // │                           0 for fixed-width columns                      │
-// │   data_offset    : u32  — offset to raw column data                     │
-// │   data_size      : u32  — total bytes in the data block                 │
+// │   data_offset    : u64  — offset to raw column data                     │
+// │   data_size      : u64  — total bytes in the data block                 │
 // ├──────────────────────────────────────────────────────────────────────────┤
 // │ Data blocks at offsets described above                                   │
 // └──────────────────────────────────────────────────────────────────────────┘
@@ -106,16 +106,16 @@ template <typename T> inline constexpr bool is_complex_v =
 // ── Wire structs ──────────────────────────────────────────────────────────────
 
 struct ColDescriptor {
-    uint32_t type;
-    uint32_t null_offset;
-    uint32_t offsets_offset;
-    uint32_t data_offset;
-    uint32_t data_size;
+    uint64_t type;
+    uint64_t null_offset;
+    uint64_t offsets_offset;
+    uint64_t data_offset;
+    uint64_t data_size;
 };
-static_assert(sizeof(ColDescriptor) == 20);
+static_assert(sizeof(ColDescriptor) == 40);
 
 static constexpr uint32_t HEADER_BYTES  = 8;   // sizeof BufHeader
-static constexpr uint32_t COL_DESC_BYTES = 20;  // sizeof ColDescriptor
+static constexpr uint32_t COL_DESC_BYTES = 40;  // sizeof ColDescriptor
 
 // ── Input column accessor ─────────────────────────────────────────────────────
 
@@ -405,9 +405,9 @@ raw_buffer* write_complex_col(uint32_t n, GetVal get_val) {
     write_complex_data<Ret>(out, n,
         [&](uint32_t i) -> const Ret& { return vals[i]; });
 
-    // Patch data_size (at byte offset 16 within ColDescriptor = HEADER_BYTES+16 in buf)
-    uint32_t data_size = out->size() - (HEADER_BYTES + COL_DESC_BYTES);
-    std::memcpy(out->data() + HEADER_BYTES + 16u, &data_size, 4u);
+    // Patch data_size (at byte offset 32 within ColDescriptor = HEADER_BYTES+32 in buf)
+    uint64_t data_size = static_cast<uint64_t>(out->size() - (HEADER_BYTES + COL_DESC_BYTES));
+    std::memcpy(out->data() + HEADER_BYTES + 32u, &data_size, 8u);
     return out;
 }
 
@@ -523,7 +523,7 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
     }
     if (!found) return nullptr;
 
-    const uint32_t M = inner.null_offset;  // sub_row_count stored by CH serializer
+    const uint32_t M = static_cast<uint32_t>(inner.null_offset);  // sub_row_count stored by CH serializer
 
     // CH global discriminator order is alphabetical by type name:
     // 0=LineString, 1=MultiLineString, 2=MultiPolygon, 3=Point, 4=Polygon, 5=Ring
