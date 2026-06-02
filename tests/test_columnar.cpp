@@ -17,7 +17,7 @@ using namespace ch;
 struct ColData {
     uint32_t              col_type;   // ColType | COL_IS_CONST
     std::vector<uint8_t>  null_map;   // non-empty → nullable column
-    std::vector<uint32_t> offsets;    // non-empty → variable-width column
+    std::vector<uint64_t> offsets;    // non-empty → variable-width column
     std::vector<uint8_t>  data;
 };
 
@@ -34,9 +34,9 @@ static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
             pos += static_cast<uint32_t>(col.null_map.size());
         }
         if (!col.offsets.empty()) {
-            pos = (pos + 3u) & ~3u;   // 4-byte align
+            pos = (pos + 7u) & ~7u;   // 8-byte align
             b.offsets_off = pos;
-            pos += static_cast<uint32_t>(col.offsets.size()) * 4u;
+            pos += static_cast<uint32_t>(col.offsets.size()) * 8u;
         }
         b.data_off = pos;
         b.data_sz  = static_cast<uint32_t>(col.data.size());
@@ -65,7 +65,7 @@ static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
         if (!cols[i].null_map.empty())
             std::memcpy(p + bi[i].null_off, cols[i].null_map.data(), cols[i].null_map.size());
         if (!cols[i].offsets.empty())
-            std::memcpy(p + bi[i].offsets_off, cols[i].offsets.data(), cols[i].offsets.size() * 4);
+            std::memcpy(p + bi[i].offsets_off, cols[i].offsets.data(), cols[i].offsets.size() * 8);
         if (!cols[i].data.empty())
             std::memcpy(p + bi[i].data_off, cols[i].data.data(), cols[i].data.size());
     }
@@ -80,7 +80,7 @@ static ColData bytes_col(bool is_const, const std::vector<ch::Vector>& wkbs) {
     for (auto& w : wkbs) {
         col.data.insert(col.data.end(), w.begin(), w.end());
         col.data.push_back(0u);   // CH ColumnString null terminator
-        col.offsets.push_back(static_cast<uint32_t>(col.data.size()));
+        col.offsets.push_back(static_cast<uint64_t>(col.data.size()));
     }
     return col;
 }
@@ -100,7 +100,7 @@ static ColData null_bytes_col(bool is_const,
             col.data.insert(col.data.end(), wkbs[i].begin(), wkbs[i].end());
             col.data.push_back(0u);
         }
-        col.offsets.push_back(static_cast<uint32_t>(col.data.size()));
+        col.offsets.push_back(static_cast<uint64_t>(col.data.size()));
     }
     return col;
 }
@@ -380,23 +380,23 @@ static ColData complex_array_string_col(const std::vector<ch::Vector>& wkbs) {
     ColData col;
     col.col_type = static_cast<uint32_t>(COL_COMPLEX) | static_cast<uint32_t>(COL_IS_CONST);
 
-    // outer_offsets: uint32[2] = {0, M}
+    // outer_offsets: uint64[2] = {0, M}
     uint32_t M = static_cast<uint32_t>(wkbs.size());
     col.offsets = {0u, M};
 
     // data = inner_offsets[M+1] + bytes (null-terminated)
-    std::vector<uint32_t> inner_offs(M + 1u);
+    std::vector<uint64_t> inner_offs(M + 1u);
     inner_offs[0] = 0u;
     std::vector<uint8_t> chars;
     for (uint32_t j = 0; j < M; ++j) {
         chars.insert(chars.end(), wkbs[j].begin(), wkbs[j].end());
         chars.push_back(0u);
-        inner_offs[j + 1u] = static_cast<uint32_t>(chars.size());
+        inner_offs[j + 1u] = static_cast<uint64_t>(chars.size());
     }
     // Flatten inner_offs + chars into col.data
-    col.data.resize((M + 1u) * sizeof(uint32_t) + chars.size());
-    std::memcpy(col.data.data(), inner_offs.data(), (M + 1u) * sizeof(uint32_t));
-    std::memcpy(col.data.data() + (M + 1u) * sizeof(uint32_t), chars.data(), chars.size());
+    col.data.resize((M + 1u) * sizeof(uint64_t) + chars.size());
+    std::memcpy(col.data.data(), inner_offs.data(), (M + 1u) * sizeof(uint64_t));
+    std::memcpy(col.data.data() + (M + 1u) * sizeof(uint64_t), chars.data(), chars.size());
     return col;
 }
 
@@ -410,13 +410,13 @@ static std::string read_geom_col_wkt(raw_buffer* buf) {
     EXPECT_EQ(d.type & ~static_cast<uint32_t>(COL_IS_CONST),
               static_cast<uint32_t>(COL_BYTES));
     // Read first non-null row
-    const uint32_t* offs = reinterpret_cast<const uint32_t*>(buf->data() + d.offsets_offset);
+    const uint64_t* offs = reinterpret_cast<const uint64_t*>(buf->data() + d.offsets_offset);
     const uint8_t*  data = buf->data() + d.data_offset;
     for (uint32_t i = 0; i < num_rows; ++i) {
         if (d.null_offset && buf->data()[d.null_offset + i]) continue;
-        uint32_t s   = offs[i];
-        uint32_t e   = offs[i + 1];
-        uint32_t len = (e > s + 1u) ? e - s - 1u : 0u;
+        uint64_t s   = offs[i];
+        uint64_t e   = offs[i + 1];
+        uint64_t len = (e > s + 1u) ? e - s - 1u : 0u;
         auto g = read_wkb({data + s, len});
         return geom2wkt(g);
     }
@@ -466,14 +466,14 @@ static std::vector<std::pair<uint64_t, double>> read_pair_vec_row(raw_buffer* bu
     EXPECT_EQ(d.type, static_cast<uint32_t>(COL_COMPLEX));
 
     const uint8_t* data = buf->data() + d.data_offset;
-    // Layout: uint32[num_rows+1] outer_offs + uint64[M] keys + float64[M] dists
-    const uint32_t* outer_offs = reinterpret_cast<const uint32_t*>(data);
-    uint32_t M = outer_offs[num_rows];
-    const uint64_t* keys  = reinterpret_cast<const uint64_t*>(data + (num_rows + 1u) * 4u);
+    // Layout: uint64[num_rows+1] outer_offs + uint64[M] keys + float64[M] dists
+    const uint64_t* outer_offs = reinterpret_cast<const uint64_t*>(data);
+    uint64_t M = outer_offs[num_rows];
+    const uint64_t* keys  = reinterpret_cast<const uint64_t*>(data + (num_rows + 1u) * 8u);
     const double*   dists = reinterpret_cast<const double*>(keys + M);
 
-    uint32_t start = outer_offs[row];
-    uint32_t end   = outer_offs[row + 1u];
+    uint64_t start = outer_offs[row];
+    uint64_t end   = outer_offs[row + 1u];
     std::vector<std::pair<uint64_t, double>> result;
     for (uint32_t j = start; j < end; ++j)
         result.push_back({keys[j], dists[j]});
@@ -529,7 +529,7 @@ static raw_buffer* make_variant_point_buf(
     for (auto& p : pts) if (p) ++M;
 
     std::vector<uint8_t> discs(N);
-    std::vector<uint32_t> row_offs(N, 0u);
+    std::vector<uint64_t> row_offs(N, 0u);
     std::vector<double> xs, ys;
     uint32_t sub_idx = 0;
     for (uint32_t i = 0; i < N; ++i) {
@@ -548,10 +548,10 @@ static raw_buffer* make_variant_point_buf(
 
     uint32_t disc_off = pos;
     pos += N;
-    pos = (pos + 3u) & ~3u;  // align to 4
+    pos = (pos + 7u) & ~7u;  // align to 8
 
     uint32_t offs_off = pos;
-    pos += N * 4u;
+    pos += N * 8u;
 
     uint32_t data_off = pos;  // variant header
     // Header: uint32 K + K×{disc(1)+pad(3)+ColDescriptor(20)}
@@ -582,7 +582,7 @@ static raw_buffer* make_variant_point_buf(
 
     // Discriminators and row offsets
     std::memcpy(p + disc_off, discs.data(), N);
-    std::memcpy(p + offs_off, row_offs.data(), N * 4u);
+    std::memcpy(p + offs_off, row_offs.data(), N * 8u);
 
     if (M > 0u) {
         // Variant header: K=1
@@ -611,7 +611,7 @@ static raw_buffer* make_variant_linestring_buf(
     uint32_t N = static_cast<uint32_t>(lines.size());
 
     // Collect non-null entries and build outer_offsets[M+1] and flattened x/y.
-    std::vector<uint32_t> outer_offs;
+    std::vector<uint64_t> outer_offs;
     std::vector<double> xs, ys;
     uint32_t M = 0;
     outer_offs.push_back(0u);
@@ -619,11 +619,11 @@ static raw_buffer* make_variant_linestring_buf(
         if (ln) {
             ++M;
             for (auto& v : *ln) { xs.push_back(v.first); ys.push_back(v.second); }
-            outer_offs.push_back(static_cast<uint32_t>(xs.size()));
+            outer_offs.push_back(static_cast<uint64_t>(xs.size()));
         }
 
     std::vector<uint8_t> discs(N);
-    std::vector<uint32_t> row_offs(N, 0u);
+    std::vector<uint64_t> row_offs(N, 0u);
     uint32_t sub_idx = 0;
     for (uint32_t i = 0; i < N; ++i) {
         if (lines[i]) { discs[i] = 0u; row_offs[i] = sub_idx++; }
@@ -634,16 +634,16 @@ static raw_buffer* make_variant_linestring_buf(
 
     uint32_t pos = HEADER_BYTES + COL_DESC_BYTES;
     uint32_t disc_off = pos;  pos += N;
-    pos = (pos + 3u) & ~3u;
-    uint32_t offs_off = pos;  pos += N * 4u;
-    pos = (pos + 3u) & ~3u;
+    pos = (pos + 7u) & ~7u;
+    uint32_t offs_off = pos;  pos += N * 8u;
+    pos = (pos + 7u) & ~7u;
     uint32_t data_off = pos;  // variant header
     uint32_t k = (M > 0u) ? 1u : 0u;
     uint32_t hdr_bytes     = 4u + k * (4u + COL_DESC_BYTES);
     pos = data_off + hdr_bytes;
     // Inner sub-col: Array(Tuple) → outer_offs[M+1] at offsets_off, x/y at data_abs
-    uint32_t inner_offs_off = pos;  pos += (M + 1u) * 4u;
-    pos = (pos + 3u) & ~3u;
+    uint32_t inner_offs_off = pos;  pos += (M + 1u) * 8u;
+    pos = (pos + 7u) & ~7u;
     uint32_t inner_data_off = pos;
     uint32_t inner_data_sz  = V * 16u;  // x[V] + y[V]
     pos += inner_data_sz;
@@ -666,7 +666,7 @@ static raw_buffer* make_variant_linestring_buf(
     std::memcpy(p + HEADER_BYTES, &d, COL_DESC_BYTES);
 
     std::memcpy(p + disc_off, discs.data(), N);
-    std::memcpy(p + offs_off, row_offs.data(), N * 4u);
+    std::memcpy(p + offs_off, row_offs.data(), N * 8u);
 
     if (M > 0u) {
         std::memcpy(p + data_off, &k, 4u);
@@ -678,7 +678,7 @@ static raw_buffer* make_variant_linestring_buf(
         inner.data_offset    = inner_data_off;
         inner.data_size      = inner_data_sz;
         std::memcpy(p + data_off + 4u + 4u, &inner, COL_DESC_BYTES);
-        std::memcpy(p + inner_offs_off, outer_offs.data(), (M + 1u) * 4u);
+        std::memcpy(p + inner_offs_off, outer_offs.data(), (M + 1u) * 8u);
         std::memcpy(p + inner_data_off, xs.data(), V * 8u);
         std::memcpy(p + inner_data_off + V * 8u, ys.data(), V * 8u);
     }
