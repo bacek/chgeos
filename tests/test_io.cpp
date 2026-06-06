@@ -100,8 +100,8 @@ TEST(StAsEwkt, PolygonWithSrid) {
 // ── ST_GeomFromWKB ────────────────────────────────────────────────────────────
 
 TEST(StGeomFromWkb, RoundTrip) {
-  EXPECT_EQ(wkb2wkt(st_geomfromwkb_impl(wkt2wkb("POINT (1 2)"))), "POINT (1 2)");
-  EXPECT_EQ(wkb2wkt(st_geomfromwkb_impl(wkt2wkb("LINESTRING (0 0, 1 1, 2 2)"))),
+  EXPECT_EQ(geom2wkt(st_geomfromwkb_impl(wkt2wkb("POINT (1 2)"))), "POINT (1 2)");
+  EXPECT_EQ(geom2wkt(st_geomfromwkb_impl(wkt2wkb("LINESTRING (0 0, 1 1, 2 2)"))),
             "LINESTRING (0 0, 1 1, 2 2)");
 }
 

@@ -7,6 +7,7 @@
 #include "msgpack.hpp"
 #include "columnar.hpp"
 #include "col_binary.hpp"
+#include "buffers.hpp"
 #include "chain.hpp"
 
 extern "C" {
@@ -360,6 +361,81 @@ CH_UDF_CB(st_collect_agg)
 CH_UDF_CB(st_geomfromtext)
 CH_UDF_CB(st_geomfromwkb)
 
+// ── Buffers — predicates (2 geometry args) ────────────────────────────────────
+CH_UDF_BUFFERS(st_contains)
+CH_UDF_BUFFERS(st_intersects)
+CH_UDF_BUFFERS(st_touches)
+CH_UDF_BUFFERS(st_within)
+CH_UDF_BUFFERS(st_crosses)
+CH_UDF_BUFFERS(st_overlaps)
+CH_UDF_BUFFERS(st_disjoint)
+CH_UDF_BUFFERS(st_equals)
+CH_UDF_BUFFERS(st_covers)
+CH_UDF_BUFFERS(st_coveredby)
+CH_UDF_BUFFERS(st_containsproperly)
+CH_UDF_BUFFERS(st_dwithin)
+
+// ── Buffers — scalar Float64 ──────────────────────────────────────────────────
+CH_UDF_BUFFERS(st_x)
+CH_UDF_BUFFERS(st_y)
+CH_UDF_BUFFERS(st_z)
+CH_UDF_BUFFERS(st_area)
+CH_UDF_BUFFERS(st_length)
+CH_UDF_BUFFERS(st_perimeter)
+CH_UDF_BUFFERS(st_distance)
+CH_UDF_BUFFERS(st_hausdorffdistance)
+CH_UDF_BUFFERS(st_frechetdistance)
+CH_UDF_BUFFERS(st_hausdorffdistance_densify)
+CH_UDF_BUFFERS(st_frechetdistance_densify)
+
+// ── Buffers — scalar UInt8 ────────────────────────────────────────────────────
+CH_UDF_BUFFERS(st_isvalid)
+CH_UDF_BUFFERS(st_isempty)
+CH_UDF_BUFFERS(st_issimple)
+CH_UDF_BUFFERS(st_isring)
+
+// ── Buffers — scalar Int32 ────────────────────────────────────────────────────
+CH_UDF_BUFFERS(st_srid)
+CH_UDF_BUFFERS(st_npoints)
+CH_UDF_BUFFERS(st_numpoints)
+CH_UDF_BUFFERS(st_numgeometries)
+CH_UDF_BUFFERS(st_numinteriorrings)
+CH_UDF_BUFFERS(st_nrings)
+CH_UDF_BUFFERS(st_dimension)
+
+// ── Buffers — String output ───────────────────────────────────────────────────
+CH_UDF_BUFFERS(st_astext)
+CH_UDF_BUFFERS(st_asewkt)
+CH_UDF_BUFFERS(st_geometrytype)
+CH_UDF_BUFFERS(st_isvalidreason)
+CH_UDF_BUFFERS(st_relate)
+
+// ── Buffers — geometry output ─────────────────────────────────────────────────
+CH_UDF_BUFFERS(st_centroid)
+CH_UDF_BUFFERS(st_envelope)
+CH_UDF_BUFFERS(st_convexhull)
+CH_UDF_BUFFERS(st_extent)
+CH_UDF_BUFFERS(st_startpoint)
+CH_UDF_BUFFERS(st_endpoint)
+CH_UDF_BUFFERS(st_interiorpoint)
+CH_UDF_BUFFERS(st_makeline)
+CH_UDF_BUFFERS(st_intersection)
+CH_UDF_BUFFERS(st_union)
+CH_UDF_BUFFERS(st_difference)
+CH_UDF_BUFFERS(st_symdifference)
+CH_UDF_BUFFERS(st_collect)
+CH_UDF_BUFFERS(st_closestpoint)
+CH_UDF_BUFFERS(st_shortestline)
+CH_UDF_BUFFERS(st_makebox2d)
+CH_UDF_BUFFERS(st_expand)
+CH_UDF_BUFFERS(st_makevalid)
+CH_UDF_BUFFERS(st_boundary)
+CH_UDF_BUFFERS(st_unaryunion)
+CH_UDF_BUFFERS(st_reverse)
+CH_UDF_BUFFERS(st_normalize)
+CH_UDF_BUFFERS(st_setsrid)
+CH_UDF_BUFFERS(st_buffer)
+CH_UDF_BUFFERS(st_simplify)
 
 // ── st_knn: k-nearest-neighbour spatial query ─────────────────────────────────
 // COLUMNAR_V1: st_knn_col in columnar.hpp

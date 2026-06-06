@@ -52,7 +52,7 @@ static raw_buffer* make_chain_descriptor(const std::vector<std::string>& names) 
 struct ColData {
     uint32_t              col_type;
     std::vector<uint8_t>  null_map;
-    std::vector<uint32_t> offsets;
+    std::vector<uint64_t> offsets;
     std::vector<uint8_t>  data;
 };
 
@@ -68,9 +68,9 @@ static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
             pos += static_cast<uint32_t>(col.null_map.size());
         }
         if (!col.offsets.empty()) {
-            pos = (pos + 3u) & ~3u;
+            pos = (pos + 7u) & ~7u;
             b.offsets_off = pos;
-            pos += static_cast<uint32_t>(col.offsets.size()) * 4u;
+            pos += static_cast<uint32_t>(col.offsets.size()) * 8u;
         }
         b.data_off = pos;
         b.data_sz  = static_cast<uint32_t>(col.data.size());
@@ -99,7 +99,7 @@ static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
             std::memcpy(p + bi[i].null_off, cols[i].null_map.data(), cols[i].null_map.size());
         if (!cols[i].offsets.empty())
             std::memcpy(p + bi[i].offsets_off, cols[i].offsets.data(),
-                        cols[i].offsets.size() * 4);
+                        cols[i].offsets.size() * 8);
         if (!cols[i].data.empty())
             std::memcpy(p + bi[i].data_off, cols[i].data.data(), cols[i].data.size());
     }
@@ -121,8 +121,7 @@ static ColData bytes_col(bool is_const, const std::vector<Vector>& wkbs) {
     col.offsets.push_back(0u);
     for (auto& w : wkbs) {
         col.data.insert(col.data.end(), w.begin(), w.end());
-        col.data.push_back(0u);
-        col.offsets.push_back(static_cast<uint32_t>(col.data.size()));
+        col.offsets.push_back(static_cast<uint64_t>(col.data.size()));
     }
     return col;
 }
@@ -136,13 +135,9 @@ static ColData null_bytes_col(bool is_const,
     col.null_map = nulls;
     col.offsets.push_back(0u);
     for (size_t i = 0; i < wkbs.size(); ++i) {
-        if (nulls[i]) {
-            col.data.push_back(0u);
-        } else {
+        if (!nulls[i])
             col.data.insert(col.data.end(), wkbs[i].begin(), wkbs[i].end());
-            col.data.push_back(0u);
-        }
-        col.offsets.push_back(static_cast<uint32_t>(col.data.size()));
+        col.offsets.push_back(static_cast<uint64_t>(col.data.size()));
     }
     return col;
 }

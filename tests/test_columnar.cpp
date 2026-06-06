@@ -380,23 +380,28 @@ static ColData complex_array_string_col(const std::vector<ch::Vector>& wkbs) {
     ColData col;
     col.col_type = static_cast<uint32_t>(COL_COMPLEX) | static_cast<uint32_t>(COL_IS_CONST);
 
-    // outer_offsets: uint64[2] = {0, M}
-    uint32_t M = static_cast<uint32_t>(wkbs.size());
-    col.offsets = {0u, M};
+    // col_get_complex_array reads outer_offs from col.data, not col.offsets.
+    // Layout: outer_offs[N+1] + inner_offs[M+1] + chars
+    // N=1 (one const row), M=wkbs.size() (elements in that row)
+    const uint32_t N = 1u;
+    const uint32_t M = static_cast<uint32_t>(wkbs.size());
 
-    // data = inner_offsets[M+1] + bytes (null-terminated)
+    std::vector<uint64_t> outer_offs = {0u, static_cast<uint64_t>(M)};
+
     std::vector<uint64_t> inner_offs(M + 1u);
     inner_offs[0] = 0u;
     std::vector<uint8_t> chars;
     for (uint32_t j = 0; j < M; ++j) {
         chars.insert(chars.end(), wkbs[j].begin(), wkbs[j].end());
-        chars.push_back(0u);
         inner_offs[j + 1u] = static_cast<uint64_t>(chars.size());
     }
-    // Flatten inner_offs + chars into col.data
-    col.data.resize((M + 1u) * sizeof(uint64_t) + chars.size());
-    std::memcpy(col.data.data(), inner_offs.data(), (M + 1u) * sizeof(uint64_t));
-    std::memcpy(col.data.data() + (M + 1u) * sizeof(uint64_t), chars.data(), chars.size());
+
+    const size_t outer_sz = (N + 1u) * sizeof(uint64_t);
+    const size_t inner_sz = (M + 1u) * sizeof(uint64_t);
+    col.data.resize(outer_sz + inner_sz + chars.size());
+    std::memcpy(col.data.data(), outer_offs.data(), outer_sz);
+    std::memcpy(col.data.data() + outer_sz, inner_offs.data(), inner_sz);
+    std::memcpy(col.data.data() + outer_sz + inner_sz, chars.data(), chars.size());
     return col;
 }
 
@@ -416,7 +421,7 @@ static std::string read_geom_col_wkt(raw_buffer* buf) {
         if (d.null_offset && buf->data()[d.null_offset + i]) continue;
         uint64_t s   = offs[i];
         uint64_t e   = offs[i + 1];
-        uint64_t len = (e > s + 1u) ? e - s - 1u : 0u;
+        uint64_t len = e - s;
         auto g = read_wkb({data + s, len});
         return geom2wkt(g);
     }
@@ -674,8 +679,8 @@ static raw_buffer* make_variant_linestring_buf(
         ColDescriptor inner{};
         inner.type           = static_cast<uint32_t>(COL_COMPLEX);
         inner.null_offset    = M;
-        inner.offsets_offset = inner_offs_off;
-        inner.data_offset    = inner_data_off;
+        inner.offsets_offset = 0;  // unused; decoder reads outer_offs from data_offset
+        inner.data_offset    = inner_offs_off;  // outer_offs[M+1] here, x/y follow immediately
         inner.data_size      = inner_data_sz;
         std::memcpy(p + data_off + 4u + 4u, &inner, COL_DESC_BYTES);
         std::memcpy(p + inner_offs_off, outer_offs.data(), (M + 1u) * 8u);

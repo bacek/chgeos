@@ -262,29 +262,20 @@ struct ColBytesWriter {
 
     void push_null() {
         uint32_t i = rows_written++;
-        // Read current end offset before any append that might realloc.
         uint64_t prev;
         std::memcpy(&prev, out->data() + offs_base + i * 8u, 8);
-        // Append one null-terminator byte (empty string in CH ColumnString layout).
-        out->push_back(0);
-        // Re-fetch pointer after potential realloc.
         uint8_t* p = out->data();
         if (nullable) p[null_base + i] = 1;
-        uint64_t next = prev + 1u;
-        std::memcpy(p + offs_base + (i + 1u) * 8u, &next, 8);
+        std::memcpy(p + offs_base + (i + 1u) * 8u, &prev, 8);
     }
 
     void push_bytes(std::span<const uint8_t> bytes) {
         uint32_t i = rows_written++;
         uint64_t len = static_cast<uint64_t>(bytes.size());
-        // Compute next offset before any realloc.
         uint64_t prev;
         std::memcpy(&prev, out->data() + offs_base + i * 8u, 8);
-        uint64_t next = prev + len + 1u;   // +1 for null terminator
-        // Append data + null terminator.
+        uint64_t next = prev + len;
         out->append(bytes.data(), static_cast<uint32_t>(len));
-        out->push_back(0);
-        // Re-fetch pointer after potential realloc.
         uint8_t* p = out->data();
         if (nullable) p[null_base + i] = 0;
         std::memcpy(p + offs_base + (i + 1u) * 8u, &next, 8);
@@ -318,19 +309,17 @@ void write_complex_data(raw_buffer* out, uint32_t n, GetVal get_val) {
             out->append(reinterpret_cast<const uint8_t*>(&v), sizeof(T));
         }
     } else if constexpr (std::is_same_v<T, std::string>) {
-        // Two-pass: offsets[n+1] + bytes (null-terminated)
+        // Two-pass: offsets[n+1] + bytes (no null terminators)
         std::vector<std::string> strs(n);
         for (uint32_t i = 0; i < n; ++i) strs[i] = get_val(i);
         std::vector<uint64_t> offs(n + 1u);
         offs[0] = 0u;
         for (uint32_t i = 0; i < n; ++i)
-            offs[i + 1u] = offs[i] + static_cast<uint64_t>(strs[i].size()) + 1u;
+            offs[i + 1u] = offs[i] + static_cast<uint64_t>(strs[i].size());
         out->append(reinterpret_cast<const uint8_t*>(offs.data()), (n + 1u) * 8u);
-        for (uint32_t i = 0; i < n; ++i) {
+        for (uint32_t i = 0; i < n; ++i)
             out->append(reinterpret_cast<const uint8_t*>(strs[i].data()),
                         static_cast<uint32_t>(strs[i].size()));
-            out->push_back(0u);
-        }
     } else if constexpr (std::is_same_v<T, std::unique_ptr<geos::geom::Geometry>>) {
         // Two-pass: collect WKBs, then offsets + bytes (no null terminator)
         std::vector<std::vector<uint8_t>> wkbs(n);
@@ -389,10 +378,9 @@ raw_buffer* write_complex_col(uint32_t n, GetVal get_val) {
     ColDescriptor d{};
     d.type = static_cast<uint32_t>(COL_COMPLEX);
     if constexpr (is_vector_v<Ret>) {
-        // Array: write_complex_data<vector<T>> appends outer_offs (n+1 u32s) first,
-        // then nested data.  Point the descriptor at each section.
-        d.offsets_offset = HEADER_BYTES + COL_DESC_BYTES;
-        d.data_offset    = HEADER_BYTES + COL_DESC_BYTES + (n + 1u) * 8u;
+        // Array: outer uint64[n+1] offsets at data_offset, nested data follows immediately.
+        d.offsets_offset = 0;
+        d.data_offset    = HEADER_BYTES + COL_DESC_BYTES;
     } else {
         // Tuple/pair/scalar: no outer offsets, data starts immediately.
         d.offsets_offset = 0u;
@@ -421,20 +409,22 @@ raw_buffer* write_complex_col(uint32_t n, GetVal get_val) {
 
 template <typename ElemT>
 std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
-    uint32_t idx         = col.effective_row(row);
-    uint64_t outer_start = col.offsets[idx];
-    uint64_t outer_end   = col.offsets[idx + 1];
-    uint64_t M_total     = col.offsets[col.row_count];  // row_count = 1/R/N per mode
-    uint64_t count       = outer_end - outer_start;
+    uint32_t idx                = col.effective_row(row);
+    const uint64_t* outer_offs  = reinterpret_cast<const uint64_t*>(col.data);
+    uint64_t outer_start        = outer_offs[idx];
+    uint64_t outer_end          = outer_offs[idx + 1];
+    uint64_t M_total            = outer_offs[col.row_count];
+    uint64_t count              = outer_end - outer_start;
+    const uint8_t* inner_data   = col.data + (col.row_count + 1u) * sizeof(uint64_t);
 
     std::vector<ElemT> result;
     result.reserve(count);
 
     if constexpr (std::is_same_v<ElemT, std::span<const uint8_t>> ||
                   std::is_same_v<ElemT, std::unique_ptr<geos::geom::Geometry>>) {
-        // Array(String / WKB): data = [uint64[M_total+1] inner_offs][bytes]
-        const uint64_t* inner_offs = reinterpret_cast<const uint64_t*>(col.data);
-        const uint8_t*  chars      = col.data + (M_total + 1u) * sizeof(uint64_t);
+        // Array(String / WKB): inner_data = [uint64[M_total+1] inner_offs][bytes]
+        const uint64_t* inner_offs = reinterpret_cast<const uint64_t*>(inner_data);
+        const uint8_t*  chars      = inner_data + (M_total + 1u) * sizeof(uint64_t);
         for (uint64_t j = outer_start; j < outer_end; ++j) {
             uint64_t s   = inner_offs[j];
             uint64_t e   = inner_offs[j + 1];
@@ -446,13 +436,13 @@ std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
                 result.push_back(read_wkb(sp));
         }
     } else if constexpr (std::is_arithmetic_v<ElemT>) {
-        // Array(numeric): data = ElemT[M_total] packed
-        const ElemT* data_ptr = reinterpret_cast<const ElemT*>(col.data);
+        // Array(numeric): inner_data = ElemT[M_total] packed
+        const ElemT* data_ptr = reinterpret_cast<const ElemT*>(inner_data);
         for (uint32_t j = outer_start; j < outer_end; ++j)
             result.push_back(data_ptr[j]);
     } else if constexpr (std::is_same_v<ElemT, std::string>) {
-        const uint64_t* inner_offs = reinterpret_cast<const uint64_t*>(col.data);
-        const uint8_t*  chars      = col.data + (M_total + 1u) * sizeof(uint64_t);
+        const uint64_t* inner_offs = reinterpret_cast<const uint64_t*>(inner_data);
+        const uint8_t*  chars      = inner_data + (M_total + 1u) * sizeof(uint64_t);
         for (uint64_t j = outer_start; j < outer_end; ++j) {
             uint64_t s   = inner_offs[j];
             uint64_t e   = inner_offs[j + 1];
@@ -470,7 +460,7 @@ std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
 //
 // For each sub-column:
 //   inner.null_offset = M (sub_row_count, stored by CH serializer)
-//   inner.offsets_offset = absolute position of outer uint32 offsets (0 for Tuple)
+//   inner.offsets_offset = 0 (unused; Array outer offsets are at inner.data_offset)
 //   inner.data_offset    = absolute position of element data
 //
 // Sub-column layouts (COL_COMPLEX recursive):
@@ -535,21 +525,21 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
         }
         case 0:    // LineString: Array(Tuple(Float64, Float64))
         case 5: {  // Ring: same wire format, different geometry type
-            const auto* lo = reinterpret_cast<const uint64_t*>(col.base + inner.offsets_offset);
+            const auto* lo   = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset);
             const uint32_t V = static_cast<uint32_t>(lo[M]);
-            const auto* x = reinterpret_cast<const double*>(col.base + inner.data_offset);
-            const auto* y = x + V;
+            const auto* x    = reinterpret_cast<const double*>(col.base + inner.data_offset + (M + 1u) * 8u);
+            const auto* y    = x + V;
             auto cs = make_cs(x, y, lo[off], lo[off + 1]);
             if (disc == 5)
                 return factory->createLinearRing(std::move(cs));
             return factory->createLineString(std::move(cs));
         }
         case 4: {  // Polygon: Array(Array(Tuple)) — first ring=exterior, rest=holes
-            const auto* ring_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.offsets_offset);
+            const auto* ring_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset);
             const uint32_t R     = static_cast<uint32_t>(ring_lo[M]);
-            const auto* vert_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset);
+            const auto* vert_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset + (M + 1u) * 8u);
             const uint32_t V     = static_cast<uint32_t>(vert_lo[R]);
-            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (R + 1u) * 8u);
+            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (M + 1u) * 8u + (R + 1u) * 8u);
             const auto* y        = x + V;
             const uint32_t rs    = ring_lo[off];
             const uint32_t re    = ring_lo[off + 1];
@@ -561,13 +551,13 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
             return factory->createPolygon(std::move(exterior), std::move(holes));
         }
         case 2: {  // MultiPolygon: Array(Array(Array(Tuple)))
-            const auto* poly_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.offsets_offset);
+            const auto* poly_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset);
             const uint32_t P     = static_cast<uint32_t>(poly_lo[M]);
-            const auto* ring_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset);
+            const auto* ring_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset + (M + 1u) * 8u);
             const uint32_t R     = static_cast<uint32_t>(ring_lo[P]);
-            const auto* vert_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset + (P + 1u) * 8u);
+            const auto* vert_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset + (M + 1u) * 8u + (P + 1u) * 8u);
             const uint32_t V     = static_cast<uint32_t>(vert_lo[R]);
-            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (P + 1u) * 8u + (R + 1u) * 8u);
+            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (M + 1u) * 8u + (P + 1u) * 8u + (R + 1u) * 8u);
             const auto* y        = x + V;
             const uint32_t ps    = poly_lo[off];
             const uint32_t pe    = poly_lo[off + 1];
@@ -586,11 +576,11 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
             return factory->createMultiPolygon(std::move(polys));
         }
         case 1: {  // MultiLineString: Array(Array(Tuple)) — same wire layout as Polygon
-            const auto* line_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.offsets_offset);
+            const auto* line_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset);
             const uint32_t R     = static_cast<uint32_t>(line_lo[M]);
-            const auto* vert_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset);
+            const auto* vert_lo  = reinterpret_cast<const uint64_t*>(col.base + inner.data_offset + (M + 1u) * 8u);
             const uint32_t V     = static_cast<uint32_t>(vert_lo[R]);
-            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (R + 1u) * 8u);
+            const auto* x        = reinterpret_cast<const double*>(col.base + inner.data_offset + (M + 1u) * 8u + (R + 1u) * 8u);
             const auto* y        = x + V;
             const uint32_t ls_s  = line_lo[off];
             const uint32_t ls_e  = line_lo[off + 1];

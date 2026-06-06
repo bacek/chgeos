@@ -48,66 +48,49 @@ static raw_buffer* make_col_buf(uint32_t num_rows, uint32_t num_cols,
     std::vector<uint32_t> desc_offsets; // byte offset of each ColDescriptor in the final buffer
     desc_offsets.reserve(num_cols);
 
-    uint32_t header_end = 8u + num_cols * 20u;
+    uint32_t header_end = 8u + num_cols * 40u;
     uint32_t data_pos = header_end;
 
-    std::vector<uint8_t> all_descs;
-    all_descs.resize(num_cols * 20);
-
+    // First pass: compute layout offsets.
+    struct DescInfo { uint32_t off_off, data_off; };
+    std::vector<DescInfo> info(num_cols);
     for (uint32_t i = 0; i < num_cols; ++i) {
         uint32_t type = col_types[i];
-        uint32_t off_off = 0, data_off = 0;
-
         if ((type & ~COL_IS_NULLABLE) == COL_BYTES || type == COL_COMPLEX) {
-            off_off = data_pos;
-            data_pos += (col_offsets[i] > 0 ? col_offsets[i] : (num_rows + 1)) * 4u;
-            // Pad to align
-            data_pos = (data_pos + 3u) & ~3u;
-            data_off = data_pos;
+            info[i].off_off = data_pos;
+            data_pos += (col_offsets[i] > 0 ? col_offsets[i] : (num_rows + 1)) * 8u;
+            data_pos = (data_pos + 7u) & ~7u;
+            info[i].data_off = data_pos;
             data_pos += static_cast<uint32_t>(col_data[i].size());
         } else {
-            data_off = data_pos;
+            info[i].off_off = 0;
+            info[i].data_off = data_pos;
             data_pos += static_cast<uint32_t>(col_data[i].size());
         }
-
-        uint32_t d_off = static_cast<uint32_t>(all_descs.size());
-        write_le32(all_descs, type);
-        write_le32(all_descs, 0u); // null_offset
-        write_le32(all_descs, off_off);
-        write_le32(all_descs, data_off);
-        write_le32(all_descs, static_cast<uint32_t>(col_data[i].size()));
     }
 
+    // Write ColDescriptors.
+    std::vector<uint8_t> all_descs;
+    for (uint32_t i = 0; i < num_cols; ++i) {
+        uint32_t type = col_types[i];
+        write_le64(all_descs, type);
+        write_le64(all_descs, 0u); // null_offset
+        write_le64(all_descs, info[i].off_off);
+        write_le64(all_descs, info[i].data_off);
+        write_le64(all_descs, static_cast<uint64_t>(col_data[i].size()));
+    }
     buf->append(all_descs.data(), static_cast<uint32_t>(all_descs.size()));
 
-    // Data area: for each column, write offsets (if any) then data
+    // Data area: for each column, write u64 offsets (if any) then data.
     for (uint32_t i = 0; i < num_cols; ++i) {
         uint32_t type = col_types[i];
         if ((type & ~COL_IS_NULLABLE) == COL_BYTES || type == COL_COMPLEX) {
             uint32_t num_offs = col_offsets[i] > 0 ? col_offsets[i] : (num_rows + 1);
             for (uint32_t j = 0; j < num_offs; ++j)
-                write_le32(*buf, 0); // placeholder, fixed below
+                write_le64(*buf, 0u); // placeholder; caller fills or offsets are 0
             buf->append(col_data[i].data(), static_cast<uint32_t>(col_data[i].size()));
         } else {
             buf->append(col_data[i].data(), static_cast<uint32_t>(col_data[i].size()));
-        }
-    }
-
-    // Patch offsets into the data area
-    uint8_t* data_ptr = buf->data() + header_end;
-    uint32_t pos = 0;
-    for (uint32_t i = 0; i < num_cols; ++i) {
-        uint32_t type = col_types[i];
-        if ((type & ~COL_IS_NULLABLE) == COL_BYTES || type == COL_COMPLEX) {
-            uint32_t num_offs = col_offsets[i] > 0 ? col_offsets[i] : (num_rows + 1);
-            uint32_t* off_ptr = reinterpret_cast<uint32_t*>(data_ptr + pos);
-            for (uint32_t j = 0; j < num_offs; ++j)
-                off_ptr[j] = static_cast<uint32_t>(col_offsets[j] > 0 ? col_offsets[j] : 0);
-            pos += num_offs * 4u;
-            pos += static_cast<uint32_t>(col_data[i].size());
-            pos = (pos + 3u) & ~3u;
-        } else {
-            pos += static_cast<uint32_t>(col_data[i].size());
         }
     }
 
@@ -124,11 +107,11 @@ static raw_buffer* make_col_fixed(uint32_t num_rows, uint8_t col_type,
     write_le32(*buf, 1u);
 
     // ColDescriptor
-    write_le32(*buf, col_type);
-    write_le32(*buf, 0u);     // null_offset
-    write_le32(*buf, 0u);     // offsets_offset
-    write_le32(*buf, 8u + 20u); // data_offset
-    write_le32(*buf, static_cast<uint32_t>(data.size()));
+    write_le64(*buf, col_type);
+    write_le64(*buf, 0u);     // null_offset
+    write_le64(*buf, 0u);     // offsets_offset
+    write_le64(*buf, 8u + 40u); // data_offset
+    write_le64(*buf, static_cast<uint64_t>(data.size()));
 
     buf->append(data.data(), static_cast<uint32_t>(data.size()));
     return buf;
@@ -145,18 +128,18 @@ static raw_buffer* make_col_string(uint32_t num_rows,
     write_le32(*buf, num_rows);
     write_le32(*buf, 1u);
 
-    uint32_t data_offset = 8u + 20u + (num_rows + 1u) * 4u;
+    uint64_t data_offset = 8u + 40u + (num_rows + 1u) * 8u;
 
     // ColDescriptor
-    write_le32(*buf, COL_BYTES);
-    write_le32(*buf, 0u);     // null_offset
-    write_le32(*buf, 8u + 20u); // offsets_offset
-    write_le32(*buf, data_offset); // data_offset
-    write_le32(*buf, static_cast<uint32_t>(col_data.size()));
+    write_le64(*buf, COL_BYTES);
+    write_le64(*buf, 0u);     // null_offset
+    write_le64(*buf, 8u + 40u); // offsets_offset
+    write_le64(*buf, data_offset); // data_offset
+    write_le64(*buf, static_cast<uint64_t>(col_data.size()));
 
     // Offsets
     for (uint32_t o : col_offsets)
-        write_le32(*buf, o);
+        write_le64(*buf, static_cast<uint64_t>(o));
 
     // Data
     buf->append(col_data.data(), static_cast<uint32_t>(col_data.size()));
@@ -175,21 +158,19 @@ static raw_buffer* make_col_geom_buf(uint32_t num_rows,
     write_le32(*buf, num_rows);
     write_le32(*buf, 2u);
 
-    // Build data for each column — returns (offsets u32[], raw-wkb-bytes)
     auto build_col = [&](const std::vector<ch::Vector>& wkbs, bool is_const) {
         uint32_t rows = is_const ? 1u : num_rows;
-        std::vector<uint32_t> offsets;
+        std::vector<uint64_t> offsets;
         offsets.reserve(rows + 1);
         offsets.push_back(0);
         for (uint32_t i = 0; i < rows; ++i) {
             const auto& wkb = wkbs[i % wkbs.size()];
-            offsets.push_back(static_cast<uint32_t>(offsets.back() + wkb.size() + 1u)); // +1 null term
+            offsets.push_back(offsets.back() + wkb.size());
         }
         std::vector<uint8_t> data;
         for (uint32_t i = 0; i < rows; ++i) {
             const auto& wkb = wkbs[i % wkbs.size()];
             data.insert(data.end(), wkb.begin(), wkb.end());
-            data.push_back(0); // null terminator
         }
         return std::make_pair(offsets, data);
     };
@@ -197,28 +178,28 @@ static raw_buffer* make_col_geom_buf(uint32_t num_rows,
     auto [offs0, data0] = build_col(col0_wkbs, const_col_idx == 0);
     auto [offs1, data1] = build_col(col1_wkbs, const_col_idx == 1);
 
-    uint32_t offsets0_off = 8u + 2u * 20u;  // header + 2 descriptors
-    uint32_t offsets1_off = offsets0_off + static_cast<uint32_t>(offs0.size()) * 4u;
-    uint32_t data0_off = offsets1_off + static_cast<uint32_t>(offs1.size()) * 4u;
-    uint32_t data1_off = data0_off + static_cast<uint32_t>(data0.size());
+    uint64_t offsets0_off = 8u + 2u * 40u;  // header + 2 descriptors
+    uint64_t offsets1_off = offsets0_off + offs0.size() * 8u;
+    uint64_t data0_off    = offsets1_off + offs1.size() * 8u;
+    uint64_t data1_off    = data0_off + data0.size();
 
     // ColDescriptor col0
-    write_le32(*buf, COL_BYTES | (const_col_idx == 0 ? COL_IS_CONST : 0u));
-    write_le32(*buf, 0u);
-    write_le32(*buf, offsets0_off);
-    write_le32(*buf, data0_off);
-    write_le32(*buf, static_cast<uint32_t>(data0.size()));
+    write_le64(*buf, COL_BYTES | (const_col_idx == 0 ? COL_IS_CONST : 0u));
+    write_le64(*buf, 0u);
+    write_le64(*buf, offsets0_off);
+    write_le64(*buf, data0_off);
+    write_le64(*buf, data0.size());
 
     // ColDescriptor col1
-    write_le32(*buf, COL_BYTES | (const_col_idx == 1 ? COL_IS_CONST : 0u));
-    write_le32(*buf, 0u);
-    write_le32(*buf, offsets1_off);
-    write_le32(*buf, data1_off);
-    write_le32(*buf, static_cast<uint32_t>(data1.size()));
+    write_le64(*buf, COL_BYTES | (const_col_idx == 1 ? COL_IS_CONST : 0u));
+    write_le64(*buf, 0u);
+    write_le64(*buf, offsets1_off);
+    write_le64(*buf, data1_off);
+    write_le64(*buf, data1.size());
 
     // Offsets + data
-    for (uint32_t o : offs0) write_le32(*buf, o);
-    for (uint32_t o : offs1) write_le32(*buf, o);
+    for (uint64_t o : offs0) write_le64(*buf, o);
+    for (uint64_t o : offs1) write_le64(*buf, o);
     buf->append(data0.data(), static_cast<uint32_t>(data0.size()));
     buf->append(data1.data(), static_cast<uint32_t>(data1.size()));
 
@@ -237,20 +218,18 @@ static raw_buffer* make_col_geom3(uint32_t num_rows,
     write_le32(*buf, num_rows);
     write_le32(*buf, 3u);
 
-    // Build geom column
     auto build_geom_col = [&](const std::vector<ch::Vector>& wkbs, bool is_const) {
         uint32_t rows = is_const ? 1u : num_rows;
-        std::vector<uint32_t> offsets;
+        std::vector<uint64_t> offsets;
         offsets.push_back(0);
         for (uint32_t i = 0; i < rows; ++i) {
             const auto& wkb = wkbs[i % wkbs.size()];
-            offsets.push_back(static_cast<uint32_t>(offsets.back() + wkb.size() + 1u));
+            offsets.push_back(offsets.back() + wkb.size());
         }
         std::vector<uint8_t> data;
         for (uint32_t i = 0; i < rows; ++i) {
             const auto& wkb = wkbs[i % wkbs.size()];
             data.insert(data.end(), wkb.begin(), wkb.end());
-            data.push_back(0);
         }
         return std::make_pair(offsets, data);
     };
@@ -258,36 +237,36 @@ static raw_buffer* make_col_geom3(uint32_t num_rows,
     auto [offs0, data0] = build_geom_col(col0_wkbs, const_col_idx == 0);
     auto [offs1, data1] = build_geom_col(col1_wkbs, const_col_idx == 1);
 
-    uint32_t offsets0_off = 8u + 60u;
-    uint32_t offsets1_off = offsets0_off + static_cast<uint32_t>(offs0.size()) * 4u;
-    uint32_t data0_off = offsets1_off + static_cast<uint32_t>(offs1.size()) * 4u;
-    uint32_t data1_off = data0_off + static_cast<uint32_t>(data0.size());
-    uint32_t data2_off = data1_off + static_cast<uint32_t>(data1.size());
+    uint64_t offsets0_off = 8u + 120u;  // header + 3 descriptors × 40
+    uint64_t offsets1_off = offsets0_off + offs0.size() * 8u;
+    uint64_t data0_off    = offsets1_off + offs1.size() * 8u;
+    uint64_t data1_off    = data0_off + data0.size();
+    uint64_t data2_off    = data1_off + data1.size();
 
     // ColDescriptor col0
-    write_le32(*buf, COL_BYTES | (const_col_idx == 0 ? COL_IS_CONST : 0u));
-    write_le32(*buf, 0u);
-    write_le32(*buf, offsets0_off);
-    write_le32(*buf, data0_off);
-    write_le32(*buf, static_cast<uint32_t>(data0.size()));
+    write_le64(*buf, COL_BYTES | (const_col_idx == 0 ? COL_IS_CONST : 0u));
+    write_le64(*buf, 0u);
+    write_le64(*buf, offsets0_off);
+    write_le64(*buf, data0_off);
+    write_le64(*buf, data0.size());
 
     // ColDescriptor col1
-    write_le32(*buf, COL_BYTES | (const_col_idx == 1 ? COL_IS_CONST : 0u));
-    write_le32(*buf, 0u);
-    write_le32(*buf, offsets1_off);
-    write_le32(*buf, data1_off);
-    write_le32(*buf, static_cast<uint32_t>(data1.size()));
+    write_le64(*buf, COL_BYTES | (const_col_idx == 1 ? COL_IS_CONST : 0u));
+    write_le64(*buf, 0u);
+    write_le64(*buf, offsets1_off);
+    write_le64(*buf, data1_off);
+    write_le64(*buf, data1.size());
 
     // ColDescriptor col2 (fixed64, no offsets)
-    write_le32(*buf, COL_FIXED64);
-    write_le32(*buf, 0u);
-    write_le32(*buf, 0u);
-    write_le32(*buf, data2_off);
-    write_le32(*buf, static_cast<uint32_t>(col2_vals.size() * 8u));
+    write_le64(*buf, COL_FIXED64);
+    write_le64(*buf, 0u);
+    write_le64(*buf, 0u);
+    write_le64(*buf, data2_off);
+    write_le64(*buf, col2_vals.size() * 8u);
 
     // Offsets + data
-    for (uint32_t o : offs0) write_le32(*buf, o);
-    for (uint32_t o : offs1) write_le32(*buf, o);
+    for (uint64_t o : offs0) write_le64(*buf, o);
+    for (uint64_t o : offs1) write_le64(*buf, o);
     buf->append(data0.data(), static_cast<uint32_t>(data0.size()));
     buf->append(data1.data(), static_cast<uint32_t>(data1.size()));
     for (auto v : col2_vals)
@@ -338,23 +317,23 @@ TEST(ColumnarParse, MultiCol) {
     write_le32(*buf, 3u); // num_cols
 
     // ColDescriptor col0
-    write_le32(*buf, COL_FIXED8);
-    write_le32(*buf, 0u);
-    write_le32(*buf, 0u);
-    write_le32(*buf, 8u + 60u);
-    write_le32(*buf, 2u);
+    write_le64(*buf, COL_FIXED8);
+    write_le64(*buf, 0u);
+    write_le64(*buf, 0u);
+    write_le64(*buf, 8u + 120u);
+    write_le64(*buf, 2u);
     // ColDescriptor col1
-    write_le32(*buf, COL_FIXED8);
-    write_le32(*buf, 0u);
-    write_le32(*buf, 0u);
-    write_le32(*buf, 8u + 60u + 2u);
-    write_le32(*buf, 3u);
+    write_le64(*buf, COL_FIXED8);
+    write_le64(*buf, 0u);
+    write_le64(*buf, 0u);
+    write_le64(*buf, 8u + 120u + 2u);
+    write_le64(*buf, 3u);
     // ColDescriptor col2
-    write_le32(*buf, COL_FIXED8);
-    write_le32(*buf, 0u);
-    write_le32(*buf, 0u);
-    write_le32(*buf, 8u + 60u + 5u);
-    write_le32(*buf, 1u);
+    write_le64(*buf, COL_FIXED8);
+    write_le64(*buf, 0u);
+    write_le64(*buf, 0u);
+    write_le64(*buf, 8u + 120u + 5u);
+    write_le64(*buf, 1u);
 
     buf->push_back(0xAA); buf->push_back(0xBB);
     buf->push_back(0x01); buf->push_back(0x02); buf->push_back(0x03);
@@ -708,13 +687,11 @@ TEST(ColumnarImpl, BoolBConstDist_MatchesBaseline) {
 // ── COL_BYTES string column ───────────────────────────────────────────────────
 
 TEST(ColumnarImpl, StringCol_GetBytes) {
-    // Build: offsets = {0, 6, 12}, data = "hello\0world\0"
-    std::vector<uint32_t> offsets = {0u, 6u, 12u};
+    // Build: offsets = {0, 5, 10}, data = "helloworld" (no null terminators)
+    std::vector<uint32_t> offsets = {0u, 5u, 10u};
     std::vector<uint8_t> data;
     data.insert(data.end(), "hello", "hello" + 5);
-    data.push_back(0);
     data.insert(data.end(), "world", "world" + 5);
-    data.push_back(0);
 
     auto* buf = make_col_string(2, data, offsets);
 
@@ -737,37 +714,35 @@ TEST(ColumnarImpl, ConstFlag) {
     auto poly = wkt2wkb(kSquare);
     const uint32_t n = 5;
 
-    // Build const geom column: 1 row of WKB with null terminator
-    std::vector<uint32_t> offsets = {0u, static_cast<uint32_t>(poly.size() + 1u)};
-    std::vector<uint8_t> data;
-    for (uint32_t o : offsets) write_le32(data, o);
-    data.insert(data.end(), poly.begin(), poly.end());
-    data.push_back(0);
+    // header=8, descriptor=40, offsets=2×8=16
+    constexpr uint64_t off_off  = 8u + 40u;
+    constexpr uint64_t data_off = off_off + 16u;
 
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
     write_le32(*buf, n);
     write_le32(*buf, 1u);
 
-    uint32_t off_off = 8u + 20u;
-    uint32_t data_off = off_off + 2u * 4u;
+    // ColDescriptor (5 × uint64)
+    write_le64(*buf, COL_BYTES | COL_IS_CONST);
+    write_le64(*buf, 0u);
+    write_le64(*buf, off_off);
+    write_le64(*buf, data_off);
+    write_le64(*buf, static_cast<uint64_t>(poly.size()));
 
-    // ColDescriptor with COL_IS_CONST
-    write_le32(*buf, static_cast<uint32_t>(COL_BYTES | COL_IS_CONST));
-    write_le32(*buf, 0u);
-    write_le32(*buf, off_off);
-    write_le32(*buf, data_off);
-    write_le32(*buf, static_cast<uint32_t>(data.size()));
+    // Offsets[0..1]
+    write_le64(*buf, 0u);
+    write_le64(*buf, static_cast<uint64_t>(poly.size()));
 
-    for (uint32_t o : offsets) write_le32(*buf, o);
-    buf->append(data.data(), static_cast<uint32_t>(data.size()));
+    // Data (no null terminator)
+    buf->append(poly.data(), static_cast<uint32_t>(poly.size()));
 
     auto cb = parse_columnar(buf);
     auto col = cb.col(0);
     EXPECT_TRUE(col.is_const);
     EXPECT_EQ(col.row_count, 1u);
     EXPECT_EQ(col.get_bytes(0).size(), poly.size());
-    EXPECT_EQ(col.get_bytes(4).size(), poly.size()); // same data for all rows
+    EXPECT_EQ(col.get_bytes(4).size(), poly.size()); // const: all rows alias row 0
 
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 }
