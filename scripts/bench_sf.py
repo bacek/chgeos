@@ -430,11 +430,15 @@ def main():
             "CUSTOMER": f"{sf}.customer",
         }
     else:
+        # Use absolute paths inside user_files directory
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        repo_root = os.path.dirname(script_dir)
+        user_files = os.path.join(repo_root, "tmp", "data", "user_files", sf)
         table_vars = {
-            "TRIP": f"file('{sf}/trip.parquet', Parquet)",
-            "ZONE": f"file('{sf}/zone.parquet', Parquet)",
-            "BUILDING": f"file('{sf}/building.parquet', Parquet)",
-            "CUSTOMER": f"file('{sf}/customer.parquet', Parquet)",
+            "TRIP": f"file('{user_files}/trip.parquet', Parquet)",
+            "ZONE": f"file('{user_files}/zone.parquet', Parquet)",
+            "BUILDING": f"file('{user_files}/building.parquet', Parquet)",
+            "CUSTOMER": f"file('{user_files}/customer.parquet', Parquet)",
         }
 
     format_label = "native" if native else "parquet"
