@@ -7,7 +7,18 @@ CH="${CH:-$REPO/../ClickHouse/build/programs/clickhouse}"
 CONFIG="$REPO/clickhouse/config-test.xml"
 
 pkill -f "clickhouse server" 2>/dev/null || true
-sleep 1
+
+# Wait for the old server to actually exit. SIGTERM shutdown can take several
+# seconds; starting too early makes the new instance fail to lock tmp/data/status
+# ("Another server instance in same directory is already running") and die.
+for _ in $(seq 1 60); do
+    pgrep -f "clickhouse server" >/dev/null 2>&1 || break
+    sleep 1
+done
+if pgrep -f "clickhouse server" >/dev/null 2>&1; then
+    echo "ERROR: old server still running after 60s, refusing to start a second instance" >&2
+    exit 1
+fi
 
 DATA_DIR="$REPO/tmp/data"
 USER_FILES="$DATA_DIR/user_files"
