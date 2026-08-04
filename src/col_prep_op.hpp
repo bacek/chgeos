@@ -20,7 +20,7 @@ using ColPrepDistOp = bool (*)(const geos::geom::prep::PreparedGeometry*,
 // The X,Y coordinates are extracted directly from raw WKB — no GEOS Geometry
 // allocation per row.  The IndexedPointInAreaLocator is built once from the
 // const polygon column and reused for every point in the batch.
-using ColPrepPointOp = bool (*)(geos::algorithm::locate::IndexedPointInAreaLocator*,
-                                double /*x*/, double /*y*/);
+using ColPrepPointOp = geos::geom::Location (*)(geos::algorithm::locate::IndexedPointInAreaLocator*,
+                                                double /*x*/, double /*y*/);
 
 } // namespace ch

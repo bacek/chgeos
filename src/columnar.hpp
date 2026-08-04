@@ -732,7 +732,13 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                 if (bbox_op && !bbox_op(bbox_a, BBox{px, py, px, py})) {
                                     res[i] = early_ret ? 1u : 0u; continue;
                                 }
-                                res[i] = prep_a_point(&locator, px, py) ? 1u : 0u;
+                                auto loc = prep_a_point(&locator, px, py);
+                                if (loc == geos::geom::Location::BOUNDARY) {
+                                    // IPIAL boundary → fall back to base Geometry::within() (DE-9IM).
+                                    res[i] = geom_a->within(read_wkb(span_b).get()) ? 1u : 0u;
+                                } else {
+                                    res[i] = (loc == geos::geom::Location::INTERIOR) ? 1u : 0u;
+                                }
                             }
                             return out;
                         }
@@ -776,7 +782,13 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                 if (bbox_op && !bbox_op(BBox{px, py, px, py}, bbox_b)) {
                                     res[i] = early_ret ? 1u : 0u; continue;
                                 }
-                                res[i] = prep_b_point(&locator, px, py) ? 1u : 0u;
+                                auto loc = prep_b_point(&locator, px, py);
+                                if (loc == geos::geom::Location::BOUNDARY) {
+                                    // IPIAL boundary → fall back to base Geometry::within() (DE-9IM).
+                                    res[i] = read_wkb(span_a)->within(geom_b.get()) ? 1u : 0u;
+                                } else {
+                                    res[i] = (loc == geos::geom::Location::INTERIOR) ? 1u : 0u;
+                                }
                             }
                             return out;
                         }
