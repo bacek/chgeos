@@ -2,20 +2,32 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$SCRIPT_DIR/.."
+REPO="$(realpath "$SCRIPT_DIR/..")"
 CH="${CH:-$REPO/../ClickHouse/build/programs/clickhouse}"
 CONFIG="$REPO/clickhouse/config-test.xml"
 
-pkill -f "clickhouse server" 2>/dev/null || true
+# List running server pids. Matching on the full command line alone is unsafe:
+# `pkill -f "clickhouse server"` also matches any shell, editor or grep whose
+# arguments happen to contain that phrase, including the caller of this script.
+# Require the executable name to actually be clickhouse.
+server_pids() {
+    local pid
+    for pid in $(pgrep -f "clickhouse server" 2>/dev/null); do
+        [[ "$(cat "/proc/$pid/comm" 2>/dev/null)" == "clickhouse" ]] && echo "$pid"
+    done
+}
+
+# shellcheck disable=SC2046  # word splitting is intended: kill takes a pid list
+[[ -n "$(server_pids)" ]] && kill $(server_pids) 2>/dev/null || true
 
 # Wait for the old server to actually exit. SIGTERM shutdown can take several
 # seconds; starting too early makes the new instance fail to lock tmp/data/status
 # ("Another server instance in same directory is already running") and die.
 for _ in $(seq 1 60); do
-    pgrep -f "clickhouse server" >/dev/null 2>&1 || break
+    [[ -z "$(server_pids)" ]] && break
     sleep 1
 done
-if pgrep -f "clickhouse server" >/dev/null 2>&1; then
+if [[ -n "$(server_pids)" ]]; then
     echo "ERROR: old server still running after 60s, refusing to start a second instance" >&2
     exit 1
 fi

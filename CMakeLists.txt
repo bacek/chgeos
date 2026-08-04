@@ -66,7 +66,7 @@ if(CMAKE_CROSSCOMPILING)
     "-Wl,--allow-undefined"
     # emscripten 5.0.4+ also defines __throw_exception_with_stack_trace in
     # libstandalonewasm; ours (earlier in link order) wins.
-    "-Wl,--allow-multiple-definition"
+    # "-Wl,--allow-multiple-definition"  # wasm-ld-19 doesn't support it
   )
 else()
   set(BUILD_TESTING ON CACHE BOOL "" FORCE)

@@ -13,6 +13,16 @@
     <logger>
       <console>true</console>
     </logger>
+    <query_log>
+        <database>system</database>
+        <table>query_log</table>
+        <flush_interval_milliseconds>1000</flush_interval_milliseconds>
+    </query_log>
+    <query_thread_log>
+        <database>system</database>
+        <table>query_thread_log</table>
+        <flush_interval_milliseconds>1000</flush_interval_milliseconds>
+    </query_thread_log>
     <users>
         <default>
             <password></password>

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-REPO="$SCRIPT_DIR/.."
+REPO="$(realpath "$SCRIPT_DIR/..")"
 CH="${CH:-$REPO/../ClickHouse/build/programs/clickhouse}"
 WASM="${WASM:-$REPO/build_wasm/chgeos.wasm}"
 USER_FILES="$REPO/tmp/data/user_files"
@@ -23,6 +23,6 @@ echo "==> Insert module"
 "$CH" client --port 19000 --query "INSERT INTO system.webassembly_modules (name, code) VALUES ('chgeos', file('chgeos.wasm'))"
 
 echo "==> Create functions"
-"$CH" client --port 19000 --multiquery < "$REPO/clickhouse/create.sql"
+"$CH" client --port 19000 --multiquery --ignore-error < "$REPO/clickhouse/create.sql"
 
 echo "==> Done"

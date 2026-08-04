@@ -431,7 +431,7 @@ def main():
         }
     else:
         # Use absolute paths inside user_files directory
-        script_dir = os.path.dirname(os.path.abspath(__file__))
+        script_dir = os.path.dirname(os.path.realpath(__file__))
         repo_root = os.path.dirname(script_dir)
         user_files = os.path.join(repo_root, "tmp", "data", "user_files", sf)
         table_vars = {
