@@ -17,9 +17,10 @@ ENGINE_STYLE = {
     "chgeos": {"color": "#2563eb", "label": "chgeos"},
     "duckdb":  {"color": "#f59e0b", "label": "DuckDB"},
     "sedona":  {"color": "#16a34a", "label": "Sedona"},
+    "pycanopy": {"color": "#dc2626", "label": "PyCanopy"},
 }
 
-# Placeholder bar height for timeout/not-run entries (rendered differently)
+# Placeholder bar length for timeout/not-run entries (rendered differently)
 PLACEHOLDER = 1e-3
 
 
@@ -45,12 +46,12 @@ def engine_data(results: list, engine: str, scale: int) -> tuple[list, list]:
 
 
 def plot_scale(results: list, scale: int, out_path: Path) -> None:
-    engines = ["chgeos", "duckdb", "sedona"]
+    engines = ["chgeos", "duckdb", "sedona", "pycanopy"]
     n = len(QUERIES)
-    width = 0.25
-    x = np.arange(n)
+    height = 0.8 / len(engines)
+    y = np.arange(n)
 
-    fig, ax = plt.subplots(figsize=(14, 6))
+    fig, ax = plt.subplots(figsize=(11, 9))
 
     all_real = []
     bar_groups = {}
@@ -59,39 +60,42 @@ def plot_scale(results: list, scale: int, out_path: Path) -> None:
         bar_groups[eng] = (times, statuses)
         all_real.extend(t for t, s in zip(times, statuses) if s == "success")
 
-    # Y axis: log scale; floor at a sensible minimum
-    y_min = max(0.01, min(all_real) * 0.7) if all_real else 0.01
-    y_max = max(all_real) * 4 if all_real else 1000
+    # X axis: log scale; floor at a sensible minimum
+    x_min = max(0.01, min(all_real) * 0.7) if all_real else 0.01
+    x_max = max(all_real) * 4 if all_real else 1000
 
     for i, eng in enumerate(engines):
         times, statuses = bar_groups[eng]
         color = ENGINE_STYLE[eng]["color"]
-        offset = (i - 1) * width
-        bars = ax.bar(x + offset, times, width, color=color,
-                      alpha=0.85, label=ENGINE_STYLE[eng]["label"],
-                      zorder=3)
+        # First engine on top within each group, so legend order reads downward.
+        offset = ((len(engines) - 1) / 2 - i) * height
+        bars = ax.barh(y + offset, times, height, color=color,
+                       alpha=0.85, label=ENGINE_STYLE[eng]["label"],
+                       zorder=3)
 
         for bar, t, s in zip(bars, times, statuses):
             if s == "timeout":
-                # Hatched bar reaching the top of the plot
+                # Hatched bar running to the right edge of the plot
                 bar.set_hatch("////")
                 bar.set_edgecolor("white")
-                bar.set_height(y_max * 0.85)
-                ax.text(bar.get_x() + bar.get_width() / 2, y_max * 0.87,
-                        "T/O", ha="center", va="bottom", fontsize=7,
-                        color=color, fontweight="bold")
+                bar.set_width(x_max * 0.9)
+                # Label inside the bar end; outside would clip at the axis edge.
+                ax.text(x_max * 0.87, bar.get_y() + bar.get_height() / 2,
+                        "T/O", ha="right", va="center", fontsize=7,
+                        color="white", fontweight="bold")
             elif s == "not_run":
-                bar.set_height(0)
+                bar.set_width(0)
 
-    ax.set_yscale("log")
-    ax.set_ylim(y_min, y_max)
-    ax.set_xticks(x)
-    ax.set_xticklabels(QUERY_LABELS)
-    ax.set_xlabel("Query", fontsize=12)
-    ax.set_ylabel("Time (seconds, log scale)", fontsize=12)
+    ax.set_xscale("log")
+    ax.set_xlim(x_min, x_max)
+    ax.set_yticks(y)
+    ax.set_yticklabels(QUERY_LABELS)
+    ax.invert_yaxis()  # Q1 at the top
+    ax.set_ylabel("Query", fontsize=12)
+    ax.set_xlabel("Time (seconds, log scale)", fontsize=12)
     sf_label = "SF1 — 6M rows" if scale == 1 else "SF10 — 60M rows"
     ax.set_title(f"Spatial Benchmark — {sf_label}", fontsize=14, fontweight="bold")
-    ax.yaxis.grid(True, which="both", linestyle="--", alpha=0.4, zorder=0)
+    ax.xaxis.grid(True, which="both", linestyle="--", alpha=0.4, zorder=0)
     ax.set_axisbelow(True)
 
     # Legend: engines + timeout note
@@ -100,7 +104,8 @@ def plot_scale(results: list, scale: int, out_path: Path) -> None:
     timeout_patch = mpatches.Patch(facecolor="grey", hatch="////",
                                    edgecolor="white", label="T/O = timeout / not run")
     handles.append(timeout_patch)
-    ax.legend(handles=handles, loc="upper left", fontsize=10)
+    # Fastest queries sit at the top, so the upper-right corner stays clear.
+    ax.legend(handles=handles, loc="upper right", fontsize=10)
 
     fig.tight_layout()
     fig.savefig(out_path, dpi=150, bbox_inches="tight")

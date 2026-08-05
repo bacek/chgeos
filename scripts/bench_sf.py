@@ -405,21 +405,24 @@ def main():
         f"{args.sf}/benchmark_results.json" if json_flag else None
     )
 
-    fuel = (
-        "SETTINGS webassembly_udf_max_fuel=0, max_execution_time="
-        f"{timeout}"
-        f"{', ' + extra_settings if extra_settings else ''}"
-    )
-    fuel5 = (
-        "SETTINGS webassembly_udf_max_fuel=0, max_execution_time="
-        f"{timeout}, query_plan_execute_functions_after_sorting=0"
-        f"{', ' + extra_settings if extra_settings else ''}"
-    )
-    fuel_sort = (
-        "SETTINGS webassembly_udf_max_fuel=0, max_execution_time="
-        f"{timeout}"
-        f"{', ' + extra_settings if extra_settings else ''}"
-    )
+    # Spill defaults to 0.5 * max_server_memory_usage (30G in config-test.xml),
+    # so Q5 at ~21 GiB spills 1.8 GB to disk and loses ~3.5s to it. Pin the
+    # ratios off; the server budget still caps a runaway query.
+    def settings(*extra: str) -> str:
+        parts = [
+            "webassembly_udf_max_fuel=0",
+            f"max_execution_time={timeout}",
+            "max_bytes_ratio_before_external_group_by=0",
+            "max_bytes_ratio_before_external_sort=0",
+            *extra,
+        ]
+        if extra_settings:
+            parts.append(extra_settings)
+        return "SETTINGS " + ", ".join(parts)
+
+    fuel = settings()
+    fuel5 = settings("query_plan_execute_functions_after_sorting=0")
+    fuel_sort = fuel
 
     table_vars = {}
     if native:

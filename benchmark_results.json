@@ -1,6 +1,6 @@
 {
   "benchmark": "spatial-bench",
-  "generated_at": "2026-05-06",
+  "generated_at": "2026-08-06",
   "timeouts": 120.0,
   "results": [
     {
@@ -10,42 +10,42 @@
         {
           "query": "q1",
           "status": "success",
-          "time_seconds": 0.09
+          "time_seconds": 0.085
         },
         {
           "query": "q2",
           "status": "success",
-          "time_seconds": 0.074
+          "time_seconds": 0.083
         },
         {
           "query": "q3",
           "status": "success",
-          "time_seconds": 0.087
+          "time_seconds": 0.083
         },
         {
           "query": "q4",
           "status": "success",
-          "time_seconds": 0.612
+          "time_seconds": 0.657
         },
         {
           "query": "q5",
           "status": "success",
-          "time_seconds": 0.854
+          "time_seconds": 0.869
         },
         {
           "query": "q6",
           "status": "success",
-          "time_seconds": 0.82
+          "time_seconds": 0.829
         },
         {
           "query": "q7",
           "status": "success",
-          "time_seconds": 1.274
+          "time_seconds": 1.245
         },
         {
           "query": "q8",
           "status": "success",
-          "time_seconds": 0.146
+          "time_seconds": 0.162
         },
         {
           "query": "q9",
@@ -55,17 +55,17 @@
         {
           "query": "q10",
           "status": "success",
-          "time_seconds": 3.961
+          "time_seconds": 4.299
         },
         {
           "query": "q11",
           "status": "success",
-          "time_seconds": 7.337
+          "time_seconds": 6.049
         },
         {
           "query": "q12",
           "status": "success",
-          "time_seconds": 10.431
+          "time_seconds": 10.947
         }
       ]
     },
@@ -76,62 +76,62 @@
         {
           "query": "q1",
           "status": "success",
-          "time_seconds": 0.548
+          "time_seconds": 0.728
         },
         {
           "query": "q2",
           "status": "success",
-          "time_seconds": 0.673
+          "time_seconds": 0.915
         },
         {
           "query": "q3",
           "status": "success",
-          "time_seconds": 0.511
+          "time_seconds": 0.731
         },
         {
           "query": "q4",
           "status": "success",
-          "time_seconds": 1.193
+          "time_seconds": 1.513
         },
         {
           "query": "q5",
           "status": "success",
-          "time_seconds": 10.366
+          "time_seconds": 11.609
         },
         {
           "query": "q6",
           "status": "success",
-          "time_seconds": 1.873
+          "time_seconds": 2.009
         },
         {
           "query": "q7",
           "status": "success",
-          "time_seconds": 11.899
+          "time_seconds": 11.992
         },
         {
           "query": "q8",
           "status": "success",
-          "time_seconds": 1.602
+          "time_seconds": 1.843
         },
         {
           "query": "q9",
           "status": "success",
-          "time_seconds": 0.103
+          "time_seconds": 0.111
         },
         {
           "query": "q10",
           "status": "success",
-          "time_seconds": 27.314
+          "time_seconds": 33.376
         },
         {
           "query": "q11",
           "status": "success",
-          "time_seconds": 43.646
+          "time_seconds": 48.888
         },
         {
           "query": "q12",
           "status": "success",
-          "time_seconds": 107.09
+          "time_seconds": 104.282
         }
       ]
     },
@@ -396,6 +396,138 @@
           "query": "q12",
           "status": "timeout",
           "time_seconds": null
+        }
+      ]
+    },
+    {
+      "engine": "pycanopy",
+      "scale_factor": 1,
+      "results": [
+        {
+          "query": "q1",
+          "status": "success",
+          "time_seconds": 0.81
+        },
+        {
+          "query": "q2",
+          "status": "success",
+          "time_seconds": 1.68
+        },
+        {
+          "query": "q3",
+          "status": "success",
+          "time_seconds": 0.64
+        },
+        {
+          "query": "q4",
+          "status": "success",
+          "time_seconds": 4.78
+        },
+        {
+          "query": "q5",
+          "status": "success",
+          "time_seconds": 1.16
+        },
+        {
+          "query": "q6",
+          "status": "success",
+          "time_seconds": 2.88
+        },
+        {
+          "query": "q7",
+          "status": "success",
+          "time_seconds": 1.22
+        },
+        {
+          "query": "q8",
+          "status": "success",
+          "time_seconds": 0.25
+        },
+        {
+          "query": "q9",
+          "status": "success",
+          "time_seconds": 0.03
+        },
+        {
+          "query": "q10",
+          "status": "success",
+          "time_seconds": 5.7
+        },
+        {
+          "query": "q11",
+          "status": "success",
+          "time_seconds": 5.84
+        },
+        {
+          "query": "q12",
+          "status": "success",
+          "time_seconds": 5.71
+        }
+      ]
+    },
+    {
+      "engine": "pycanopy",
+      "scale_factor": 10,
+      "results": [
+        {
+          "query": "q1",
+          "status": "success",
+          "time_seconds": 18.93
+        },
+        {
+          "query": "q2",
+          "status": "success",
+          "time_seconds": 12.81
+        },
+        {
+          "query": "q3",
+          "status": "success",
+          "time_seconds": 14.59
+        },
+        {
+          "query": "q4",
+          "status": "success",
+          "time_seconds": 19.8
+        },
+        {
+          "query": "q5",
+          "status": "success",
+          "time_seconds": 21.93
+        },
+        {
+          "query": "q6",
+          "status": "success",
+          "time_seconds": 7.74
+        },
+        {
+          "query": "q7",
+          "status": "success",
+          "time_seconds": 14.39
+        },
+        {
+          "query": "q8",
+          "status": "success",
+          "time_seconds": 2.69
+        },
+        {
+          "query": "q9",
+          "status": "success",
+          "time_seconds": 0.06
+        },
+        {
+          "query": "q10",
+          "status": "success",
+          "time_seconds": 27.05
+        },
+        {
+          "query": "q11",
+          "status": "success",
+          "time_seconds": 42.97
+        },
+        {
+          "query": "q12",
+          "status": "success",
+          "time_seconds": 98.6
         }
       ]
     }
