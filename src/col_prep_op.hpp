@@ -5,7 +5,7 @@
 
 #include <geos/geom/Geometry.h>
 #include <geos/geom/prep/PreparedGeometry.h>
-#include <geos/algorithm/locate/IndexedPointInAreaLocator.h>
+#include <geos/geom/Location.h>
 
 namespace ch {
 
@@ -18,9 +18,14 @@ using ColPrepDistOp = bool (*)(const geos::geom::prep::PreparedGeometry*,
 
 // Fast path when the varying column contains only 2D WKB POINTs (21 bytes).
 // The X,Y coordinates are extracted directly from raw WKB — no GEOS Geometry
-// allocation per row.  The IndexedPointInAreaLocator is built once from the
-// const polygon column and reused for every point in the batch.
-using ColPrepPointOp = geos::geom::Location (*)(geos::algorithm::locate::IndexedPointInAreaLocator*,
-                                                double /*x*/, double /*y*/);
+// allocation per row, and the point is located against the const polygon with
+// either an IndexedPointInAreaLocator or SimplePointInAreaLocator.
+//
+// This callback carries the only per-predicate part of that path: how the
+// resulting Location maps to the predicate's truth value.  Keeping it here
+// rather than in the caller is what makes BOUNDARY correct for covers /
+// coveredby / intersects, which are true on the boundary while within /
+// contains are false.
+using ColPrepPointOp = bool (*)(geos::geom::Location);
 
 } // namespace ch

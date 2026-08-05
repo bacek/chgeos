@@ -202,6 +202,162 @@ TEST(ColumnarPrepGeom, ContainsBConst_MatchesBaseline) {
     EXPECT_EQ(got, base);
 }
 
+// ── Point fast path: boundary semantics ──────────────────────────────────────
+// A 2D WKB point against a const polygon takes a dedicated path that locates
+// the point (INTERIOR / BOUNDARY / EXTERIOR) instead of running the full
+// predicate.  Three things must agree on a boundary point: the indexed locator
+// (batch >= INDEXED_LOCATOR_MIN_ROWS), the simple locator (smaller batch), and
+// the generic PreparedGeometry path (polygon column not const).  A batch-size
+// dependent answer shows up as a nondeterministic row count once the join
+// splits its input differently between runs.
+namespace {
+
+// Cycle of points covering every Location against kSquare.
+std::vector<std::vector<uint8_t>> cycled_points(uint32_t n) {
+    const std::vector<std::string> wkt = {
+        "POINT (0.5 0.5)",  // interior
+        "POINT (0.0 0.0)",  // boundary: vertex
+        "POINT (2.0 2.0)",  // exterior
+        "POINT (0.5 0.0)",  // boundary: edge midpoint
+    };
+    std::vector<std::vector<uint8_t>> pts;
+    for (uint32_t i = 0; i < n; ++i) pts.push_back(wkt2wkb(wkt[i % wkt.size()]));
+    return pts;
+}
+
+// Expected result per point in the cycle above, given the truth value the
+// predicate takes on the boundary.
+std::vector<uint8_t> expected_cycle(uint32_t n, uint8_t on_boundary) {
+    const std::vector<uint8_t> one_cycle = {1u, on_boundary, 0u, on_boundary};
+    std::vector<uint8_t> exp;
+    for (uint32_t i = 0; i < n; ++i) exp.push_back(one_cycle[i % one_cycle.size()]);
+    return exp;
+}
+
+}  // namespace
+
+// Predicates written point-first: st_within / st_coveredby / st_intersects.
+// The const polygon is col[1], so this exercises the B-const point path.
+TEST(ColumnarPointPath, BoundaryIsPredicateSpecific_PointFirst) {
+    auto poly = wkt2wkb(kSquare);
+
+    struct Case {
+        const char* name;
+        bool (*impl)(std::unique_ptr<Geometry>, std::unique_ptr<Geometry>);
+        BboxOp bbox_op;
+        ColPrepOp prep_a;
+        ColPrepOp prep_b;
+        ColPrepPointOp pt_a;
+        ColPrepPointOp pt_b;
+        uint8_t on_boundary;
+    };
+    const std::vector<Case> cases = {
+        {"st_within",     st_within_impl,     bbox_op_rcontains,
+         prep_a_st_within,     prep_b_st_within,
+         prep_a_pt_st_within,     prep_b_pt_st_within,     0u},
+        {"st_coveredby",  st_coveredby_impl,  bbox_op_rcontains,
+         prep_a_st_coveredby,  prep_b_st_coveredby,
+         prep_a_pt_st_coveredby,  prep_b_pt_st_coveredby,  1u},
+        {"st_intersects", st_intersects_impl, bbox_op_intersects,
+         prep_a_st_intersects, prep_b_st_intersects,
+         prep_a_pt_st_intersects, prep_b_pt_st_intersects, 1u},
+    };
+
+    // Below and above the indexed-locator threshold.
+    for (uint32_t n : {4u, INDEXED_LOCATOR_MIN_ROWS + 4u}) {
+        auto pts = cycled_points(n);
+        for (const auto& c : cases) {
+            SCOPED_TRACE(std::string(c.name) + " n=" + std::to_string(n));
+
+            auto* buf_pt = make_columnar(n, {
+                bytes_col(false, pts),
+                bytes_col(true,  {poly}),
+            });
+            auto got = read_bool_col(
+                columnar_impl_wrapper(buf_pt, n, c.impl, c.bbox_op, false,
+                                      c.prep_a, c.prep_b, nullptr, nullptr,
+                                      c.pt_a, c.pt_b),
+                n);
+            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_pt));
+
+            EXPECT_EQ(got, expected_cycle(n, c.on_boundary));
+
+            // Generic PreparedGeometry path: same rows, polygon column not const.
+            std::vector<std::vector<uint8_t>> polys(n, poly);
+            auto* buf_gen = make_columnar(n, {
+                bytes_col(false, pts),
+                bytes_col(false, polys),
+            });
+            auto generic = read_bool_col(
+                columnar_impl_wrapper(buf_gen, n, c.impl, c.bbox_op, false,
+                                      c.prep_a, c.prep_b, nullptr, nullptr,
+                                      c.pt_a, c.pt_b),
+                n);
+            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_gen));
+
+            EXPECT_EQ(got, generic);
+        }
+    }
+}
+
+// Predicates written polygon-first: st_contains / st_covers.
+// The const polygon is col[0], so this exercises the A-const point path.
+TEST(ColumnarPointPath, BoundaryIsPredicateSpecific_PolygonFirst) {
+    auto poly = wkt2wkb(kSquare);
+
+    struct Case {
+        const char* name;
+        bool (*impl)(std::unique_ptr<Geometry>, std::unique_ptr<Geometry>);
+        ColPrepOp prep_a;
+        ColPrepOp prep_b;
+        ColPrepPointOp pt_a;
+        ColPrepPointOp pt_b;
+        uint8_t on_boundary;
+    };
+    const std::vector<Case> cases = {
+        {"st_contains", st_contains_impl,
+         prep_a_st_contains, prep_b_st_contains,
+         prep_a_pt_st_contains, prep_b_pt_st_contains, 0u},
+        {"st_covers",   st_covers_impl,
+         prep_a_st_covers,   prep_b_st_covers,
+         prep_a_pt_st_covers,   prep_b_pt_st_covers,   1u},
+    };
+
+    for (uint32_t n : {4u, INDEXED_LOCATOR_MIN_ROWS + 4u}) {
+        auto pts = cycled_points(n);
+        for (const auto& c : cases) {
+            SCOPED_TRACE(std::string(c.name) + " n=" + std::to_string(n));
+
+            auto* buf_pt = make_columnar(n, {
+                bytes_col(true,  {poly}),
+                bytes_col(false, pts),
+            });
+            auto got = read_bool_col(
+                columnar_impl_wrapper(buf_pt, n, c.impl, bbox_op_contains, false,
+                                      c.prep_a, c.prep_b, nullptr, nullptr,
+                                      c.pt_a, c.pt_b),
+                n);
+            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_pt));
+
+            EXPECT_EQ(got, expected_cycle(n, c.on_boundary));
+
+            std::vector<std::vector<uint8_t>> polys(n, poly);
+            auto* buf_gen = make_columnar(n, {
+                bytes_col(false, polys),
+                bytes_col(false, pts),
+            });
+            auto generic = read_bool_col(
+                columnar_impl_wrapper(buf_gen, n, c.impl, bbox_op_contains, false,
+                                      c.prep_a, c.prep_b, nullptr, nullptr,
+                                      c.pt_a, c.pt_b),
+                n);
+            clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_gen));
+
+            EXPECT_EQ(got, generic);
+        }
+    }
+}
+
 TEST(ColumnarPrepGeom, ConstColNull_AllResultsZero) {
     // When the const geometry column is NULL, all output rows must be 0.
     auto dummy_wkb = wkt2wkb("POINT (0 0)");

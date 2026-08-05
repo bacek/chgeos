@@ -119,8 +119,10 @@ constexpr ColPrepOp prep_b_st_contains =
 
 constexpr ColPrepOp prep_a_st_within =
     +[](const PreparedGeometry* pa, const Geometry* b) { return pa->within(b); };
+// "a within b" with b prepared is "b contains a" — not pb->within(a), which asks
+// whether the polygon is inside the varying geometry.
 constexpr ColPrepOp prep_b_st_within =
-    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->within(a); };
+    +[](const PreparedGeometry* pb, const Geometry* a) { return pb->contains(a); };
 
 constexpr ColPrepOp prep_a_st_covers =
     +[](const PreparedGeometry* pa, const Geometry* b) { return pa->covers(b); };
@@ -177,55 +179,32 @@ constexpr ColPrepOp prep_b_st_equals =
 
 // ── ColPrepPointOp callbacks ──────────────────────────────────────────────────
 // Fast path: the varying column contains 2D WKB POINTs; the const column is a
-// polygon.  X,Y are extracted directly from raw WKB — no GEOS Geometry
-// allocation per row.  Naming: prep_a_pt = A-const polygon, B varies (points);
-//                              prep_b_pt = B-const polygon, A varies (points).
+// polygon.  The caller locates the point against the polygon and hands us the
+// resulting Location; each callback below maps it to its predicate's truth
+// value.  Naming: prep_a_pt = A-const polygon, B varies (points);
+//                 prep_b_pt = B-const polygon, A varies (points).
 
-using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
+// A point on the polygon boundary is in the polygon's *boundary*, not its
+// interior, so within/contains are false there while covers/coveredby/
+// intersects are true.  That split is the whole content of these callbacks.
+constexpr ColPrepPointOp pt_interior_only =
+    +[](geos::geom::Location loc) { return loc == geos::geom::Location::INTERIOR; };
+constexpr ColPrepPointOp pt_not_exterior =
+    +[](geos::geom::Location loc) { return loc != geos::geom::Location::EXTERIOR; };
 
-// st_within(point, polygon): point strictly inside polygon → INTERIOR
-// Returns geos::geom::Location so BOUNDARY can fall back to DE-9IM.
-constexpr ColPrepPointOp prep_b_pt_st_within =
-    +[](IPIAL* loc, double x, double y) {
-        geos::geom::CoordinateXY c(x, y);
-        return loc->locate(&c);
-    };
-constexpr ColPrepPointOp prep_a_pt_st_within =
-    +[](IPIAL* loc, double x, double y) {
-        geos::geom::CoordinateXY c(x, y);
-        return loc->locate(&c);
-    };
-
-// st_contains(polygon, point): point strictly inside polygon → INTERIOR
-constexpr ColPrepPointOp prep_a_pt_st_contains =
-    +[](IPIAL* loc, double x, double y) {
-        geos::geom::CoordinateXY c(x, y);
-        return loc->locate(&c);
-    };
+// st_within(point, polygon) / st_contains(polygon, point): strictly inside.
+constexpr ColPrepPointOp prep_b_pt_st_within   = pt_interior_only;
+constexpr ColPrepPointOp prep_a_pt_st_within   = pt_interior_only;
+constexpr ColPrepPointOp prep_a_pt_st_contains = pt_interior_only;
 constexpr ColPrepPointOp prep_b_pt_st_contains = nullptr;  // contains(point,polygon) skip
 
-// st_covers(polygon, point): point inside or on boundary → INTERIOR || BOUNDARY
-constexpr ColPrepPointOp prep_a_pt_st_covers =
-    +[](IPIAL* loc, double x, double y) {
-        geos::geom::CoordinateXY c(x, y);
-        return loc->locate(&c);  // INTERIOR or BOUNDARY → true in boolean context
-    };
-constexpr ColPrepPointOp prep_b_pt_st_covers = nullptr;
-
-// st_coveredby(point, polygon): same as covers but roles swapped
-constexpr ColPrepPointOp prep_b_pt_st_coveredby =
-    +[](IPIAL* loc, double x, double y) {
-        geos::geom::CoordinateXY c(x, y);
-        return loc->locate(&c);  // INTERIOR or BOUNDARY → true in boolean context
-    };
-constexpr ColPrepPointOp prep_a_pt_st_coveredby = nullptr;
-
-// st_intersects(point, polygon): not exterior → INTERIOR or BOUNDARY
-constexpr ColPrepPointOp prep_b_pt_st_intersects =
-    +[](IPIAL* loc, double x, double y) {
-        geos::geom::CoordinateXY c(x, y);
-        return loc->locate(&c);  // INTERIOR or BOUNDARY → true in boolean context
-    };
-constexpr ColPrepPointOp prep_a_pt_st_intersects = prep_b_pt_st_intersects;
+// st_covers(polygon, point) / st_coveredby(point, polygon) / st_intersects:
+// inside or on the boundary.
+constexpr ColPrepPointOp prep_a_pt_st_covers     = pt_not_exterior;
+constexpr ColPrepPointOp prep_b_pt_st_covers     = nullptr;
+constexpr ColPrepPointOp prep_b_pt_st_coveredby  = pt_not_exterior;
+constexpr ColPrepPointOp prep_a_pt_st_coveredby  = nullptr;
+constexpr ColPrepPointOp prep_b_pt_st_intersects = pt_not_exterior;
+constexpr ColPrepPointOp prep_a_pt_st_intersects = pt_not_exterior;
 
 } // namespace ch
