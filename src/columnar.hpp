@@ -34,6 +34,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -43,6 +44,7 @@
 
 #include <geos/geom/prep/PreparedGeometryFactory.h>
 #include <geos/algorithm/locate/IndexedPointInAreaLocator.h>
+#include <geos/algorithm/locate/SimplePointInAreaLocator.h>
 #include <geos/geom/Coordinate.h>
 #include <geos/geom/CoordinateSequence.h>
 #include <geos/geom/GeometryFactory.h>
@@ -60,6 +62,12 @@
 #include "mem.hpp"
 
 namespace ch {
+
+// Minimum batch size at which building an IndexedPointInAreaLocator pays for
+// itself against a plain edge scan.  Measured on real zone polygons across four
+// orders of magnitude of size (77B–200KB WKB), the break-even sits in a narrow
+// 9–24 row band; 16 lands on the correct side at both extremes.
+inline constexpr uint32_t INDEXED_LOCATOR_MIN_ROWS = 16;
 
 // ── Type tags ────────────────────────────────────────────────────────────────
 
@@ -722,7 +730,10 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                         if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
                                            || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
                             using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
-                            IPIAL locator(*geom_a);
+                            // Building the segment index costs O(edges); below the
+                            // break-even batch size a direct edge scan is cheaper.
+                            std::optional<IPIAL> locator;
+                            if (n >= INDEXED_LOCATOR_MIN_ROWS) locator.emplace(*geom_a);
                             for (uint32_t i = 0; i < n; ++i) {
                                 if (cols[1].is_null(i)) { res[i] = 0u; continue; }
                                 auto span_b = cols[1].get_bytes(i);
@@ -732,7 +743,10 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                 if (bbox_op && !bbox_op(bbox_a, BBox{px, py, px, py})) {
                                     res[i] = early_ret ? 1u : 0u; continue;
                                 }
-                                auto loc = prep_a_point(&locator, px, py);
+                                auto loc = locator
+                                    ? prep_a_point(&*locator, px, py)
+                                    : geos::algorithm::locate::SimplePointInAreaLocator::locate(
+                                          geos::geom::CoordinateXY{px, py}, geom_a.get());
                                 if (loc == geos::geom::Location::BOUNDARY) {
                                     // IPIAL boundary → fall back to base Geometry::within() (DE-9IM).
                                     res[i] = geom_a->within(read_wkb(span_b).get()) ? 1u : 0u;
@@ -772,7 +786,10 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                         if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
                                            || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
                             using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
-                            IPIAL locator(*geom_b);
+                            // Building the segment index costs O(edges); below the
+                            // break-even batch size a direct edge scan is cheaper.
+                            std::optional<IPIAL> locator;
+                            if (n >= INDEXED_LOCATOR_MIN_ROWS) locator.emplace(*geom_b);
                             for (uint32_t i = 0; i < n; ++i) {
                                 if (cols[0].is_null(i)) { res[i] = 0u; continue; }
                                 auto span_a = cols[0].get_bytes(i);
@@ -782,7 +799,10 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                 if (bbox_op && !bbox_op(BBox{px, py, px, py}, bbox_b)) {
                                     res[i] = early_ret ? 1u : 0u; continue;
                                 }
-                                auto loc = prep_b_point(&locator, px, py);
+                                auto loc = locator
+                                    ? prep_b_point(&*locator, px, py)
+                                    : geos::algorithm::locate::SimplePointInAreaLocator::locate(
+                                          geos::geom::CoordinateXY{px, py}, geom_b.get());
                                 if (loc == geos::geom::Location::BOUNDARY) {
                                     // IPIAL boundary → fall back to base Geometry::within() (DE-9IM).
                                     res[i] = read_wkb(span_a)->within(geom_b.get()) ? 1u : 0u;
