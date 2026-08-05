@@ -166,16 +166,25 @@ struct ColView {
 
     // True when every logical row carries the same bytes.
     // Covers: COL_IS_CONST, and the legacy cross-join pattern where CH
-    // repeats the same WKB N times (uniform offsets + identical first/last element).
+    // repeats the same WKB N times (uniform offsets + identical elements).
+    //
+    // Every row must be compared. Checking only the first and last is not
+    // enough: callers use this to build one geometry from row 0 and reuse it
+    // for the whole batch, so a differing middle row would be silently
+    // evaluated against the wrong geometry. Uniform stride is common by
+    // itself — every 2D WKB point is 21 bytes — so it proves nothing.
+    // The loop exits at row 1 for a genuinely varying column, which is the
+    // usual case.
     bool is_effectively_const_bytes() const noexcept {
         if (is_const) return true;
         if (!offsets || row_count < 2) return false;
         uint64_t elem_stride = offsets[1];
         if (elem_stride == 0) return false;
         if (offsets[row_count] != elem_stride * row_count) return false;
-        uint64_t wkb_len = elem_stride;
-        uint64_t last_start = offsets[row_count - 1];
-        return std::memcmp(data, data + last_start, wkb_len) == 0;
+        for (uint32_t i = 1; i < row_count; ++i)
+            if (std::memcmp(data, data + offsets[i], elem_stride) != 0)
+                return false;
+        return true;
     }
 };
 
@@ -713,6 +722,23 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             for (size_t j = 0; j < nargs; ++j)
                 if (cols[j].base_type == COL_VARIANT) { has_variant = true; break; }
 
+            // The point fast paths below read coordinates at fixed WKB offsets, so
+            // every row of the varying column must be a plain 2D point. Sampling
+            // one row is not enough: an SRID-carrying or 3D point anywhere in the
+            // batch would be decoded as garbage, and which row comes first depends
+            // on how the caller chunked its input.
+            auto all_2d_points = [](const auto & col, uint32_t rows) {
+                for (uint32_t i = 0; i < rows; ++i) {
+                    if (col.is_null(i)) continue;
+                    auto s = col.get_bytes(i);
+                    if (s.size() != 21 || s[0] != 0x01) return false;
+                    uint32_t t = 0;
+                    memcpy(&t, s.data() + 1, 4);
+                    if (t != 1u) return false;
+                }
+                return true;
+            };
+
             if constexpr (nargs >= 2) {
                 // A-const fast path: prepare col(0) once, vary col(1)
                 if (!has_variant && cols[0].is_effectively_const_bytes() && prep_a) {
@@ -722,13 +748,11 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     auto  geom_a = read_wkb(span_a);
 
                     // Point fast path: col(1) contains 2D WKB points — no per-row GEOS alloc.
-                    if (prep_a_point && n > 0 && !cols[1].is_null(0)) {
-                        auto s1 = cols[1].get_bytes(0);
-                        uint32_t pt_type = 0;
-                        if (s1.size() == 21 && s1[0] == 0x01) memcpy(&pt_type, s1.data() + 1, 4);
+                    if (prep_a_point && n > 0) {
                         auto gtype = geom_a->getGeometryTypeId();
-                        if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
-                                           || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
+                        if ((gtype == geos::geom::GEOS_POLYGON
+                          || gtype == geos::geom::GEOS_MULTIPOLYGON)
+                            && all_2d_points(cols[1], n)) {
                             using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
                             // Building the segment index costs O(edges); below the
                             // break-even batch size a direct edge scan is cheaper.
@@ -774,13 +798,11 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     auto  geom_b = read_wkb(span_b);
 
                     // Point fast path: col(0) contains 2D WKB points — no per-row GEOS alloc.
-                    if (prep_b_point && n > 0 && !cols[0].is_null(0)) {
-                        auto s0 = cols[0].get_bytes(0);
-                        uint32_t pt_type = 0;
-                        if (s0.size() == 21 && s0[0] == 0x01) memcpy(&pt_type, s0.data() + 1, 4);
+                    if (prep_b_point && n > 0) {
                         auto gtype = geom_b->getGeometryTypeId();
-                        if (pt_type == 1u && (gtype == geos::geom::GEOS_POLYGON
-                                           || gtype == geos::geom::GEOS_MULTIPOLYGON)) {
+                        if ((gtype == geos::geom::GEOS_POLYGON
+                          || gtype == geos::geom::GEOS_MULTIPOLYGON)
+                            && all_2d_points(cols[0], n)) {
                             using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
                             // Building the segment index costs O(edges); below the
                             // break-even batch size a direct edge scan is cheaper.

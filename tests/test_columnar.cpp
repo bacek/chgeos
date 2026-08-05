@@ -902,3 +902,70 @@ TEST(ColumnarVariant, LineStringDecodeVertices) {
 
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 }
+
+// ── is_effectively_const_bytes ────────────────────────────────────────────────
+//
+// Callers of this predicate build one PreparedGeometry from row 0 and reuse it
+// for the whole batch, so a false positive silently evaluates every row against
+// the wrong geometry. The fixture below holds the backing storage alive for the
+// lifetime of the view.
+
+namespace {
+
+struct FixedStrideCol {
+    std::vector<uint8_t>  data;
+    std::vector<uint64_t> offsets;
+    ColView               view{};
+
+    // rows: equal-length elements, laid out back to back with start-based offsets.
+    explicit FixedStrideCol(const std::vector<std::string>& rows) {
+        offsets.push_back(0);
+        for (const auto& r : rows) {
+            data.insert(data.end(), r.begin(), r.end());
+            offsets.push_back(data.size());
+        }
+        view.base_type = COL_BYTES;
+        view.is_const  = false;
+        view.row_count = static_cast<uint32_t>(rows.size());
+        view.null_map  = nullptr;
+        view.offsets   = offsets.data();
+        view.data      = data.data();
+        view.base      = data.data();
+    }
+};
+
+}  // namespace
+
+TEST(ColumnarConstBytes, ConstFlagShortCircuits) {
+    ColView v{};
+    v.is_const  = true;
+    v.row_count = 1;
+    EXPECT_TRUE(v.is_effectively_const_bytes());
+}
+
+TEST(ColumnarConstBytes, SingleRowIsNotConst) {
+    FixedStrideCol c({"aaa"});
+    EXPECT_FALSE(c.view.is_effectively_const_bytes());
+}
+
+TEST(ColumnarConstBytes, AllRowsIdentical) {
+    FixedStrideCol c({"abc", "abc", "abc", "abc"});
+    EXPECT_TRUE(c.view.is_effectively_const_bytes());
+}
+
+// The regression: uniform stride and first == last, but a middle row differs.
+// Every 2D WKB point is 21 bytes, so stride alone proves nothing.
+TEST(ColumnarConstBytes, DifferingMiddleRowIsNotConst) {
+    FixedStrideCol c({"abc", "xyz", "abc"});
+    EXPECT_FALSE(c.view.is_effectively_const_bytes());
+}
+
+TEST(ColumnarConstBytes, DifferingLastRowIsNotConst) {
+    FixedStrideCol c({"abc", "abc", "xyz"});
+    EXPECT_FALSE(c.view.is_effectively_const_bytes());
+}
+
+TEST(ColumnarConstBytes, VaryingWidthIsNotConst) {
+    FixedStrideCol c({"ab", "cde", "fg"});
+    EXPECT_FALSE(c.view.is_effectively_const_bytes());
+}
