@@ -12,6 +12,7 @@ add_executable(chgeos_tests
   test_columnar.cpp
   test_constructors.cpp
   test_io.cpp
+  test_knn.cpp
   test_overlay.cpp
   test_predicates.cpp
   test_processing.cpp

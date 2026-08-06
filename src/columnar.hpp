@@ -992,9 +992,7 @@ inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
             ch::CentroidKNNIndex index(wkbs);
             return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
                 if (col_q.is_null(row)) return {};
-                ch::BBox pt = ch::wkb_bbox(col_q.get_bytes(row));
-                if (pt.is_empty()) return {};
-                return index.query(pt.xmin, pt.ymin, k);
+                return index.query(col_q.get_bytes(row), k);
             });
         } else {
             return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
