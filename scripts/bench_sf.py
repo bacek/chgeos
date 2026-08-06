@@ -369,6 +369,7 @@ def get_git_sha():
 
 def write_json_line(output_path, suite_dict):
     """Append one BenchmarkSuite dict as a JSON line."""
+    os.makedirs(os.path.dirname(os.path.abspath(output_path)), exist_ok=True)
     with open(output_path, "a") as f:
         json.dump(suite_dict, f)
         f.write("\n")
@@ -418,8 +419,11 @@ def main():
         query_filter.update(q.strip().upper() for q in args.queries.split(","))
 
     json_flag = args.json
+    # Anchor the default at the repo, not the cwd: running the script from
+    # anywhere else used to die with FileNotFoundError after the whole suite.
+    repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     output_path = args.output if args.output else (
-        f"{args.sf}/benchmark_results.json" if json_flag else None
+        os.path.join(repo_root, args.sf, "benchmark_results.json") if json_flag else None
     )
 
     # Spill defaults to 0.5 * max_server_memory_usage (30G in config-test.xml),
