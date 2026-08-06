@@ -45,6 +45,7 @@ SELECT t_tripkey, st_x(t_pickuploc), st_y(t_pickuploc), t_pickuptime,
  FROM {TRIP}
  WHERE st_dwithin(t_pickuploc, st_geomfromtext('POINT (-111.7610 34.8697)'), 0.45)
  ORDER BY distance_to_center ASC, t_tripkey ASC
+ LIMIT 100
  {FUEL}""",
     ),
     (
@@ -62,6 +63,7 @@ SELECT count() AS trip_count
 SELECT toStartOfMonth(t_pickuptime) AS pickup_month,
     count(t_tripkey) AS total_trips,
     avg(t_distance) AS avg_distance,
+    avg(t_dropofftime - t_pickuptime) AS avg_duration,
     avg(t_fare) AS avg_fare
  FROM {TRIP}
  WHERE st_dwithin(t_pickuploc,
@@ -93,7 +95,8 @@ SELECT c.c_custkey, c.c_name AS customer_name,
  JOIN {CUSTOMER} c ON t.t_custkey = c.c_custkey
  GROUP BY c.c_custkey, c.c_name, pickup_month
  HAVING dropoff_count > 5
- ORDER BY dropoff_count DESC, c.c_custkey ASC
+ ORDER BY monthly_travel_hull_area DESC, c.c_custkey ASC, pickup_month ASC
+ LIMIT 100
  {FUEL5}""",
     ),
     (
@@ -101,7 +104,7 @@ SELECT c.c_custkey, c.c_name AS customer_name,
         """\
 SELECT z.z_zonekey, z.z_name,
     count(t.t_tripkey) AS total_pickups,
-    avg(t.t_totalamount) AS avg_amount,
+    avg(t.t_distance) AS avg_distance,
     avg(t.t_dropofftime - t.t_pickuptime) AS avg_duration
  FROM {TRIP} t
  JOIN (
@@ -126,6 +129,7 @@ WITH trip_lengths AS (
      reported_distance_m / nullIf(line_distance_m, 0) AS detour_ratio
  FROM trip_lengths
  ORDER BY detour_ratio DESC NULLS LAST, reported_distance_m DESC, t_tripkey ASC
+ LIMIT 100
  {FUEL}""",
     ),
     (
@@ -136,6 +140,7 @@ SELECT b.b_buildingkey, b.b_name, count() AS nearby_pickup_count
  JOIN {BUILDING} b ON st_dwithin(t.t_pickuploc, b.b_boundary, 0.0045)
  GROUP BY b.b_buildingkey, b.b_name
  ORDER BY nearby_pickup_count DESC, b.b_buildingkey ASC
+ LIMIT 100
  {FUEL}""",
     ),
     (
@@ -155,6 +160,7 @@ WITH b1 AS (SELECT b_buildingkey AS id, b_boundary AS geom FROM {BUILDING}),
            ELSE overlap_area / (area1 + area2 - overlap_area) END AS iou
  FROM pairs
  ORDER BY iou DESC, building_1 ASC, building_2 ASC
+ LIMIT 100
  {FUEL}""",
     ),
     (
@@ -168,6 +174,7 @@ SELECT z.z_zonekey, z.z_name AS pickup_zone,
  LEFT JOIN {TRIP} t ON st_within(t.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY avg_duration DESC NULLS LAST, z.z_zonekey ASC
+ LIMIT 100
  {FUEL}""",
     ),
     (
@@ -185,25 +192,19 @@ SELECT count() AS cross_zone_trip_count
         """\
 WITH
      all_bldg AS (
-         SELECT groupArray(b_boundary) AS wkbs,
-                groupArray(b_buildingkey) AS keys,
-                groupArray(b_name) AS names
-         FROM {BUILDING}
+         SELECT groupArray(b_boundary) AS wkbs FROM {BUILDING}
      ),
-     knn_expanded AS (
-         SELECT t.t_tripkey, t.t_pickuploc,
-                nb.1 AS idx,
-                nb.2 AS dist
+     knn AS (
+         SELECT t.t_tripkey, nb.2 AS distance_to_building
          FROM {TRIP} t
          ARRAY JOIN st_knn(t.t_pickuploc,
                            (SELECT wkbs FROM all_bldg), 5) AS nb
      )
- SELECT t_tripkey, t_pickuploc,
-        (SELECT keys FROM all_bldg)[idx + 1]  AS b_buildingkey,
-        (SELECT names FROM all_bldg)[idx + 1] AS building_name,
-        dist AS distance_to_building
- FROM knn_expanded
- ORDER BY distance_to_building ASC, b_buildingkey ASC
+ SELECT t_tripkey, avg(distance_to_building) AS avg_distance_to_5_nearest
+ FROM knn
+ GROUP BY t_tripkey
+ ORDER BY avg_distance_to_5_nearest DESC, t_tripkey ASC
+ LIMIT 100
  {FUEL_SORT}""",
     ),
 ]
@@ -251,6 +252,22 @@ def _apply_suffix(sql: str, suffix: str) -> str:
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+def build_table_vars(sf, native):
+    """Map the {TRIP}/{ZONE}/{BUILDING}/{CUSTOMER} placeholders to table refs.
+
+    Native reads MergeTree tables (sf1.trip etc.); otherwise absolute parquet
+    paths under tmp/data/user_files/<sf>/.
+    """
+    if native:
+        return {name.upper(): f"{sf}.{name}"
+                for name in ("trip", "zone", "building", "customer")}
+    script_dir = os.path.dirname(os.path.realpath(__file__))
+    repo_root = os.path.dirname(script_dir)
+    user_files = os.path.join(repo_root, "tmp", "data", "user_files", sf)
+    return {name.upper(): f"file('{user_files}/{name}.parquet', Parquet)"
+            for name in ("trip", "zone", "building", "customer")}
+
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -424,25 +441,7 @@ def main():
     fuel5 = settings("query_plan_execute_functions_after_sorting=0")
     fuel_sort = fuel
 
-    table_vars = {}
-    if native:
-        table_vars = {
-            "TRIP": f"{sf}.trip",
-            "ZONE": f"{sf}.zone",
-            "BUILDING": f"{sf}.building",
-            "CUSTOMER": f"{sf}.customer",
-        }
-    else:
-        # Use absolute paths inside user_files directory
-        script_dir = os.path.dirname(os.path.realpath(__file__))
-        repo_root = os.path.dirname(script_dir)
-        user_files = os.path.join(repo_root, "tmp", "data", "user_files", sf)
-        table_vars = {
-            "TRIP": f"file('{user_files}/trip.parquet', Parquet)",
-            "ZONE": f"file('{user_files}/zone.parquet', Parquet)",
-            "BUILDING": f"file('{user_files}/building.parquet', Parquet)",
-            "CUSTOMER": f"file('{user_files}/customer.parquet', Parquet)",
-        }
+    table_vars = build_table_vars(sf, native)
 
     format_label = "native" if native else "parquet"
     print()
