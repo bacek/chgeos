@@ -34,6 +34,21 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 
 **SF1 wins — chgeos: 7, DuckDB: 2, Sedona: 0, PyCanopy: 1, Ties: 2**
 
+**The SF1 tally understates DuckDB, and the cause is our Parquet files.** `sf1/trip.parquet`
+holds 6M rows in only 4 row groups. DuckDB caps a scan pipeline's thread count at the number
+of row groups in the file — the row group is its atomic unit of scan parallelism, with no
+sub-splitting — so DuckDB ran these queries on at most 4 of the machine's 24 threads. At SF10
+the same file layout gives it 31 row groups and full parallelism, which is most of why its
+SF1→SF10 curve looks sublinear. ClickHouse has no equivalent limit: its Parquet reader splits
+row groups into subgroups and is at full parallelism at both scales. Several SF1 rows,
+particularly the sub-second Q1–Q3, are therefore partly measuring DuckDB's row-group cap
+rather than chgeos being faster, and DuckDB would likely take some of them on files with
+smaller row groups. We cannot say how many: two scale factors are not enough to separate the
+thread cap from DuckDB's fixed per-query overhead (~0.15 s, versus roughly zero for chgeos),
+and the two models do not predict the same SF10 times. Until the data is regenerated with
+smaller row groups, **treat SF10 as the primary comparison.** The Q7 gap is not explained by
+this and is real at both scales — see the Q7 note below.
+
 ![SF1 benchmark](sf1.png)
 
 ---
