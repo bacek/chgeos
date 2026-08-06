@@ -19,20 +19,20 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 
 | Query | Description                        | chgeos   | DuckDB   | Sedona  | PyCanopy | Winner   |
 |-------|------------------------------------|----------|----------|---------|----------|----------|
-| Q1    | Point-in-radius filter             | 0.092 s  | 0.11 s   | 0.43 s  | 0.81 s   | chgeos   |
-| Q2    | Count trips in county polygon      | 0.097 s  | 0.20 s   | 1.13 s  | 1.68 s   | chgeos   |
-| Q3    | Monthly stats in bbox+buffer       | 0.082 s  | 0.16 s   | 0.50 s  | 0.64 s   | chgeos   |
-| Q4    | Zone distribution (top-1000 tips)  | 0.767 s  | 0.67 s   | 0.91 s  | 4.78 s   | DuckDB   |
-| Q5    | Convex hull area per customer/month| 0.949 s  | 0.82 s   | 2.00 s  | 1.16 s   | DuckDB   |
-| Q6    | Zone stats for bbox-intersect zones| 1.013 s  | 0.97 s   | 0.87 s  | 2.88 s   | Sedona   |
-| Q7    | Detour ratio (all trips)           | 0.657 s  | 6.53 s   | 2.35 s  | 1.22 s   | chgeos   |
-| Q8    | Nearby pickups per building        | 0.166 s  | 0.46 s   | 0.35 s  | 0.25 s   | chgeos   |
-| Q9    | Building conflation via IoU        | 0.027 s  | 0.03 s   | 0.24 s  | 0.03 s   | chgeos   |
-| Q10   | Zone avg duration/distance         | 4.683 s  | TIMEOUT  | 4.87 s  | 5.70 s   | Tie      |
-| Q11   | Cross-zone trip count              | 6.957 s  | TIMEOUT  | 7.82 s  | 5.84 s   | PyCanopy |
-| Q12   | 5 nearest buildings per trip (kNN) | 2.421 s  | TIMEOUT  | 18.07 s | 5.71 s   | chgeos   |
+| Q1    | Point-in-radius filter             | 0.084 s  | 0.11 s   | 0.43 s  | 0.81 s   | chgeos   |
+| Q2    | Count trips in county polygon      | 0.087 s  | 0.20 s   | 1.13 s  | 1.68 s   | chgeos   |
+| Q3    | Monthly stats in bbox+buffer       | 0.083 s  | 0.16 s   | 0.50 s  | 0.64 s   | chgeos   |
+| Q4    | Zone distribution (top-1000 tips)  | 0.661 s  | 0.67 s   | 0.91 s  | 4.78 s   | Tie      |
+| Q5    | Convex hull area per customer/month| 0.841 s  | 0.82 s   | 2.00 s  | 1.16 s   | Tie      |
+| Q6    | Zone stats for bbox-intersect zones| 0.857 s  | 0.97 s   | 0.87 s  | 2.88 s   | Tie      |
+| Q7    | Detour ratio (all trips)           | 0.626 s  | 6.53 s   | 2.35 s  | 1.22 s   | chgeos   |
+| Q8    | Nearby pickups per building        | 0.164 s  | 0.46 s   | 0.35 s  | 0.25 s   | chgeos   |
+| Q9    | Building conflation via IoU        | 0.026 s  | 0.03 s   | 0.24 s  | 0.03 s   | chgeos   |
+| Q10   | Zone avg duration/distance         | 4.537 s  | TIMEOUT  | 4.87 s  | 5.70 s   | chgeos   |
+| Q11   | Cross-zone trip count              | 6.271 s  | TIMEOUT  | 7.82 s  | 5.84 s   | PyCanopy |
+| Q12   | 5 nearest buildings per trip (kNN) | 2.221 s  | TIMEOUT  | 18.07 s | 5.71 s   | chgeos   |
 
-**SF1 wins — chgeos: 7, DuckDB: 2, Sedona: 1, PyCanopy: 1, Ties: 1**
+**SF1 wins — chgeos: 8, DuckDB: 0, Sedona: 0, PyCanopy: 1, Ties: 3**
 
 ![SF1 benchmark](sf1.png)
 
