@@ -58,9 +58,9 @@ inline std::unique_ptr<Geometry> st_simplify_impl(std::unique_ptr<Geometry> geom
 }
 
 inline std::unique_ptr<Geometry> st_subdivide_impl(std::unique_ptr<Geometry> geometry, int32_t max_vertices) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   std::vector<std::unique_ptr<Geometry>> results;
-  subdivide_recursive(geometry.get(), std::max(max_vertices, 5), results, factory.get());
+  subdivide_recursive(geometry.get(), std::max(max_vertices, 5), results, factory);
   return factory->createGeometryCollection(std::move(results));
 }
 
@@ -72,7 +72,7 @@ inline std::unique_ptr<Geometry> st_makevalid_impl(std::unique_ptr<Geometry> geo
 inline std::unique_ptr<Geometry> st_expand_impl(std::unique_ptr<Geometry> geometry, double units_to_expand) {
   Envelope env(*geometry->getEnvelopeInternal());
   env.expandBy(units_to_expand);
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->toGeometry(&env);
 }
 

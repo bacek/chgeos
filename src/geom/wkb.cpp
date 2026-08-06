@@ -107,8 +107,10 @@ std::unique_ptr<Geometry> read_wkb(std::span<const uint8_t> input) {
         input = std::span(p, clean.size());
     }
 
-    GeometryFactory::Ptr factory = GeometryFactory::create();
-    WKBReader reader(*factory);
+    // The reader is stateless between calls and owns reusable scratch buffers,
+    // so it is built once rather than per row.  read() resets its own state on
+    // entry, including after a throw.
+    static WKBReader reader(*GeometryFactory::getDefaultInstance());
     auto geom = std::unique_ptr<Geometry>(reader.read(p, input.size()));
     if (!geom)
         throw std::runtime_error("read_wkb: WKBReader returned null");
@@ -146,8 +148,7 @@ std::unique_ptr<Geometry> read_wkt(std::span<const uint8_t> input) {
         // Malformed prefix (no digits or no semicolon): treat as plain WKT.
     }
 
-    GeometryFactory::Ptr factory = GeometryFactory::create();
-    WKTReader reader(*factory);
+    static WKTReader reader(*GeometryFactory::getDefaultInstance());
     auto geom = std::unique_ptr<Geometry>(reader.read(std::string(data, size)));
     if (!geom)
         throw std::runtime_error("read_wkt: WKTReader returned null");

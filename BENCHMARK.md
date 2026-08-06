@@ -103,7 +103,16 @@ call, eliminating the intermediate WKB round-trip. That is enough to beat Sedona
 outright — 0.26 s vs 0.63 s at SF1 and 0.93 s vs 5.9 s at SF10. DuckDB 1.5.2 needed
 6.53 s / 68.3 s here, so the swing is a DuckDB improvement of 25× / 73×, not a chgeos
 regression: the chgeos figures are unchanged from the same build. This is the largest
-single gap against chgeos in the suite and worth profiling. The earlier chgeos figures
+single gap against chgeos in the suite, and unlike the SF1 rows above it is not an
+artifact of the file layout — it is real at both scales. Reading the DuckDB sources
+explains it: DuckDB does not use GEOS for this query at all. Its `sgl` geometry layer
+treats a deserialized POINT as a pointer into the Parquet blob with no copy and no
+allocation, builds the `ST_MakeLine` result in a stack buffer, and computes `ST_Length`
+as a plain loop over the vertex array. GEOS is a separate module reserved for real
+topology (`ST_Intersects`, `ST_Within`, `ST_Contains`). chgeos instead parses WKB into a
+GEOS geometry tree for every row. Fitting the two scale factors gives a marginal cost of
+0.012 s per million rows for DuckDB against 0.098 s for chgeos — a 7.9× gap in per-row
+work, versus only 1.8–2.7× on the filter-dominated Q1–Q3. The earlier chgeos figures
 (1.25 s at SF1, 11.40 s at SF10) were measured on a busy machine; the numbers above come
 from an idle one and are roughly 2× faster.
 

@@ -30,18 +30,18 @@ inline std::unique_ptr<Geometry> st_unaryunion_impl(std::unique_ptr<Geometry> ge
 }
 
 inline std::unique_ptr<Geometry> st_union_agg_impl(std::vector<std::unique_ptr<Geometry>> geoms) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   auto coll = factory->createGeometryCollection(std::move(geoms));
   return coll->Union();
 }
 
 inline std::unique_ptr<Geometry> st_collect_agg_impl(std::vector<std::unique_ptr<Geometry>> geoms) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->createGeometryCollection(std::move(geoms));
 }
 
 inline std::unique_ptr<Geometry> st_extent_agg_impl(std::vector<std::unique_ptr<Geometry>> geoms) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   geos::geom::Envelope env;
   for (const auto &g : geoms)
     env.expandToInclude(g->getEnvelopeInternal());
@@ -49,7 +49,7 @@ inline std::unique_ptr<Geometry> st_extent_agg_impl(std::vector<std::unique_ptr<
 }
 
 inline std::unique_ptr<Geometry> st_makeline_agg_impl(std::vector<std::unique_ptr<Geometry>> geoms) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   auto seq = std::make_unique<geos::geom::CoordinateSequence>();
   for (const auto &g : geoms) {
     auto cs = g->getCoordinates();
@@ -59,7 +59,7 @@ inline std::unique_ptr<Geometry> st_makeline_agg_impl(std::vector<std::unique_pt
 }
 
 inline std::unique_ptr<Geometry> st_convexhull_agg_impl(std::vector<std::unique_ptr<Geometry>> geoms) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   auto coll = factory->createGeometryCollection(std::move(geoms));
   return coll->convexHull();
 }

@@ -36,7 +36,7 @@ inline std::unique_ptr<Geometry> st_geomfromwkb_impl(std::span<const uint8_t> in
 }
 
 inline std::unique_ptr<Geometry> st_extent_impl(std::unique_ptr<Geometry> geometry) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->toGeometry(geometry->getEnvelopeInternal());
 }
 
@@ -59,7 +59,7 @@ inline std::unique_ptr<Geometry> st_endpoint_impl(std::unique_ptr<Geometry> geom
 }
 
 inline std::unique_ptr<Geometry> st_collect_impl(std::unique_ptr<Geometry> a, std::unique_ptr<Geometry> b) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   std::vector<std::unique_ptr<Geometry>> geoms;
   geoms.push_back(std::move(a));
   geoms.push_back(std::move(b));
@@ -71,7 +71,7 @@ inline std::unique_ptr<Geometry> st_makebox2d_impl(std::unique_ptr<Geometry> low
   const auto *pur = dynamic_cast<const Point *>(up_right.get());
   if (!pll || !pur) throw std::runtime_error("st_makebox2d: both arguments must be points");
   Envelope env(pll->getX(), pur->getX(), pll->getY(), pur->getY());
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->toGeometry(&env);
 }
 
@@ -146,7 +146,7 @@ inline std::unique_ptr<Geometry> st_linmerge_impl(std::unique_ptr<Geometry> geom
   geos::operation::linemerge::LineMerger merger;
   merger.add(geometry.get());
   auto lines = merger.getMergedLineStrings();
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   std::vector<std::unique_ptr<Geometry>> geoms;
   for (auto &l : lines) geoms.push_back(std::move(l));
   return factory->createGeometryCollection(std::move(geoms));
@@ -156,7 +156,7 @@ inline std::unique_ptr<Geometry> st_polygonize_impl(std::unique_ptr<Geometry> ge
   geos::operation::polygonize::Polygonizer polygonizer;
   polygonizer.add(geometry.get());
   auto polys = polygonizer.getPolygons();
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   std::vector<std::unique_ptr<Geometry>> geoms;
   for (auto &p : polys) geoms.push_back(std::move(p));
   return factory->createGeometryCollection(std::move(geoms));
@@ -166,7 +166,7 @@ inline std::unique_ptr<Geometry> st_delaunaytriangles_impl(std::unique_ptr<Geome
   geos::triangulate::DelaunayTriangulationBuilder builder;
   builder.setTolerance(tolerance);
   builder.setSites(*geometry);
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return only_edges ? builder.getEdges(*factory) : builder.getTriangles(*factory);
 }
 
@@ -174,32 +174,41 @@ inline std::unique_ptr<Geometry> st_voronoidiagram_impl(std::unique_ptr<Geometry
   geos::triangulate::VoronoiDiagramBuilder builder;
   builder.setTolerance(tolerance);
   builder.setSites(*geometry);
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return only_edges ? builder.getDiagramEdges(*factory) : builder.getDiagram(*factory);
 }
 
 inline std::unique_ptr<Geometry> st_makepoint_impl(double x, double y) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->createPoint(geos::geom::Coordinate(x, y));
 }
 
 inline std::unique_ptr<Geometry> st_makepoint3d_impl(double x, double y, double z) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->createPoint(geos::geom::Coordinate(x, y, z));
 }
 
 inline std::unique_ptr<Geometry> st_makepolygon_impl(std::unique_ptr<Geometry> shell) {
   const auto *ls = dynamic_cast<const LineString *>(shell.get());
   if (!ls) throw std::runtime_error("st_makepolygon: shell must be a linestring");
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   auto ring = factory->createLinearRing(ls->getCoordinatesRO()->clone());
   return factory->createPolygon(std::move(ring));
 }
 
 inline std::unique_ptr<Geometry> st_makeline_impl(std::unique_ptr<Geometry> a, std::unique_ptr<Geometry> b) {
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   auto seq = std::make_unique<geos::geom::CoordinateSequence>();
+  // Reserve once for both inputs; growing per append would realloc each time.
+  seq->reserve(a->getNumPoints() + b->getNumPoints());
   auto append = [&](const Geometry *g) {
+    // Point exposes its sequence read-only; getCoordinates() would allocate a
+    // copy per call, which on the common two-point case doubles the work.
+    if (const auto *pt = dynamic_cast<const Point *>(g)) {
+      const auto *cs = pt->getCoordinatesRO();
+      for (size_t i = 0; i < cs->size(); ++i) seq->add(cs->getAt(i));
+      return;
+    }
     auto cs = g->getCoordinates();
     for (size_t i = 0; i < cs->size(); ++i) seq->add(cs->getAt(i));
   };
@@ -210,20 +219,20 @@ inline std::unique_ptr<Geometry> st_makeline_impl(std::unique_ptr<Geometry> a, s
 
 inline std::unique_ptr<Geometry> st_closestpoint_impl(std::unique_ptr<Geometry> a, std::unique_ptr<Geometry> b) {
   auto pts = geos::operation::distance::DistanceOp::nearestPoints(a.get(), b.get());
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->createPoint(pts->getAt(0));
 }
 
 inline std::unique_ptr<Geometry> st_shortestline_impl(std::unique_ptr<Geometry> a, std::unique_ptr<Geometry> b) {
   auto pts = geos::operation::distance::DistanceOp::nearestPoints(a.get(), b.get());
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->createLineString(std::move(pts));
 }
 
 inline std::unique_ptr<Geometry> st_sharedpaths_impl(std::unique_ptr<Geometry> a, std::unique_ptr<Geometry> b) {
   geos::operation::sharedpaths::SharedPathsOp::PathList same, opp;
   geos::operation::sharedpaths::SharedPathsOp::sharedPathsOp(*a, *b, same, opp);
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   auto to_geoms = [&](geos::operation::sharedpaths::SharedPathsOp::PathList & lst) {
     std::vector<std::unique_ptr<Geometry>> v;
     for (auto *l : lst) v.emplace_back(l);
@@ -247,7 +256,7 @@ inline std::unique_ptr<Geometry> st_addpoint_impl(std::unique_ptr<Geometry> line
   int32_t n = static_cast<int32_t>(seq->size());
   int32_t idx = (pos < 0 || pos > n) ? n : pos;
   seq->add(idx, pt->getCoordinate() ? *pt->getCoordinate() : geos::geom::Coordinate(), false);
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->createLineString(std::move(seq));
 }
 
@@ -260,7 +269,7 @@ inline std::unique_ptr<Geometry> st_removepoint_impl(std::unique_ptr<Geometry> l
   auto seq = std::make_unique<geos::geom::CoordinateSequence>();
   for (int32_t i = 0; i < n; ++i)
     if (i != pos) seq->add(src->getAt(i));
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->createLineString(std::move(seq));
 }
 
@@ -273,7 +282,7 @@ inline std::unique_ptr<Geometry> st_setpoint_impl(std::unique_ptr<Geometry> line
   if (pos < 0 || pos >= n) throw std::runtime_error("st_setpoint: index out of range");
   if (!pt->getCoordinate()) throw std::runtime_error("st_setpoint: empty point");
   seq->setAt(*pt->getCoordinate(), static_cast<size_t>(pos));
-  GeometryFactory::Ptr factory = GeometryFactory::create();
+  const GeometryFactory *factory = GeometryFactory::getDefaultInstance();
   return factory->createLineString(std::move(seq));
 }
 

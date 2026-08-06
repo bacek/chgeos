@@ -55,21 +55,21 @@ inline std::unique_ptr<CoordinateSequence> to_coord_seq(const ChLineString& ring
 inline std::unique_ptr<Geometry> chpoint_to_geos(const ChPoint& p) {
     if (p.size() < 2)
         throw std::runtime_error("ChPoint must have at least 2 coordinates");
-    GeometryFactory::Ptr f = GeometryFactory::create();
+    const GeometryFactory *f = GeometryFactory::getDefaultInstance();
     return f->createPoint(Coordinate(p[0], p[1]));
 }
 
 inline std::unique_ptr<Geometry> chlinestring_to_geos(const ChLineString& ls) {
-    GeometryFactory::Ptr f = GeometryFactory::create();
+    const GeometryFactory *f = GeometryFactory::getDefaultInstance();
     return f->createLineString(to_coord_seq(ls));
 }
 
 inline std::unique_ptr<Geometry> chpolygon_to_geos(const ChPolygon& poly) {
     if (poly.empty()) {
-        GeometryFactory::Ptr f = GeometryFactory::create();
+        const GeometryFactory *f = GeometryFactory::getDefaultInstance();
         return f->createPolygon();
     }
-    GeometryFactory::Ptr f = GeometryFactory::create();
+    const GeometryFactory *f = GeometryFactory::getDefaultInstance();
     auto outer = f->createLinearRing(to_coord_seq(poly[0]));
     std::vector<std::unique_ptr<LinearRing>> holes;
     for (std::size_t i = 1; i < poly.size(); ++i)
@@ -78,7 +78,7 @@ inline std::unique_ptr<Geometry> chpolygon_to_geos(const ChPolygon& poly) {
 }
 
 inline std::unique_ptr<Geometry> chmultipolygon_to_geos(const ChMultiPolygon& mp) {
-    GeometryFactory::Ptr f = GeometryFactory::create();
+    const GeometryFactory *f = GeometryFactory::getDefaultInstance();
     std::vector<std::unique_ptr<Geometry>> polys;
     polys.reserve(mp.size());
     for (const auto& poly : mp)
