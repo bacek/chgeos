@@ -9,63 +9,63 @@
       "results": [
         {
           "query": "q1",
-          "status": "success",
-          "time_seconds": 0.08
+          "status": "ok",
+          "time_seconds": 0.082
         },
         {
           "query": "q2",
-          "status": "success",
-          "time_seconds": 0.09
+          "status": "ok",
+          "time_seconds": 0.088
         },
         {
           "query": "q3",
-          "status": "success",
-          "time_seconds": 0.08
+          "status": "ok",
+          "time_seconds": 0.077
         },
         {
           "query": "q4",
-          "status": "success",
-          "time_seconds": 0.66
+          "status": "ok",
+          "time_seconds": 0.674
         },
         {
           "query": "q5",
-          "status": "success",
-          "time_seconds": 0.84
+          "status": "ok",
+          "time_seconds": 0.82
         },
         {
           "query": "q6",
-          "status": "success",
-          "time_seconds": 0.86
+          "status": "ok",
+          "time_seconds": 0.868
         },
         {
           "query": "q7",
-          "status": "success",
-          "time_seconds": 0.63
+          "status": "ok",
+          "time_seconds": 0.446
         },
         {
           "query": "q8",
-          "status": "success",
-          "time_seconds": 0.16
+          "status": "ok",
+          "time_seconds": 0.154
         },
         {
           "query": "q9",
-          "status": "success",
-          "time_seconds": 0.03
+          "status": "ok",
+          "time_seconds": 0.025
         },
         {
           "query": "q10",
-          "status": "success",
-          "time_seconds": 4.54
+          "status": "ok",
+          "time_seconds": 4.207
         },
         {
           "query": "q11",
-          "status": "success",
-          "time_seconds": 6.27
+          "status": "ok",
+          "time_seconds": 5.931
         },
         {
           "query": "q12",
-          "status": "success",
-          "time_seconds": 2.22
+          "status": "ok",
+          "time_seconds": 2.116
         }
       ]
     },
@@ -75,63 +75,63 @@
       "results": [
         {
           "query": "q1",
-          "status": "success",
-          "time_seconds": 0.71
+          "status": "ok",
+          "time_seconds": 0.542
         },
         {
           "query": "q2",
-          "status": "success",
-          "time_seconds": 0.88
+          "status": "ok",
+          "time_seconds": 0.674
         },
         {
           "query": "q3",
-          "status": "success",
-          "time_seconds": 0.7
+          "status": "ok",
+          "time_seconds": 0.513
         },
         {
           "query": "q4",
-          "status": "success",
-          "time_seconds": 1.52
+          "status": "ok",
+          "time_seconds": 1.141
         },
         {
           "query": "q5",
-          "status": "success",
-          "time_seconds": 10.91
+          "status": "ok",
+          "time_seconds": 8.886
         },
         {
           "query": "q6",
-          "status": "success",
-          "time_seconds": 2.07
+          "status": "ok",
+          "time_seconds": 1.795
         },
         {
           "query": "q7",
-          "status": "success",
-          "time_seconds": 5.91
+          "status": "ok",
+          "time_seconds": 3.95
         },
         {
           "query": "q8",
-          "status": "success",
-          "time_seconds": 1.83
+          "status": "ok",
+          "time_seconds": 1.686
         },
         {
           "query": "q9",
-          "status": "success",
-          "time_seconds": 0.11
+          "status": "ok",
+          "time_seconds": 0.102
         },
         {
           "query": "q10",
-          "status": "success",
-          "time_seconds": 35.12
+          "status": "ok",
+          "time_seconds": 31.582
         },
         {
           "query": "q11",
-          "status": "success",
-          "time_seconds": 46.13
+          "status": "ok",
+          "time_seconds": 41.187
         },
         {
           "query": "q12",
-          "status": "success",
-          "time_seconds": 31.17
+          "status": "ok",
+          "time_seconds": 27.347
         }
       ]
     },
