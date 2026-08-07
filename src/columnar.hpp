@@ -131,7 +131,8 @@ struct ColView {
     ColType         base_type;
     bool            is_const;
     uint32_t        row_count;    // stored rows (1 if const, N otherwise)
-    const uint8_t*  null_map;     // nullable: null_map[i]!=0 → NULL; nullptr = non-nullable
+    const uint8_t*  null_map;     // nullable: null_map[i]!=0 → NULL;
+                                  // COL_VARIANT: discriminators (0xFF = NULL)
     const uint64_t* offsets;      // start-based; nullptr for fixed-width
     const uint8_t*  data;
     const uint8_t*  base;         // buffer base — needed for COL_VARIANT absolute offset navigation
@@ -144,7 +145,9 @@ struct ColView {
 
     bool is_null(uint32_t row) const noexcept {
         if (!null_map) return false;
-        return null_map[effective_row(row)] != 0u;
+        const uint8_t v = null_map[effective_row(row)];
+        if (base_type == COL_VARIANT) return v == 0xFFu;
+        return v != 0u;
     }
 
     // For COL_BYTES — exact byte span, no null terminator on wire.
@@ -472,8 +475,8 @@ std::vector<ElemT> col_get_complex_array(const ColView& col, uint32_t row) {
 
 // ── COL_VARIANT geometry decoder ─────────────────────────────────────────────
 //
-// Geo-discriminator constants (CH DataTypeCustomGeo.cpp sort order):
-//   0=Point, 1=LineString, 2=Polygon, 3=MultiPolygon, 4=Ring, 5=MultiLineString
+// Geo-discriminator constants (CH DataTypeCustomGeo.cpp alphabetical sort order):
+//   0=LineString, 1=MultiLineString, 2=MultiPolygon, 3=Point, 4=Polygon, 5=Ring
 //
 // For each sub-column:
 //   inner.null_offset = M (sub_row_count, stored by CH serializer)

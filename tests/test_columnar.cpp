@@ -1065,9 +1065,7 @@ TEST(ColumnarWkbScalar, NonPointRowPanicsAsBefore) {
 TEST(ColumnarWkbScalar, VariantColumnKeepsGeosPath) {
     // COL_VARIANT holds coordinates, not WKB; get_bytes() on it would be
     // nonsense, so registering the op must not divert this column.  The
-    // assertion is that output is unchanged, not what the output is —
-    // ColView::is_null() currently reads a Variant discriminator as a null
-    // flag, so these rows come out NaN either way (see report).
+    // assertion is that output is unchanged, not what the output is.
     auto rows = std::vector<std::optional<std::pair<double, double>>>{
         std::make_optional(std::pair{1.0, 2.0}),
         std::nullopt,
@@ -1104,4 +1102,75 @@ TEST(ColumnarWkbScalar, StYReadsSecondOrdinate) {
 
     EXPECT_DOUBLE_EQ(got[0], -7.5);
     EXPECT_DOUBLE_EQ(got[1], 7.0);
+}
+
+// ── ColView::is_null() for COL_VARIANT ────────────────────────────────────────
+//
+// For COL_VARIANT, null_map holds discriminators (0=LineString, 1=MultiLineString,
+// 2=MultiPolygon, 3=Point, 4=Polygon, 5=Ring); 0xFF means NULL.
+// For non-Variant nullable columns, null_map[i] != 0 means NULL.
+
+namespace {
+
+// Bitwise comparison for doubles (mirrors SameBits from test_accessors.cpp).
+static void ExpectSameBits(double a, double b) {
+    EXPECT_EQ(0, std::memcmp(&a, &b, sizeof(double)))
+        << "row: " << a << " vs " << b;
+}
+
+}  // namespace
+
+// A non-NULL Variant row with discriminator 3 (Point) must NOT be null.
+// This test fails before the fix (is_null reads 3 != 0 → true).
+TEST(ColViewIsNull, VariantNonZeroDiscriminatorIsNotNull) {
+    auto* buf = make_variant_point_buf({
+        std::make_optional(std::pair{1.0, 2.0}),
+        std::make_optional(std::pair{3.0, 4.0}),
+    });
+    auto cb  = parse_columnar(buf);
+    auto col = cb.col(0);
+    ASSERT_EQ(col.base_type, static_cast<ColType>(COL_VARIANT));
+
+    EXPECT_FALSE(col.is_null(0));
+    EXPECT_FALSE(col.is_null(1));
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+}
+
+// Variant column mixing NULL (0xFF) and non-NULL (discriminator 3) rows.
+// Non-NULL rows should produce real x values, NULL rows should produce NaN.
+TEST(ColViewIsNull, VariantMixedNullNonNullThroughWrapper) {
+    auto rows = std::vector<std::optional<std::pair<double, double>>>{
+        std::make_optional(std::pair{1.0, 2.0}),
+        std::nullopt,
+        std::make_optional(std::pair{3.0, 4.0}),
+    };
+
+    auto* buf = make_variant_point_buf(rows);
+    auto got = read_double_col(
+        columnar_impl_wrapper(buf, 3, st_x_impl), 3);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+
+    ExpectSameBits(got[0], 1.0);
+    ExpectSameBits(got[1], std::numeric_limits<double>::quiet_NaN());
+    ExpectSameBits(got[2], 3.0);
+}
+
+// Non-Variant nullable column: null_map[i] != 0 means NULL.
+// Verify the existing behaviour is preserved.
+TEST(ColViewIsNull, NonVariantNullableUnchanged) {
+    auto* buf = make_columnar(3, {
+        null_bytes_col(false,
+            {wkt2wkb("POINT (1 2)"), ch::Vector{}, wkt2wkb("POINT (3 4)")},
+            {0u, 0xFFu, 0u}),
+    });
+    auto cb  = parse_columnar(buf);
+    auto col = cb.col(0);
+    ASSERT_EQ(col.base_type, static_cast<ColType>(COL_BYTES));
+
+    EXPECT_FALSE(col.is_null(0));
+    EXPECT_TRUE(col.is_null(1));
+    EXPECT_FALSE(col.is_null(2));
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 }
