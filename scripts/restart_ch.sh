@@ -42,7 +42,10 @@ sed -e "s|__DATA_DIR__|${DATA_DIR}|g" \
     -e "s|__USER_FILES_PATH__|${USER_FILES}|g" \
     < "$CONFIG" > "$TMP_CONFIG"
 
-nohup "$CH" server --config-file="$TMP_CONFIG" 2>/tmp/ch-server.log &
+# Detach every standard fd. Leaving stdout inherited keeps the caller's pipe
+# open for as long as the server lives, so a caller that reads this script's
+# output (a CI step, a tool wrapper) hangs after the script itself has exited.
+nohup "$CH" server --config-file="$TMP_CONFIG" </dev/null >/tmp/ch-server.log 2>&1 &
 
 echo -n "Waiting for server"
 for i in $(seq 1 120); do

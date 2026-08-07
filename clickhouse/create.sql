@@ -733,13 +733,12 @@ ABI COLUMNAR_V1
 DETERMINISTIC
 SETTINGS is_aggregate = 1;
 
--- UDAF aggregate: CH accumulates rows per group, passes as Array(String).
--- Scalar String arg → CH wraps to Array(String) at runtime.
 CREATE OR REPLACE FUNCTION st_collect_agg
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (geoms Array(String)) RETURNS String
 ABI COLUMNAR_V1
-DETERMINISTIC;
+DETERMINISTIC
+SETTINGS is_aggregate = 1;
 
 CREATE OR REPLACE FUNCTION st_extent_agg
 LANGUAGE WASM FROM 'chgeos'
