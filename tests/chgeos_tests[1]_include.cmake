@@ -1,0 +1,5 @@
+if(EXISTS "/home/bacek/src/chgeos/tests/chgeos_tests[1]_tests.cmake")
+  include("/home/bacek/src/chgeos/tests/chgeos_tests[1]_tests.cmake")
+else()
+  add_test(chgeos_tests_NOT_BUILT chgeos_tests_NOT_BUILT)
+endif()

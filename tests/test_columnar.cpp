@@ -969,3 +969,139 @@ TEST(ColumnarConstBytes, VaryingWidthIsNotConst) {
     FixedStrideCol c({"ab", "cde", "fg"});
     EXPECT_FALSE(c.view.is_effectively_const_bytes());
 }
+
+// ── st_x / st_y WKB fast path through the wrapper ────────────────────────────
+//
+// The unit tests in test_accessors.cpp pin st_x_wkb against st_x_impl.  These
+// pin the wrapper: registering the op must change nothing an caller can observe,
+// so every case is compared against the same wrapper called without it.
+
+static std::vector<double> read_double_col(raw_buffer* out, uint32_t n) {
+    std::vector<double> res(n);
+    std::memcpy(res.data(), out->data() + HEADER_BYTES + COL_DESC_BYTES, n * 8u);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
+    return res;
+}
+
+// Runs the wrapper over one geometry column, with and without the fast path,
+// and requires the two outputs to be the same bits.
+static void ExpectWrapperFastPathIsInvisible(std::vector<ColData> cols, uint32_t n) {
+    auto* buf_geos = make_columnar(n, cols);
+    auto geos = read_double_col(
+        columnar_impl_wrapper(buf_geos, n, st_x_impl), n);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_geos));
+
+    auto* buf_fast = make_columnar(n, cols);
+    auto fast = read_double_col(
+        columnar_impl_wrapper(buf_fast, n, st_x_impl,
+            nullptr, false, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, st_x_wkb),
+        n);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_fast));
+
+    ASSERT_EQ(geos.size(), fast.size());
+    for (uint32_t i = 0; i < n; ++i)
+        EXPECT_EQ(0, std::memcmp(&geos[i], &fast[i], sizeof(double))) << "row " << i;
+}
+
+// Little-endian WKB POINT with an explicit type word (see test_accessors.cpp).
+static ch::Vector col_point_wkb(uint32_t type, std::vector<uint32_t> srid,
+                                std::vector<double> ordinates) {
+    ch::Vector v;
+    v.push_back(0x01);
+    uint8_t b[8];
+    std::memcpy(b, &type, 4);
+    v.insert(v.end(), b, b + 4);
+    for (uint32_t s : srid) {
+        std::memcpy(b, &s, 4);
+        v.insert(v.end(), b, b + 4);
+    }
+    for (double d : ordinates) {
+        std::memcpy(b, &d, 8);
+        v.insert(v.end(), b, b + 8);
+    }
+    return v;
+}
+
+TEST(ColumnarWkbScalar, MixedPointEncodingsMatchGeos) {
+    ExpectWrapperFastPathIsInvisible({bytes_col(false, {
+        wkt2wkb("POINT (1 2)"),
+        wkt2wkb("POINT (-3.5 7.25)"),
+        col_point_wkb(0x20000001u, {4326u}, {12.5, -7.5}),   // EWKB + SRID
+        col_point_wkb(1001u, {}, {1.0, 2.0, 3.0}),           // PointZ  (ISO)
+        col_point_wkb(0x40000001u, {}, {4.0, 5.0, 9.0}),     // PointM  (EWKB)
+        col_point_wkb(3001u, {}, {6.0, 7.0, 8.0, 9.0}),      // PointZM (ISO)
+    })}, 6);
+}
+
+TEST(ColumnarWkbScalar, NullRowsMatchGeos) {
+    ExpectWrapperFastPathIsInvisible({null_bytes_col(false,
+        {wkt2wkb("POINT (1 2)"), ch::Vector{}, wkt2wkb("POINT (3 4)")},
+        {0u, 0xFFu, 0u})}, 3);
+}
+
+TEST(ColumnarWkbScalar, DeclinedRowFallsBackToGeos) {
+    // A single NaN ordinate is a real point; both ordinates NaN is POINT EMPTY,
+    // which the op declines and the GEOS path then throws on.  Both wrappers
+    // must therefore panic identically.
+    double nan = std::numeric_limits<double>::quiet_NaN();
+    auto empty_point = col_point_wkb(1u, {}, {nan, nan});
+
+    auto* buf = make_columnar(1, {bytes_col(false, {empty_point})});
+    EXPECT_THROW(columnar_impl_wrapper(buf, 1, st_x_impl,
+        nullptr, false, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, st_x_wkb), WasmPanicException);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+}
+
+TEST(ColumnarWkbScalar, NonPointRowPanicsAsBefore) {
+    auto* buf = make_columnar(1, {bytes_col(false, {wkt2wkb("LINESTRING (0 0, 1 1)")})});
+    EXPECT_THROW(columnar_impl_wrapper(buf, 1, st_x_impl,
+        nullptr, false, nullptr, nullptr, nullptr, nullptr,
+        nullptr, nullptr, st_x_wkb), WasmPanicException);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+}
+
+TEST(ColumnarWkbScalar, VariantColumnKeepsGeosPath) {
+    // COL_VARIANT holds coordinates, not WKB; get_bytes() on it would be
+    // nonsense, so registering the op must not divert this column.  The
+    // assertion is that output is unchanged, not what the output is —
+    // ColView::is_null() currently reads a Variant discriminator as a null
+    // flag, so these rows come out NaN either way (see report).
+    auto rows = std::vector<std::optional<std::pair<double, double>>>{
+        std::make_optional(std::pair{1.0, 2.0}),
+        std::nullopt,
+        std::make_optional(std::pair{3.0, 4.0}),
+    };
+
+    auto* buf_geos = make_variant_point_buf(rows);
+    auto geos = read_double_col(columnar_impl_wrapper(buf_geos, 3, st_x_impl), 3);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_geos));
+
+    auto* buf_fast = make_variant_point_buf(rows);
+    auto fast = read_double_col(
+        columnar_impl_wrapper(buf_fast, 3, st_x_impl,
+            nullptr, false, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, st_x_wkb),
+        3);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf_fast));
+
+    for (uint32_t i = 0; i < 3; ++i)
+        EXPECT_EQ(0, std::memcmp(&geos[i], &fast[i], sizeof(double))) << "row " << i;
+}
+
+TEST(ColumnarWkbScalar, StYReadsSecondOrdinate) {
+    auto* buf = make_columnar(2, {bytes_col(false, {
+        col_point_wkb(0x20000001u, {4326u}, {12.5, -7.5}),
+        col_point_wkb(3001u, {}, {6.0, 7.0, 8.0, 9.0}),
+    })});
+    auto got = read_double_col(
+        columnar_impl_wrapper(buf, 2, st_y_impl,
+            nullptr, false, nullptr, nullptr, nullptr, nullptr,
+            nullptr, nullptr, st_y_wkb),
+        2);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+
+    EXPECT_DOUBLE_EQ(got[0], -7.5);
+    EXPECT_DOUBLE_EQ(got[1], 7.0);
+}

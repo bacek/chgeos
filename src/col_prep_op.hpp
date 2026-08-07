@@ -3,6 +3,9 @@
 // Shared type for per-column PreparedGeometry callbacks.
 // "I am the prepared geometry; other is the variable geometry for this row."
 
+#include <optional>
+#include <span>
+
 #include <geos/geom/Geometry.h>
 #include <geos/geom/prep/PreparedGeometry.h>
 #include <geos/geom/Location.h>
@@ -27,5 +30,15 @@ using ColPrepDistOp = bool (*)(const geos::geom::prep::PreparedGeometry*,
 // coveredby / intersects, which are true on the boundary while within /
 // contains are false.
 using ColPrepPointOp = bool (*)(geos::geom::Location);
+
+// Fast path for a one-argument accessor whose answer is already a plain number
+// sitting at a known offset in the WKB (st_x, st_y).  The op reads it straight
+// out of the bytes, with no GEOS geometry built for the row.
+//
+// nullopt means "not mine": the row is handed to the ordinary GEOS impl, which
+// stays the single authority on every case the op does not claim — other
+// geometry types, empty geometries and malformed buffers, error messages
+// included.  An op must therefore never throw and never guess.
+using ColWkbScalarOp = std::optional<double> (*)(std::span<const uint8_t>);
 
 } // namespace ch

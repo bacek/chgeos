@@ -30,4 +30,16 @@ inline std::optional<XY> wkb_read_point(std::span<const uint8_t> wkb) {
     return XY{x, y};
 }
 
+// wkb_read_point for callers that are a fast path rather than the parser: a
+// truncated buffer is declined instead of reported, so the general GEOS path
+// stays the one place that decides what a malformed buffer means and what the
+// user is told about it.
+inline std::optional<XY> wkb_read_point_or_decline(std::span<const uint8_t> wkb) noexcept {
+    try {
+        return wkb_read_point(wkb);
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
 } // namespace ch

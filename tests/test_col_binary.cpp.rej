@@ -1,0 +1,16 @@
+--- tests/test_col_binary.cpp
++++ tests/test_col_binary.cpp
+@@ -271,6 +271,13 @@ TEST(ColBinaryImpl, BoolHeaderOrder) {
+ 
+     auto* buf = make_col_binary_buf(n, 2, {col0_data, col1_data});
+     auto* result = col_binary_impl_wrapper("st_contains_cb", buf, n, st_contains_impl,
+         bbox_op_contains, false, prep_a_st_contains, prep_b_st_contains);
+     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
++
++    printf("RESULT size=%zu\n", result->size());
++    printf("bytes: ");
++    for (size_t i = 0; i < result->size() && i < 50; ++i)
++        printf("%02x ", (*result)[i]);
++    printf("\n");
++
+ 

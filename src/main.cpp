@@ -168,8 +168,8 @@ CH_UDF_COL_BBOX2(st_containsproperly,bbox_op_contains,   false)
 CH_UDF_COL_PRED3(st_dwithin)
 
 // ── COLUMNAR_V1 — all other (types deduced from _impl) ──────────────────────
-CH_UDF_COL(st_x)
-CH_UDF_COL(st_y)
+CH_UDF_COL_WKB1(st_x)
+CH_UDF_COL_WKB1(st_y)
 CH_UDF_COL(st_z)
 CH_UDF_COL(st_area)
 CH_UDF_COL(st_length)
@@ -274,8 +274,8 @@ CH_UDF_CB_BBOX2(st_containsproperly,bbox_op_contains,   false)
 CH_UDF_CB_PRED3(st_dwithin)
 
 // ── ColumnBinary — scalar and geometry functions ──────────────────────────────
-CH_UDF_CB(st_x)
-CH_UDF_CB(st_y)
+CH_UDF_CB_WKB1(st_x)
+CH_UDF_CB_WKB1(st_y)
 CH_UDF_CB(st_z)
 CH_UDF_CB(st_area)
 CH_UDF_CB(st_length)

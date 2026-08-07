@@ -1,7 +1,10 @@
 #pragma once
 
+#include <cmath>
 #include <cstdint>
 #include <limits>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 
@@ -13,6 +16,7 @@
 #include <geos/operation/valid/IsValidOp.h>
 
 #include "../geom/wkb.hpp"
+#include "../geom/wkb_point.hpp"
 
 namespace ch {
 
@@ -26,6 +30,44 @@ inline double st_y_impl(std::unique_ptr<Geometry> geometry) {
   const auto *pt = dynamic_cast<const Point *>(geometry.get());
   if (!pt) throw std::runtime_error("st_y: not a point");
   return pt->getY();
+}
+
+// ── ColWkbScalarOp fast paths for st_x / st_y ────────────────────────────────
+//
+// A WKB POINT carries X and Y as the first two ordinates after the header, at a
+// fixed offset, whatever its dimensionality and whether or not it carries an
+// EWKB SRID — so both accessors are an 8-byte read rather than a parse into a
+// GEOS tree followed by a dynamic_cast.
+//
+// Everything else is declined so st_x_impl / st_y_impl still decide it:
+//   - non-POINT geometries, which must keep throwing "st_x: not a point";
+//   - the empty point, which WKBReader recognises as x and y both NaN and whose
+//     Point::getX() throws rather than returning the NaN;
+//   - truncated or otherwise malformed buffers, which must keep reporting the
+//     WKBReader error the user sees today.
+//
+// A single non-NaN ordinate is not the empty point — WKBReader requires both —
+// so those rows are claimed and return the NaN, exactly as getX() would.
+namespace detail {
+
+inline std::optional<XY> wkb_nonempty_point(std::span<const uint8_t> wkb) noexcept {
+  std::optional<XY> p = wkb_read_point_or_decline(wkb);
+  if (!p || (std::isnan(p->x) && std::isnan(p->y))) return std::nullopt;
+  return p;
+}
+
+} // namespace detail
+
+inline std::optional<double> st_x_wkb(std::span<const uint8_t> wkb) noexcept {
+  std::optional<XY> p = detail::wkb_nonempty_point(wkb);
+  if (!p) return std::nullopt;
+  return p->x;
+}
+
+inline std::optional<double> st_y_wkb(std::span<const uint8_t> wkb) noexcept {
+  std::optional<XY> p = detail::wkb_nonempty_point(wkb);
+  if (!p) return std::nullopt;
+  return p->y;
 }
 
 inline std::unique_ptr<Geometry> st_centroid_impl(std::unique_ptr<Geometry> geometry) {

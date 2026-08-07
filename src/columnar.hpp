@@ -683,7 +683,8 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                   ColPrepDistOp  prep_a_dist  = nullptr,
                                   ColPrepDistOp  prep_b_dist  = nullptr,
                                   ColPrepPointOp prep_a_point = nullptr,  // A-const polygon, B varies as points
-                                  ColPrepPointOp prep_b_point = nullptr)  // B-const polygon, A varies as points
+                                  ColPrepPointOp prep_b_point = nullptr,  // B-const polygon, A varies as points
+                                  ColWkbScalarOp wkb_scalar   = nullptr)  // 1-arg accessor read straight from WKB
 {
     using PGF = geos::geom::prep::PreparedGeometryFactory;
 
@@ -901,6 +902,25 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
             out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 8u);
             col_write_fixed_header<double>(out, n, COL_FIXED64);
             double* res = reinterpret_cast<double*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
+
+            // WKB fast path: the answer is a fixed-offset read out of the row's
+            // bytes, so no GEOS geometry is built.  A COL_VARIANT column holds
+            // no WKB at all and keeps the GEOS path, as does any single row the
+            // op declines — the op only ever claims cases it is sure of.
+            if constexpr (nargs == 1) {
+                if (wkb_scalar && cols[0].base_type != COL_VARIANT) {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (cols[0].is_null(i)) {
+                            res[i] = std::numeric_limits<double>::quiet_NaN();
+                            continue;
+                        }
+                        std::optional<double> v = wkb_scalar(cols[0].get_bytes(i));
+                        res[i] = v ? *v : invoke(i);
+                    }
+                    return out;
+                }
+            }
+
             for (uint32_t i = 0; i < n; ++i) {
                 res[i] = any_null(i) ? std::numeric_limits<double>::quiet_NaN() : invoke(i);
             }
@@ -1046,6 +1066,16 @@ inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
     __attribute__((export_name(#name)))                                          \
     ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
         return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl);        \
+    }
+
+// 1-arg accessor returning double, with a ColWkbScalarOp fast path that reads
+// the answer out of the WKB.  Requires name##_wkb defined alongside name##_impl.
+#define CH_UDF_COL_WKB1(name)                                                    \
+    __attribute__((export_name(#name)))                                          \
+    ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
+            nullptr, false, nullptr, nullptr, nullptr, nullptr,                  \
+            nullptr, nullptr, ch::name##_wkb);                                   \
     }
 
 // Canonical no-suffix alias for PRED3 functions that keep their _col export.
