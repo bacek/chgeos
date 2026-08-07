@@ -21,6 +21,7 @@
 #include <functional>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -28,6 +29,7 @@
 #include <vector>
 
 #include "columnar.hpp"
+#include "geom/flat_batch.hpp"
 #include "geom/wkb.hpp"
 #include "mem.hpp"
 
@@ -37,6 +39,18 @@ using GeomPtr = std::unique_ptr<geos::geom::Geometry>;
 
 enum class ChainRole { SOURCE, XFORM, SINK };
 
+// A stage may implement its work in either of two currencies:
+//
+//   GeomPtr    the general one — anything GEOS can do, at a few heap
+//              allocations per row.
+//   FlatBatch  the fast one — plain coordinates, no allocation per row, but
+//              only expressible for stages that need nothing but coordinates.
+//
+// The flat variants are optional and purely an optimization: a chain runs flat
+// only when every one of its stages offers one, and any stage may still decline
+// a particular block at runtime (a shape it cannot handle), which drops the
+// whole chain back to the GEOS path.  Every flat variant must therefore produce
+// bit-identical results to its GEOS counterpart, not merely close ones.
 struct ChainFn {
     ChainRole role;
     uint32_t  source_arity  = 0;  // non-zero only for SOURCE: geom cols consumed
@@ -48,6 +62,12 @@ struct ChainFn {
     std::function<std::vector<GeomPtr>(std::vector<GeomPtr>, std::span<const ColView>)> as_xform;
     // SINK: consumes GeomPtr vector, allocates and returns the result raw_buffer.
     std::function<raw_buffer*(std::vector<GeomPtr>, uint32_t n)>        as_sink;
+
+    // Flat counterparts.  nullopt / false means "not this block" — never an
+    // error, always a fallback.
+    std::function<std::optional<FlatBatch>(const ColumnarBuf&, uint32_t n)>  as_source_flat;
+    std::function<bool(FlatBatch&, std::span<const ColView>)>                as_xform_flat;
+    std::function<raw_buffer*(const FlatBatch&, uint32_t n)>                 as_sink_flat;
 };
 
 inline std::unordered_map<std::string, ChainFn>& chain_registry() {
@@ -233,10 +253,61 @@ inline bool validate_chain(const std::vector<std::string>& names) {
 
 // ── Chain execution ───────────────────────────────────────────────────────────
 
+// Scalar columns sit in row_buf after the source's geometry columns, one run per
+// XFORM.  Both execution paths consume them the same way, so the offset walk
+// lives here rather than being written twice.
+inline std::vector<ColView> chain_scalar_cols(const ColumnarBuf& cb, const ChainFn& fn,
+                                              uint32_t col_offset) {
+    std::vector<ColView> scalars;
+    scalars.reserve(fn.n_scalar_cols);
+    for (uint32_t k = 0; k < fn.n_scalar_cols; ++k)
+        scalars.push_back(cb.col(col_offset + k));
+    return scalars;
+}
+
+// True when every stage offers a flat variant.  Cheap enough to test per block;
+// it is a handful of std::function null checks over a chain of two or three.
+inline bool chain_all_flat(const std::vector<std::string>& fn_names) {
+    auto& reg = chain_registry();
+    if (!reg.at(chain_resolve_name(fn_names.front())).as_source_flat) return false;
+    if (!reg.at(chain_resolve_name(fn_names.back())).as_sink_flat)    return false;
+    for (size_t i = 1; i + 1 < fn_names.size(); ++i)
+        if (!reg.at(chain_resolve_name(fn_names[i])).as_xform_flat) return false;
+    return true;
+}
+
+// Runs the chain in flat currency, or returns nullptr if any stage declines the
+// block.  Nothing is written to the output buffer before the last stage, so a
+// decline costs only the work already done on coordinates — no partial result
+// escapes and the caller can simply run the GEOS path instead.
+inline raw_buffer* chain_execute_flat(const std::vector<std::string>& fn_names,
+                                      const ColumnarBuf& cb, uint32_t n) {
+    auto& reg = chain_registry();
+
+    const auto& source = reg.at(chain_resolve_name(fn_names.front()));
+    auto batch = source.as_source_flat(cb, n);
+    if (!batch) return nullptr;
+
+    uint32_t col_offset = source.source_arity;
+    for (size_t i = 1; i + 1 < fn_names.size(); ++i) {
+        const auto& fn = reg.at(chain_resolve_name(fn_names[i]));
+        auto scalars = chain_scalar_cols(cb, fn, col_offset);
+        if (!fn.as_xform_flat(*batch, scalars)) return nullptr;
+        col_offset += fn.n_scalar_cols;
+    }
+
+    return reg.at(chain_resolve_name(fn_names.back())).as_sink_flat(*batch, n);
+}
+
 inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf, uint32_t /*n*/) {
     auto fn_names = parse_chain_names(chain_buf);
     auto cb       = parse_columnar(row_buf);
     uint32_t n    = cb.num_rows;
+
+    if (chain_all_flat(fn_names))
+        if (raw_buffer* out = chain_execute_flat(fn_names, cb, n))
+            return out;
+
     auto& reg     = chain_registry();
 
     // SOURCE (or XFORM acting as SOURCE): consumes source_arity geometry columns.
@@ -247,10 +318,7 @@ inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf
     // XFORMs: each consumes n_scalar_cols const columns from row_buf.
     for (size_t i = 1; i + 1 < fn_names.size(); ++i) {
         const auto& fn = reg.at(chain_resolve_name(fn_names[i]));
-        std::vector<ColView> scalars;
-        scalars.reserve(fn.n_scalar_cols);
-        for (uint32_t k = 0; k < fn.n_scalar_cols; ++k)
-            scalars.push_back(cb.col(col_offset + k));
+        auto scalars = chain_scalar_cols(cb, fn, col_offset);
         handles = fn.as_xform(std::move(handles), scalars);
         col_offset += fn.n_scalar_cols;
     }
@@ -314,6 +382,18 @@ inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf
             return ch::chain_xform_dd_run<ch::name##_impl>(std::move(h), s[0], s[1]); \
         }                                                                             \
     }
+
+// Flat variants.  Each attaches to a function already registered by one of the
+// macros above — the GEOS path it falls back to must exist first — and takes a
+// callable matching the corresponding ChainFn field.
+#define CH_CHAIN_FLAT_SOURCE(name, fn)                                          \
+    ch::chain_registry()[#name].as_source_flat = fn
+
+#define CH_CHAIN_FLAT_XFORM(name, fn)                                           \
+    ch::chain_registry()[#name].as_xform_flat = fn
+
+#define CH_CHAIN_FLAT_SINK(name, fn)                                            \
+    ch::chain_registry()[#name].as_sink_flat = fn
 
 #define CH_CHAIN_SINK(name)                                                     \
     ch::chain_registry()[#name] = ch::ChainFn{                                  \

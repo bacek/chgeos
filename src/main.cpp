@@ -2,6 +2,7 @@
 #include <geos/version.h>
 
 #include "functions.hpp"
+#include "functions/flat.hpp"
 #include "functions/knn.hpp"
 #include "rowbinary.hpp"
 #include "msgpack.hpp"
@@ -517,6 +518,20 @@ static void populate_chain_registry() {
     CH_CHAIN_SINK(st_numpoints);
     CH_CHAIN_SINK(st_nrings);
     CH_CHAIN_SINK(st_isvalidreason);
+
+    // FLAT: alternative implementations that work on plain coordinates instead
+    // of GEOS geometries.  Attached to the entries registered above, which stay
+    // the fallback; a chain runs flat only if every one of its stages is here.
+    CH_CHAIN_FLAT_SOURCE(st_makeline,   ch::flat_source_st_makeline);
+    CH_CHAIN_FLAT_SOURCE(st_makebox2d,  ch::flat_source_st_makebox2d);
+    // st_reverse gets both: CH_CHAIN_XFORM registers a zero-scalar function as a
+    // source too, so the flat path has to cover the same two roles.
+    CH_CHAIN_FLAT_SOURCE(st_reverse,    ch::flat_source_st_reverse);
+    CH_CHAIN_FLAT_XFORM(st_reverse,     ch::flat_xform_st_reverse);
+    CH_CHAIN_FLAT_XFORM(st_translate,   ch::flat_xform_st_translate);
+    CH_CHAIN_FLAT_SINK(st_length,       ch::flat_sink_st_length);
+    CH_CHAIN_FLAT_SINK(st_npoints,      ch::flat_sink_st_npoints);
+    CH_CHAIN_FLAT_SINK(st_isempty,      ch::flat_sink_st_isempty);
 
     ch::log(std::format("module_init: registered {} chain functions", reg.size()));
 }
