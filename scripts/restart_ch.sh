@@ -10,10 +10,17 @@ CONFIG="$REPO/clickhouse/config-test.xml"
 # `pkill -f "clickhouse server"` also matches any shell, editor or grep whose
 # arguments happen to contain that phrase, including the caller of this script.
 # Require the executable name to actually be clickhouse.
+#
+# Match comm as a prefix: the kernel truncates it to 15 characters, so a server
+# started from a copied binary such as /tmp/clickhouse-9d8edb43e21 has comm
+# "clickhouse-9d8e". An exact match silently skips it, the old server survives,
+# the new one dies on the status-file lock, and the readiness probe then talks to
+# the old process — i.e. every subsequent measurement uses the wrong binary.
 server_pids() {
-    local pid
+    local pid comm
     for pid in $(pgrep -f "clickhouse server" 2>/dev/null); do
-        [[ "$(cat "/proc/$pid/comm" 2>/dev/null)" == "clickhouse" ]] && echo "$pid"
+        comm="$(cat "/proc/$pid/comm" 2>/dev/null)"
+        [[ "$comm" == clickhouse* ]] && echo "$pid"
     done
 }
 
@@ -46,11 +53,21 @@ sed -e "s|__DATA_DIR__|${DATA_DIR}|g" \
 # open for as long as the server lives, so a caller that reads this script's
 # output (a CI step, a tool wrapper) hangs after the script itself has exited.
 nohup "$CH" server --config-file="$TMP_CONFIG" </dev/null >/tmp/ch-server.log 2>&1 &
+NEW_PID=$!
 
 echo -n "Waiting for server"
 for i in $(seq 1 120); do
+    # A successful SELECT 1 only proves *someone* is on port 19000. Check that
+    # the server we started is the one still alive, so a failed start can never
+    # be reported as ready against a leftover process running another binary.
+    if ! kill -0 "$NEW_PID" 2>/dev/null; then
+        echo
+        echo "ERROR: server exited during startup; last lines of /tmp/ch-server.log:" >&2
+        tail -20 /tmp/ch-server.log >&2
+        exit 1
+    fi
     if "$CH" client --port 19000 --query "SELECT 1" 2>/dev/null; then
-        echo "Ready after ${i}s"
+        echo "Ready after ${i}s (pid $NEW_PID)"
         exit 0
     fi
     echo -n "."
