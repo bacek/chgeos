@@ -23,6 +23,16 @@
         <table>query_thread_log</table>
         <flush_interval_milliseconds>1000</flush_interval_milliseconds>
     </query_thread_log>
+    <!-- Sampling profiler output. Enabled because perf cannot attach to the
+         server in this sandbox (perf_event_open on another pid yields no
+         samples), and system.trace_log is the only way left to see where query
+         CPU time goes. Sampling is off per query until a query_profiler_*_period
+         setting is set, so this costs nothing by default. -->
+    <trace_log>
+        <database>system</database>
+        <table>trace_log</table>
+        <flush_interval_milliseconds>1000</flush_interval_milliseconds>
+    </trace_log>
     <users>
         <default>
             <password></password>

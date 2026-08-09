@@ -16,9 +16,13 @@ CONFIG="$REPO/clickhouse/config-test.xml"
 # "clickhouse-9d8e". An exact match silently skips it, the old server survives,
 # the new one dies on the status-file lock, and the readiness probe then talks to
 # the old process — i.e. every subsequent measurement uses the wrong binary.
+#
+# Match on the "server" subcommand rather than "clickhouse server": a server run
+# from a copied binary has cmdline "/tmp/clickhouse-9d8edb43e21 server ...", which
+# does not contain the literal string "clickhouse server" at all.
 server_pids() {
     local pid comm
-    for pid in $(pgrep -f "clickhouse server" 2>/dev/null); do
+    for pid in $(pgrep -f "server --config-file" 2>/dev/null); do
         comm="$(cat "/proc/$pid/comm" 2>/dev/null)"
         [[ "$comm" == clickhouse* ]] && echo "$pid"
     done
