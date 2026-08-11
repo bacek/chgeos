@@ -14,24 +14,24 @@ registers a WASM export as an aggregate. The runtime calls `addBatchSinglePlace`
 batches of rows into the accumulator, then serializes/deserializes state across merge
 boundaries. MsgPack encoding is used for UDAF state transport.
 
-**DETERMINISTIC constant folding.** Adding `DETERMINISTIC` to `CREATE FUNCTION` opts a
+~~**DETERMINISTIC constant folding.** Adding `DETERMINISTIC` to `CREATE FUNCTION` opts a
 WASM UDF into CH's constant-folding pipeline. Three cooperating changes were needed: the
 function registration records the flag, the analyzer propagates it through the function
 node, and the query resolver evaluates constant WASM calls at planning time rather than
 execution time. This allows expressions like `st_geomfromtext('POINT(0 0)')` to be
-evaluated once and reused.
+evaluated once and reused.~~
 
 **Dynamic block splitting.** Before calling a WASM UDF, the runtime now checks how much
 linear memory is available in the WASM instance and splits the input block if needed to
 stay within the instance's 4 GB address space. This prevents OOM kills for wide or
 high-cardinality input batches.
 
-**system.functions visibility.** WASM UDFs now appear in `system.functions` with their
-full argument list and return type, matching the behaviour of built-in functions.
+~~**system.functions visibility.** WASM UDFs now appear in `system.functions` with their
+full argument list and return type, matching the behaviour of built-in functions.~~
 
-**Bug fixes.** A Cranelift E-Graph compiler bug triggered SIGILL on aarch64-apple-darwin;
+~~**Bug fixes.** A Cranelift E-Graph compiler bug triggered SIGILL on aarch64-apple-darwin;
 the workaround disables the E-Graph optimization pass for that target. A null-pointer
-dereference in `WasmMemoryManagerV01::getMemoryView` was also fixed.
+dereference in `WasmMemoryManagerV01::getMemoryView` was also fixed.~~
 
 This allows to run benchmark, but probably affect actual performance.
 
@@ -56,10 +56,6 @@ value for every row in the batch. The WASM side reads one value and broadcasts i
 than reading N identical copies. For spatial predicates, this triggers `PreparedGeometry`
 construction on the constant side, amortizing the GEOS index build cost over the whole
 batch.
-
-**Repeat encoding.** `COL_IS_REPEAT` compresses columns where the value repeats in runs
-(common in sorted or partitioned data). The WASM side decodes the run-length encoding
-before processing.
 
 **Extracted and tested.** The format is defined in `ColumnarV1Wire.h` with a standalone
 unit test suite, separate from the WASM execution machinery.
@@ -118,30 +114,30 @@ bounding box before reading any rows.
 
 ### Shared infrastructure
 
-A new virtual method `IFunctionBase::isSpatialPredicate()` identifies spatial predicates
+~~A new virtual method `IFunctionBase::isSpatialPredicate()` identifies spatial predicates
 without hardcoding function names. It propagates through the function adaptor chain so
 wrapped variants (e.g., `FunctionVariantAdaptor`) are also recognized. All spatial
 functions (`st_within`, `st_intersects`, `st_dwithin`, etc.) return `true`. The pruning
-layers call this to decide whether a filter qualifies for bbox-based skipping.
+layers call this to decide whether a filter qualifies for bbox-based skipping.~~
 
-A shared `GeoBbox` type in `Common/GeoBbox.h` provides the bounding-box accumulator
-reused by all three pruning layers.
+~~A shared `GeoBbox` type in `Common/GeoBbox.h` provides the bounding-box accumulator
+reused by all three pruning layers.~~
 
 ### GeoParquet
 
-GeoParquet files that follow the `covering.bbox` convention store the bounding box of each
-geometry as separate `xmin/ymin/xmax/ymax` columns. CH now reads these at two granularities:
+~~GeoParquet files that follow the `covering.bbox` convention store the bounding box of each
+geometry as separate `xmin/ymin/xmax/ymax` columns. CH now reads these at two granularities:~~
 
-- **Row-group level.** Column statistics (`min`/`max`) for the `covering.bbox` columns are
+~~- **Row-group level.** Column statistics (`min`/`max`) for the `covering.bbox` columns are
   read from the Parquet file footer. Row groups whose aggregate bbox doesn't intersect the
-  query's spatial filter are skipped entirely, before any data pages are decompressed.
+  query's spatial filter are skipped entirely, before any data pages are decompressed.~~
 
-- **Page level.** If the file has a Parquet column index, the per-page min/max bounds for
-  the `covering.bbox` columns are used to skip individual data pages within a row group.
+~~- **Page level.** If the file has a Parquet column index, the per-page min/max bounds for
+  the `covering.bbox` columns are used to skip individual data pages within a row group.~~
 
-The spatial filter is extracted from the query plan via the `KeyCondition` hyperrectangle
+~~The spatial filter is extracted from the query plan via the `KeyCondition` hyperrectangle
 pipeline, so any function that implements `isSpatialPredicate()` participates
-automatically. New `ProfileEvents` track the number of row groups and pages skipped.
+automatically. New `ProfileEvents` track the number of row groups and pages skipped.~~
 
 ### Iceberg
 
