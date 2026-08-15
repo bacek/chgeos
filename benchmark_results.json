@@ -1,7 +1,12 @@
 {
   "benchmark": "spatial-bench",
-  "generated_at": "2026-08-07",
-  "timeouts": 120.0,
+  "generated_at": "2026-08-09",
+  "timeouts": {
+    "chgeos": 300,
+    "duckdb": 300,
+    "sedona": "as recorded 2026-08-07",
+    "pycanopy": "as recorded 2026-08-07"
+  },
   "results": [
     {
       "engine": "chgeos",
@@ -10,62 +15,62 @@
         {
           "query": "q1",
           "status": "success",
-          "time_seconds": 0.08
+          "time_seconds": 0.091
         },
         {
           "query": "q2",
           "status": "success",
-          "time_seconds": 0.077
+          "time_seconds": 0.111
         },
         {
           "query": "q3",
           "status": "success",
-          "time_seconds": 0.08
+          "time_seconds": 0.084
         },
         {
           "query": "q4",
           "status": "success",
-          "time_seconds": 0.612
+          "time_seconds": 0.662
         },
         {
           "query": "q5",
           "status": "success",
-          "time_seconds": 0.788
+          "time_seconds": 0.832
         },
         {
           "query": "q6",
           "status": "success",
-          "time_seconds": 0.775
+          "time_seconds": 1.023
         },
         {
           "query": "q7",
           "status": "success",
-          "time_seconds": 0.205
+          "time_seconds": 0.206
         },
         {
           "query": "q8",
           "status": "success",
-          "time_seconds": 0.159
+          "time_seconds": 0.164
         },
         {
           "query": "q9",
           "status": "success",
-          "time_seconds": 0.025
+          "time_seconds": 0.026
         },
         {
           "query": "q10",
           "status": "success",
-          "time_seconds": 3.916
+          "time_seconds": 4.096
         },
         {
           "query": "q11",
           "status": "success",
-          "time_seconds": 5.582
+          "time_seconds": 5.92
         },
         {
           "query": "q12",
           "status": "success",
-          "time_seconds": 2.023
+          "time_seconds": 2.187
         }
       ]
     },
@@ -76,42 +81,42 @@
         {
           "query": "q1",
           "status": "success",
-          "time_seconds": 0.518
+          "time_seconds": 0.794
         },
         {
           "query": "q2",
           "status": "success",
-          "time_seconds": 0.671
+          "time_seconds": 0.966
         },
         {
           "query": "q3",
           "status": "success",
-          "time_seconds": 0.499
+          "time_seconds": 0.802
         },
         {
           "query": "q4",
           "status": "success",
-          "time_seconds": 1.103
+          "time_seconds": 1.247
         },
         {
           "query": "q5",
           "status": "success",
-          "time_seconds": 8.952
+          "time_seconds": 9.401
         },
         {
           "query": "q6",
           "status": "success",
-          "time_seconds": 1.767
+          "time_seconds": 2.15
         },
         {
           "query": "q7",
           "status": "success",
-          "time_seconds": 1.862
+          "time_seconds": 1.965
         },
         {
           "query": "q8",
           "status": "success",
-          "time_seconds": 1.691
+          "time_seconds": 1.71
         },
         {
           "query": "q9",
@@ -121,17 +126,17 @@
         {
           "query": "q10",
           "status": "success",
-          "time_seconds": 28.25
+          "time_seconds": 28.92
         },
         {
           "query": "q11",
           "status": "success",
-          "time_seconds": 40.955
+          "time_seconds": 41.443
         },
         {
           "query": "q12",
           "status": "success",
-          "time_seconds": 27.29
+          "time_seconds": 29.053
         }
       ]
     },
@@ -142,62 +147,61 @@
         {
           "query": "q1",
           "status": "success",
-          "time_seconds": 0.15
+          "time_seconds": 0.114
         },
         {
           "query": "q2",
           "status": "success",
-          "time_seconds": 0.22
+          "time_seconds": 0.201
         },
         {
           "query": "q3",
           "status": "success",
-          "time_seconds": 0.17
+          "time_seconds": 0.178
         },
         {
           "query": "q4",
           "status": "success",
-          "time_seconds": 0.94
+          "time_seconds": 0.677
         },
         {
           "query": "q5",
           "status": "success",
-          "time_seconds": 0.69
+          "time_seconds": 0.729
         },
         {
           "query": "q6",
           "status": "success",
-          "time_seconds": 0.82
+          "time_seconds": 0.901
         },
         {
           "query": "q7",
           "status": "success",
-          "time_seconds": 0.26
+          "time_seconds": 0.269
         },
         {
           "query": "q8",
           "status": "success",
-          "time_seconds": 0.44
+          "time_seconds": 0.459
         },
         {
           "query": "q9",
           "status": "success",
-          "time_seconds": 0.03
+          "time_seconds": 0.034
         },
         {
           "query": "q10",
           "status": "success",
-          "time_seconds": 99.97
+          "time_seconds": 104.43
         },
         {
           "query": "q11",
-          "status": "timeout",
-          "time_seconds": null
+          "status": "success",
+          "time_seconds": 183.75
         },
         {
           "query": "q12",
-          "status": "timeout",
-          "time_seconds": null
+          "status": "timeout"
         }
       ]
     },
@@ -208,62 +212,59 @@
         {
           "query": "q1",
           "status": "success",
-          "time_seconds": 0.38
+          "time_seconds": 0.385
         },
         {
           "query": "q2",
           "status": "success",
-          "time_seconds": 0.54
+          "time_seconds": 0.556
         },
         {
           "query": "q3",
           "status": "success",
-          "time_seconds": 0.52
+          "time_seconds": 0.543
         },
         {
           "query": "q4",
           "status": "success",
-          "time_seconds": 0.98
+          "time_seconds": 1.032
         },
         {
           "query": "q5",
           "status": "success",
-          "time_seconds": 6.11
+          "time_seconds": 6.393
         },
         {
           "query": "q6",
           "status": "success",
-          "time_seconds": 1.6
+          "time_seconds": 1.64
         },
         {
           "query": "q7",
           "status": "success",
-          "time_seconds": 0.93
+          "time_seconds": 0.945
         },
         {
           "query": "q8",
           "status": "success",
-          "time_seconds": 1.77
+          "time_seconds": 1.802
         },
         {
           "query": "q9",
           "status": "success",
-          "time_seconds": 0.13
+          "time_seconds": 0.136
         },
         {
           "query": "q10",
-          "status": "timeout",
-          "time_seconds": null
+          "status": "timeout"
         },
         {
           "query": "q11",
-          "status": "timeout",
-          "time_seconds": null
+          "status": "timeout"
         },
         {
           "query": "q12",
-          "status": "timeout",
-          "time_seconds": null
+          "status": "timeout"
         }
       ]
     },
@@ -531,5 +532,6 @@
         }
       ]
     }
-  ]
+  ],
+  "notes": "chgeos and duckdb re-measured 2026-08-09 on the same box and the same parquet files (/data/bacek/src/spatial-bench). chgeos = min of 5 runs via scripts/bench_sf.py at chgeos 1ca4512 / ClickHouse 06b6e87313a. duckdb = single run per query via the CLI using the upstream DuckDBSpatialBenchBenchmark SQL, 300s cap. sedona and pycanopy rows are unchanged from 2026-08-07 and were NOT re-measured. Known open issue: SF10 Q1/Q2/Q3/Q6 carry a 13-49% regression attributed to ClickHouse merge 44d2de841f1."
 }
