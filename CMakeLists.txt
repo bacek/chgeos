@@ -42,6 +42,19 @@ if(CMAKE_CROSSCOMPILING)
     # set(EMCC_LTO -flto=full -mllvm -inline-threshold=50)
   endif()
 
+  # emcc 6.x (LLD >= 21) pulls libstandalonewasm's standalone.o, which defines
+  # __throw_exception_with_stack_trace as a STRONG symbol, colliding with our
+  # clickhouse_throw stub in mem.cpp. Allow the duplicate so our definition
+  # (earlier in link order) wins. emcc 5's LLD 19 lacks the flag; there the
+  # archive member is never pulled in, so no conflict occurs.
+  if(EMCC_MAJOR GREATER 5)
+    set(EMCC_DUPDEF -Wl,--allow-multiple-definition)
+  endif()
+
+  # Static GEOS: dynamic libgeos.so breaks emcc 6's LTO (PIC relocations
+  # against GEOS typeinfo). Static link pulls the typeinfo into the module.
+  set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+
   add_compile_options(-fexceptions -fwasm-exceptions ${EMCC_EXNREF} ${EMCC_LTO})
   add_link_options(-fexceptions -fwasm-exceptions ${EMCC_EXNREF} ${EMCC_LTO}
                    -sNO_FILESYSTEM=1 -sALLOW_MEMORY_GROWTH=1 -sMAXIMUM_MEMORY=4294901760)
@@ -64,9 +77,7 @@ if(CMAKE_CROSSCOMPILING)
   target_link_options(chgeos PRIVATE
     "-Wl,--no-entry"
     "-Wl,--allow-undefined"
-    # emscripten 5.0.4+ also defines __throw_exception_with_stack_trace in
-    # libstandalonewasm; ours (earlier in link order) wins.
-    # "-Wl,--allow-multiple-definition"  # wasm-ld-19 doesn't support it
+    ${EMCC_DUPDEF}
   )
 else()
   set(BUILD_TESTING ON CACHE BOOL "" FORCE)
