@@ -2,12 +2,12 @@
 """Geospatial benchmark suite for ClickHouse.
 
 Usage:
-    python3 scripts/bench_sf.py [--ch clickhouse] [--sf sf1|sf10] [--native]
+    python3 scripts/bench_sf.py [--ch clickhouse] [--sf sfN] [--native]
         [--wire-protocol col|mp|buffers|cb] [--settings "key=val, key2=val2"]
         [--query Q1] [--query Q7 ...]   # repeatable
         [--queries Q1,Q7]               # comma-separated alternative
 
---sf: scale factor — sf1 (default) or sf10.
+--sf: scale factor — any of sf1, sf10, sf100, ... (default sf1).
 --native: read from native MergeTree tables (sf1.trip etc.) instead of parquet.
           Run scripts/import_sf.sh once beforehand to populate them.
 --wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp
@@ -256,8 +256,12 @@ def _apply_suffix(sql: str, suffix: str) -> str:
 def build_table_vars(sf, native):
     """Map the {TRIP}/{ZONE}/{BUILDING}/{CUSTOMER} placeholders to table refs.
 
-    Native reads MergeTree tables (sf1.trip etc.); otherwise absolute parquet
-    paths under tmp/data/user_files/<sf>/.
+    Native reads MergeTree tables (sf1.trip etc.); otherwise parquet under
+    tmp/data/user_files/<sf>/. Supports both layouts:
+    - per-table directory with one or more files (sedona-bench upstream layout,
+      e.g. sf1/trip/trip.1.parquet, sf1/trip/trip.2.parquet, sf1/zone/zone.*.parquet)
+      -> file('<sf>/<table>/*.parquet', Parquet)  (CH file() glob)
+    - single flat file sf1/<table>.parquet (legacy)
     """
     if native:
         return {name.upper(): f"{sf}.{name}"
@@ -265,8 +269,14 @@ def build_table_vars(sf, native):
     script_dir = os.path.dirname(os.path.realpath(__file__))
     repo_root = os.path.dirname(script_dir)
     user_files = os.path.join(repo_root, "tmp", "data", "user_files", sf)
-    return {name.upper(): f"file('{user_files}/{name}.parquet', Parquet)"
-            for name in ("trip", "zone", "building", "customer")}
+    table_vars = {}
+    for name in ("trip", "zone", "building", "customer"):
+        table_dir = os.path.join(user_files, name)
+        if os.path.isdir(table_dir):
+            table_vars[name.upper()] = f"file('{table_dir}/*.parquet', Parquet)"
+        else:
+            table_vars[name.upper()] = f"file('{user_files}/{name}.parquet', Parquet)"
+    return table_vars
 
 
 def parse_args():
@@ -278,7 +288,7 @@ Usage:
   python3 scripts/bench_sf.py --ch clickhouse --sf sf1 --query Q1
 
 --ch: path to ClickHouse binary (default: clickhouse on PATH)
---sf: scale factor — sf1 (default) or sf10
+--sf: scale factor — sf1 (default), sf10, sf100, ...
 --native: read from native MergeTree tables instead of parquet
 --wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix)
 --settings: extra SETTINGS appended to each query
@@ -289,7 +299,8 @@ Usage:
 """,
     )
     parser.add_argument("--ch", default=None)
-    parser.add_argument("--sf", default="sf1")
+    parser.add_argument("--sf", default="sf1",
+                        help="Scale factor: sf1 (default), sf10, sf100, ...")
     parser.add_argument("--port", type=int, default=int(os.environ.get("CH_PORT", 19000)))
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("BENCH_TIMEOUT", 120)))
     parser.add_argument("--runs", type=int, default=int(os.environ.get("BENCH_RUNS", 5)))
@@ -400,8 +411,8 @@ def main():
         sys.exit(1)
 
     sf = args.sf
-    if sf not in ("sf1", "sf10"):
-        print(f"ERROR: scale factor must be sf1 or sf10, got '{sf}'", file=sys.stderr)
+    if not re.fullmatch(r"sf\d+", sf):
+        print(f"ERROR: scale factor must look like sf1, sf10, sf100, ...; got '{sf}'", file=sys.stderr)
         sys.exit(1)
 
     native = args.native

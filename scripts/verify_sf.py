@@ -31,6 +31,7 @@ Exit status is non-zero if any query mismatches its answer or fails to run.
 import argparse
 import io
 import os
+import re
 import subprocess
 import sys
 
@@ -61,7 +62,8 @@ def parse_args():
         description="Verify chgeos SF results against the committed spatialbench answers."
     )
     p.add_argument("--ch", default=None, help="ClickHouse binary (default: $CLICKHOUSE_BIN or PATH)")
-    p.add_argument("--sf", default="sf1", choices=["sf1", "sf10"])
+    p.add_argument("--sf", default="sf1",
+                   help="Scale factor: sf1 (default), sf10, sf100, ... (answers must exist)")
     p.add_argument("--port", type=int, default=int(os.environ.get("CH_PORT", 19000)))
     p.add_argument("--timeout", type=int, default=int(os.environ.get("BENCH_TIMEOUT", 300)))
     p.add_argument("--native", action="store_true", help="read MergeTree tables instead of parquet")
@@ -191,6 +193,10 @@ def main() -> int:
         ch = shutil.which("clickhouse") or ""
     if not ch or not os.access(ch, os.X_OK):
         print("ERROR: ClickHouse binary not found; pass via --ch or put on PATH", file=sys.stderr)
+        return 2
+
+    if not re.fullmatch(r"sf\d+", args.sf):
+        print(f"ERROR: scale factor must look like sf1, sf10, sf100, ...; got '{args.sf}'", file=sys.stderr)
         return 2
 
     answers_dir = args.answers_dir or os.path.join(DEFAULT_ANSWERS_ROOT, args.sf)

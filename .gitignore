@@ -5,3 +5,6 @@ build_wasm/
 tmp/
 Testing/
 clickhouse/config-test-preprocessed.xml
+
+.venv/
+__pycache__/
