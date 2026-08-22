@@ -10,8 +10,8 @@ Usage:
 --sf: scale factor — any of sf1, sf10, sf100, ... (default sf1).
 --native: read from native MergeTree tables (sf1.trip etc.) instead of parquet.
           Run scripts/import_sf.sh once beforehand to populate them.
---wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp
-        suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix).
+--wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names), 'mp' (MsgPack, _mp
+        suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix, default).
         Appends the appropriate suffix to spatial function names for the selected wire format.
 --settings: comma-separated "key=value" pairs appended to SETTINGS clause of each query.
 --query: run only this query; may be repeated: --query Q1 --query Q7
@@ -290,7 +290,7 @@ Usage:
 --ch: path to ClickHouse binary (default: clickhouse on PATH)
 --sf: scale factor — sf1 (default), sf10, sf100, ...
 --native: read from native MergeTree tables instead of parquet
---wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix)
+--wire-protocol: wire format — 'col' (COLUMNAR_V1, bare names), 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix, default)
 --settings: extra SETTINGS appended to each query
 --query: run only this query (e.g. Q1, Q7)
 --queries: comma-separated queries (e.g. Q1,Q7)
@@ -305,8 +305,8 @@ Usage:
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("BENCH_TIMEOUT", 120)))
     parser.add_argument("--runs", type=int, default=int(os.environ.get("BENCH_RUNS", 5)))
     parser.add_argument("--native", action="store_true")
-    parser.add_argument("--wire-protocol", default="col", choices=["col", "mp", "buffers", "cb"],
-                        help="Wire format: 'col' (COLUMNAR_V1, bare names, default), 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix)")
+    parser.add_argument("--wire-protocol", default="cb", choices=["col", "mp", "buffers", "cb"],
+                        help="Wire format: 'col' (COLUMNAR_V1, bare names), 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix, default)")
     parser.add_argument("--settings", default=None)
     parser.add_argument("--query", action="append", dest="query", metavar="QUERY",
                         help="Run only this query; may be repeated: --query Q1 --query Q7")
