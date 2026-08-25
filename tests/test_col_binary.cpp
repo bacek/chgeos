@@ -12,7 +12,7 @@ using namespace ch;
 
 static const std::string kSquare = "POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))";
 
-// ── COLUMNAR_V1 helpers ───────────────────────────────────────────────────────
+// ── ColumnBinary helpers ──────────────────────────────────────────────────────
 
 static void write_le32(std::vector<uint8_t>& buf, uint32_t v) {
     for (int j = 0; j < 4; ++j) buf.push_back(static_cast<uint8_t>(v >> (j * 8)));

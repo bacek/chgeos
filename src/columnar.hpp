@@ -1,6 +1,6 @@
 #pragma once
 
-// COLUMNAR_V1 wire format for ClickHouse WASM UDFs.
+// ColumnBinary wire format for ClickHouse WASM UDFs (CH fork: ColumnarV1Wire.h).
 //
 // Replaces RowBinary with a columnar layout.  Key benefit: ColumnConst data
 // (e.g. a constant 169 KB polygon) is passed ONCE regardless of num_rows.
@@ -27,7 +27,7 @@
 //   (see ColumnString.h); the wire matches exactly.
 //   String i bytes: data[offsets[i] .. offsets[i+1]-1], len = offsets[i+1]-offsets[i].
 //
-// SQL: ABI COLUMNAR_V1  (no serialization_format needed)
+// SQL: ABI BUFFERED_V1 + SETTINGS serialization_format = 'ColumnBinary'
 
 #include <algorithm>
 #include <array>
@@ -987,7 +987,7 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 
 } // namespace ch
 
-// ── st_knn_col: k-nearest-neighbour (COLUMNAR_V1) ─────────────────────────────
+// ── st_knn: k-nearest-neighbour (canonical export, hand-written) ──────────────
 // Signature: st_knn(query String, candidates Array(String), k UInt32)
 //            → Array(Tuple(UInt64, Float64))
 
@@ -1081,9 +1081,4 @@ inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
             nullptr, nullptr, ch::name##_wkb);                                   \
     }
 
-// Canonical no-suffix alias for PRED3 functions that keep their _col export.
-#define CH_UDF_CANONICAL(name)                                                   \
-    __attribute__((export_name(#name)))                                          \
-    ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
-        return name##_col(ptr, num_rows);                                        \
-    }
+

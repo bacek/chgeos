@@ -2,10 +2,10 @@
 """End-to-end tests for chgeos WASM UDFs via clickhouse-local.
 
 Usage:
-    python3 clickhouse/test_e2e.py [path/to/clickhouse] [path/to/chgeos.wasm] [--wire-protocol col|mp|cb]
+    python3 clickhouse/test_e2e.py [path/to/clickhouse] [path/to/chgeos.wasm] [--wire-protocol cb|mp|buffers]
 
 Environment:
-    WIRE_PROTOCOL=col|mp|cb — wire format (default: col, bare names)
+    WIRE_PROTOCOL=cb|mp|buffers — wire format (default: cb)
 """
 
 from __future__ import annotations
@@ -27,49 +27,19 @@ from tempfile import TemporaryDirectory
 def _parse_create_sql(sql_path: str) -> dict[str, list[str]]:
     """Return {bare_name: [variants]} from create.sql.
 
-    Variants are the suffixes registered for each bare function name,
-    e.g. {'st_x': ['', '_mp', '_col', '_cb'], 'st_knn': ['']}
+    Variants are the wire-format suffixes registered for each bare function
+    name, e.g. {'st_x': ['', '_cb'], 'st_knn': ['', '_cb']}. The canonical
+    (no-suffix) functions use serialization_format = 'ColumnBinary'.
     """
     text = Path(sql_path).read_text()
-    # Match CREATE OR REPLACE FUNCTION lines (skip comments)
-    pattern = re.compile(
-        r'^CREATE\s+OR\s+REPLACE\s+FUNCTION\s+(st_\w+)'
-        r'(?:\s+\n(?:\s+.*\n)*?\s+ABI\s+(\w+))?',
-        re.MULTILINE,
-    )
-    # Simpler: match function name, then look for ABI line within next few lines
-    lines = text.splitlines()
-    funcs: dict[str, list[str]] = {}
-    i = 0
-    while i < len(lines):
-        m = re.match(r'^CREATE\s+OR\s+REPLACE\s+FUNCTION\s+(st_\w+)', lines[i])
-        if m:
-            name = m.group(1)
-            abi = None
-            for j in range(i + 1, min(i + 6, len(lines))):
-                abi_m = re.match(r'\s+ABI\s+(\w+)', lines[j])
-                if abi_m:
-                    abi = abi_m.group(1)
-                    break
-                if re.match(r'\s+(DETERMINISTIC|NOT)\b', lines[j]):
-                    break
-            if abi == 'COLUMNAR_V1':
-                funcs.setdefault(name, []).append('')  # bare alias → _col
-            else:
-                funcs.setdefault(name, []).append('')  # no bare alias, only _mp
-            # Also check for alias lines: CREATE OR REPLACE FUNCTION name AS ...
-            for j in range(i + 1, min(i + 3, len(lines))):
-                alias_pat = r'^CREATE\s+OR\s+REPLACE\s+FUNCTION\s+' + re.escape(name) + r'\s+AS\s+\(.*?\)\s*->\s*(st_\w+)'
-                alias_m = re.match(alias_pat, lines[j])
-                if alias_m:
-                    target = alias_m.group(1)
-                    suffix = target[len(name):] if target != name else ''
-                    funcs[name].append(suffix)
-        i += 1
-    # Deduplicate
-    for k in funcs:
-        funcs[k] = sorted(set(funcs[k]))
-    return funcs
+    known_suffixes = ("_buffers", "_cb", "_mp", "_rb")
+    variants: dict[str, set[str]] = {}
+    for m in re.finditer(r'^CREATE\s+OR\s+REPLACE\s+FUNCTION\s+(st_\w+)', text, re.MULTILINE):
+        name = m.group(1)
+        suffix = next((s for s in known_suffixes if name.endswith(s)), "")
+        bare = name[: -len(suffix)] if suffix else name
+        variants.setdefault(bare, set()).add(suffix)
+    return {k: sorted(v) for k, v in variants.items()}
 
 
 # ---------------------------------------------------------------------------
@@ -365,9 +335,9 @@ def main():
     parser = argparse.ArgumentParser(description="chgeos end-to-end tests")
     parser.add_argument("clickhouse", nargs="?", help="Path to clickhouse binary")
     parser.add_argument("wasm", nargs="?", help="Path to chgeos.wasm")
-    parser.add_argument("--wire-protocol", default=os.environ.get("WIRE_PROTOCOL", "col"),
-                        choices=["col", "mp", "cb"],
-                        help="Wire format (default: col)")
+    parser.add_argument("--wire-protocol", default=os.environ.get("WIRE_PROTOCOL", "cb"),
+                        choices=["cb", "mp", "buffers"],
+                        help="Wire format (default: cb)")
     args = parser.parse_args()
 
     clickhouse = args.clickhouse or locate_clickhouse()
@@ -385,12 +355,9 @@ def main():
     # Parse create.sql to find registered variants
     registered = _parse_create_sql(create_sql)
 
-    # Build whitelist: functions that have the requested suffix
-    suffix = f"_{args.wire_protocol}" if args.wire_protocol != "col" else ""
-    if suffix:
-        whitelist = {name for name, variants in registered.items() if suffix in variants}
-    else:
-        whitelist = set(registered.keys())
+    # Build whitelist: bare names that have the requested suffix
+    suffix = f"_{args.wire_protocol}"
+    whitelist = {name for name, variants in registered.items() if suffix in variants}
 
     # Set up temp directory for wasm
     tmpdir = TemporaryDirectory()

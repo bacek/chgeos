@@ -34,7 +34,7 @@ CH_UDF_RB_ONLY(st_collect_agg)
 CH_UDF_RB_ONLY(st_extent_agg)
 CH_UDF_RB_ONLY(st_makeline_agg)
 CH_UDF_RB_ONLY(st_convexhull_agg)
-// COLUMNAR_V1 variants (COL_COMPLEX input: Array(String) via groupArray())
+// ColumnBinary variants (COL_COMPLEX input: Array(String) via groupArray())
 CH_UDF_COL(st_union_agg)
 CH_UDF_COL(st_collect_agg)
 CH_UDF_COL(st_extent_agg)
@@ -153,7 +153,7 @@ CH_UDF_RB_FUNC(st_intersects_extent)  // keeps st_intersects_extent_rb export
 // st_dwithin: 3-arg, no bbox shortcut at predicate level
 CH_UDF_RB_ONLY(st_dwithin)
 
-// ── COLUMNAR_V1 — predicates ──────────────────────────────────────────────────
+// ── ColumnBinary — canonical predicates (no suffix) ──────────────────────────
 CH_UDF_COL_BBOX2_POINT(st_contains,   bbox_op_contains,   false)
 CH_UDF_COL_BBOX2_POINT(st_intersects, bbox_op_intersects, false)
 CH_UDF_COL_BBOX2(st_touches,         bbox_op_intersects, false)
@@ -167,7 +167,7 @@ CH_UDF_COL_BBOX2_POINT(st_coveredby, bbox_op_rcontains,  false)
 CH_UDF_COL_BBOX2(st_containsproperly,bbox_op_contains,   false)
 CH_UDF_COL_PRED3(st_dwithin)
 
-// ── COLUMNAR_V1 — all other (types deduced from _impl) ──────────────────────
+// ── ColumnBinary — all other (types deduced from _impl) ─────────────────────
 CH_UDF_COL_WKB1(st_x)
 CH_UDF_COL_WKB1(st_y)
 CH_UDF_COL(st_z)
@@ -218,7 +218,7 @@ CH_UDF_COL(st_extent)
 CH_UDF_COL(st_interiorpoint)
 CH_UDF_COL(st_expand)
 
-// ── COLUMNAR_V1 — additional functions ───────────────────────────────────────
+// ── ColumnBinary — additional functions ──────────────────────────────────────
 // Accessors (densify variants)
 CH_UDF_COL(st_hausdorffdistance_densify)
 CH_UDF_COL(st_frechetdistance_densify)
@@ -439,8 +439,8 @@ CH_UDF_BUFFERS(st_buffer)
 CH_UDF_BUFFERS(st_simplify)
 
 // ── st_knn: k-nearest-neighbour spatial query ─────────────────────────────────
-// COLUMNAR_V1: st_knn_col in columnar.hpp
-// ColumnBinary: st_knn_cb in col_binary.hpp
+// Canonical export (st_knn) hand-written in columnar.hpp;
+// st_knn_cb is a SQL alias to it (create.sql).
 //
 // Signature: st_knn(query String, candidates Array(String), k UInt32)
 //            → Array(Tuple(UInt64, Float64))
@@ -582,7 +582,7 @@ int32_t clickhouse_can_chain_execute(ch::raw_buffer* names_buf, uint32_t n) {
 
 // clickhouse_chain_execute(chain_buf, row_buf, n)
 //   chain_buf: [n_funcs: u32][cstr names...]
-//   row_buf:   standard COLUMNAR_V1 buffer (same format as name_col receives)
+//   row_buf:   standard ColumnBinary buffer (same format the canonical exports receive)
 __attribute__((export_name("clickhouse_chain_execute")))
 ch::raw_buffer* clickhouse_chain_execute(ch::raw_buffer* chain_buf, ch::raw_buffer* row_buf, uint32_t n) {
     populate_chain_registry();  // idempotent; ensures registry is ready in any compartment

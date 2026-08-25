@@ -50,18 +50,19 @@ ORDER BY area DESC;
 
 ## In-flight ClickHouse changes
 
-chgeos depends on ClickHouse patches that are not yet merged upstream, all on the [`bacek/wasm`](https://github.com/bacek/ClickHouse/tree/bacek/wasm) branch. The changes span four areas: WASM runtime extensions (UDAFs, `DETERMINISTIC` constant folding, dynamic block splitting), a columnar call ABI (COLUMNAR_V1), a spatial predicate join engine (SpatialRTreeJoin with R-tree indexing and query rewriting), and spatial pruning at the storage layer (GeoParquet row-group/page pruning, Iceberg manifest pruning, MergeTree skip index). See [CH_CHANGES.md](CH_CHANGES.md) for a detailed write-up.
+chgeos depends on ClickHouse patches that are not yet merged upstream, all on the [`bacek/wasm`](https://github.com/bacek/ClickHouse/tree/bacek/wasm) branch. The changes span four areas: WASM runtime extensions (UDAFs, `DETERMINISTIC` constant folding, dynamic block splitting), a columnar call ABI (ColumnBinary), a spatial predicate join engine (SpatialRTreeJoin with R-tree indexing and query rewriting), and spatial pruning at the storage layer (GeoParquet row-group/page pruning, Iceberg manifest pruning, MergeTree skip index). See [CH_CHANGES.md](CH_CHANGES.md) for a detailed write-up.
 
 ## How it works
 
 **Wire format:** Geometries are `String` columns containing raw EWKB bytes — the same format PostGIS, GeoParquet, and most spatial tools use. No conversion needed at the database boundary.
 
-**Three ABIs:** Functions are registered under three wire formats. The fastest path (COLUMNAR_V1) is the default for all functions that support it:
-- **COLUMNAR_V1** (`ABI COLUMNAR_V1`) — one call for all N rows; ClickHouse sends columns, not rows. Constant columns (e.g. a filter polygon) are sent once, not N times. Exported as `name_col`.
-- **RowBinary** (`ABI BUFFERED_V1`, `serialization_format = 'RowBinary'`) — one call per batch with typed binary encoding. Exported as `name_mp`.
-- **MsgPack** (`ABI BUFFERED_V1`) — original path, used for aggregates and CH native type converters. Also exported as `name_mp`.
+**Wire formats:** Functions are registered under four wire formats. ColumnBinary is the default for every function that supports it:
+- **ColumnBinary** (`ABI BUFFERED_V1`, `serialization_format = 'ColumnBinary'`) — one call for all N rows; ClickHouse sends columns, not rows. Constant columns (e.g. a filter polygon) are sent once, not N times. This is both the canonical export (`st_contains`) and the `_cb` export (`st_contains_cb`).
+- **Buffers** (`serialization_format = 'Buffers'`) — native CH columnar layout (NativeWriter). Exported as `name_buffers`.
+- **RowBinary** (`serialization_format = 'RowBinary'`) — one call per batch with typed binary encoding. Exported as `name_rb`.
+- **MsgPack** (`ABI BUFFERED_V1`, default serialization) — original row-at-a-time path; a handful of functions and the CH native type converters. Exported as `name_mp`.
 
-Canonical PostGIS-compatible function names (`st_contains`, `st_distance`, etc.) are SQL aliases that route to `_col` when a columnar variant exists, or `_mp` otherwise.
+Canonical PostGIS-compatible function names (`st_contains`, `st_distance`, etc.) are the ColumnBinary functions themselves; a small number of functions with no ColumnBinary variant are aliases to `_mp`.
 
 **Template machinery:** A single `columnar_impl_wrapper<Ret, Args...>` template deduces all argument and return types from the `_impl` function pointer. Adding a new columnar function is two lines: the C++ impl and a `CH_UDF_COL(name)` macro invocation.
 
@@ -205,28 +206,30 @@ All function DDL is in `clickhouse/create.sql`. Load them all at once:
 clickhouse client --multiquery < clickhouse/create.sql
 ```
 
-Each function is registered under up to three names:
+Each function is registered under up to four names:
 
 ```sql
--- COLUMNAR_V1 (fastest path, preferred for analytical queries)
-CREATE OR REPLACE FUNCTION st_intersects_col
-LANGUAGE WASM FROM 'chgeos'
-ARGUMENTS (a String, b String) RETURNS UInt8
-ABI COLUMNAR_V1
-DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
-
--- RowBinary / MsgPack (fallback, used for aggregates and CH-native type converters)
-CREATE OR REPLACE FUNCTION st_intersects_mp
+-- ColumnBinary (fastest path, preferred for analytical queries) — canonical name
+CREATE OR REPLACE FUNCTION st_intersects
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
 
--- Canonical PostGIS-compatible alias (routes to _col when available, _mp otherwise)
-CREATE OR REPLACE FUNCTION st_intersects AS (a, b) -> st_intersects_col(a, b);
+-- same protocol, explicit suffix (used by the benchmark suite)
+CREATE OR REPLACE FUNCTION st_intersects_cb
+LANGUAGE WASM FROM 'chgeos'
+ARGUMENTS (a String, b String) RETURNS UInt8
+ABI BUFFERED_V1
+DETERMINISTIC
+SETTINGS serialization_format = 'ColumnBinary';
+
+-- fallbacks: RowBinary / Buffers / MsgPack (see create.sql for the full list)
+CREATE OR REPLACE FUNCTION st_intersects_rb AS (a, b) -> ...;
 ```
+
+Functions with no ColumnBinary variant (a few I/O helpers, the CH native type converters) are canonical aliases to `_mp`.
 
 ### Usage examples
 
@@ -317,7 +320,7 @@ SELECT st_relate(
 
 - **Planar geometry only.** All calculations are Cartesian — `ST_Distance`, `ST_Area`, `ST_Length` work in the coordinate units of the geometry, not meters on the sphere. Use an appropriate projected CRS (e.g. UTM) for metric results.
 
-- **Geometry parsed per row (with exceptions).** WKB is re-parsed from bytes for each row. The exception is constant geometry columns in COLUMNAR_V1: when one argument is constant (e.g. a filter polygon), PreparedGeometry builds a spatial index once and reuses it for all rows.
+- **Geometry parsed per row (with exceptions).** WKB is re-parsed from bytes for each row. The exception is constant geometry columns in ColumnBinary: when one argument is constant (e.g. a filter polygon), PreparedGeometry builds a spatial index once and reuses it for all rows.
 
 - **Experimental ClickHouse feature.** `allow_experimental_webassembly_udf` is not production-ready and not available on ClickHouse Cloud. The UDF API may change between ClickHouse releases.
 

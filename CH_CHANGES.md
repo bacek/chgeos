@@ -1,7 +1,8 @@
 # ClickHouse Changes vs Upstream
 
-Four independent areas: WASM runtime extensions, a new columnar call
-ABI, a spatial-predicate join engine, and spatial pruning at the storage layer.
+Four independent areas: WASM runtime extensions, a columnar call ABI
+(ColumnBinary), a spatial-predicate join engine, and spatial pruning at the
+storage layer.
 
 ---
 
@@ -37,14 +38,20 @@ This allows to run benchmark, but probably affect actual performance.
 
 ---
 
-## 2. COLUMNAR_V1 Wire Format
+## 2. ColumnBinary Wire Format (a.k.a. COLUMNAR_V1)
 
-A new call ABI that replaces row-at-a-time MsgPack for bulk predicate and scalar
-evaluation.
+A call ABI that replaces row-at-a-time MsgPack for bulk predicate and scalar
+evaluation. The wire frame is defined in `ColumnarV1Wire.h` — hence the legacy
+"COLUMNAR_V1" name — and is registered user-facing as the **`ColumnBinary`
+serialization format** under the regular `ABI BUFFERED_V1` path (FormatFactory,
+`ColumnBinaryInputFormat` / `ColumnBinaryOutputFormat`). chgeos registers every
+function via `serialization_format = 'ColumnBinary'`; the dedicated legacy
+`ABI COLUMNAR_V1` registration branch in `UserDefinedWebAssembly.cpp` is no
+longer used by chgeos and is a removal candidate on the fork side.
 
 **Motivation.** The MsgPack path makes one host↔WASM boundary crossing per row. At 6M
 rows per query this creates measurable overhead from serialization and repeated boundary
-crossings. COLUMNAR_V1 sends all N rows in a single call as a typed column buffer.
+crossings. The columnar format sends all N rows in a single call as a typed column buffer.
 
 **Format.** Each argument is a length-prefixed typed buffer. Supported column types:
 fixed-width scalars (bool, int32, int64, float64), variable-length bytes (WKB geometry,

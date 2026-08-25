@@ -20,7 +20,7 @@ spatialbench's own verify_results.py:
 Usage:
     python3 scripts/verify_sf.py --ch /path/to/clickhouse --sf sf1
         [--port 19000] [--timeout 300] [--native]
-        [--wire-protocol col|mp|buffers|cb]
+        [--wire-protocol mp|buffers|cb]
         [--query Q1] [--queries Q1,Q7]
         [--answers-dir <spatialbench>/benchmark/answers/sf1]
         [--dump-dir DIR]        # write each result CSV for inspection
@@ -54,7 +54,7 @@ LIMIT_CAP = 100
 DURATION_SUFFIX = "_seconds"
 DURATION_ATOL = 1e-3
 
-WIRE_SUFFIX = {"col": "", "mp": "_mp", "buffers": "_buffers", "cb": "_cb"}
+WIRE_SUFFIX = {"mp": "_mp", "buffers": "_buffers", "cb": "_cb"}
 
 
 def parse_args():
@@ -67,7 +67,7 @@ def parse_args():
     p.add_argument("--port", type=int, default=int(os.environ.get("CH_PORT", 19000)))
     p.add_argument("--timeout", type=int, default=int(os.environ.get("BENCH_TIMEOUT", 300)))
     p.add_argument("--native", action="store_true", help="read MergeTree tables instead of parquet")
-    p.add_argument("--wire-protocol", default="col", choices=list(WIRE_SUFFIX))
+    p.add_argument("--wire-protocol", default="cb", choices=list(WIRE_SUFFIX))
     p.add_argument("--settings", default=None, help="extra SETTINGS appended to each query")
     p.add_argument("--query", action="append", dest="query", metavar="QUERY",
                    help="verify only this query; repeatable")

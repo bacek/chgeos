@@ -13,7 +13,7 @@
 //
 // clickhouse_chain_execute receives two separate buffers:
 //   chain_buf: [uint32_t n_funcs][cstr name_0]...[cstr name_n-1]
-//   row_buf:   standard COLUMNAR_V1 buffer (identical to what name_col receives)
+//   row_buf:   standard ColumnBinary buffer (identical to what the canonical exports receive)
 // clickhouse_can_chain_execute still uses chain_buf format only.
 
 #include <cstdint>

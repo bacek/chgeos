@@ -1,7 +1,7 @@
 # chgeos Tests
 
-Native tests only (280 total). Test files in `tests/`:
-- `test_columnar.cpp` — COLUMNAR_V1 path: PreparedGeometry A/B-const + dist, null handling
+Native tests only (354 total). Test files in `tests/`:
+- `test_columnar.cpp` — ColumnBinary path: PreparedGeometry A/B-const + dist, null handling
 - `test_rowbinary.cpp` — RowBinary wire format
 - `test_predicates.cpp` — `_impl` functions directly
 - `test_mem.cpp` — `raw_buffer`, msgpack roundtrip, `impl_wrapper`
