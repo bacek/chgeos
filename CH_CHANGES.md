@@ -40,8 +40,6 @@ linear-memory offset 0; `WasmMemoryManagerV01::getMemoryView` now throws `WASM_E
 instead of reading whatever sits there. Shipped in [PR #116548](https://github.com/ClickHouse/ClickHouse/pull/116548)
 ("Document the WASM UDF buffer data pointer requirement"), open.
 
-This allows to run benchmark, but probably affect actual performance.
-
 ---
 
 ## 2. ColumnBinary Wire Format (a.k.a. COLUMNAR_V1)
