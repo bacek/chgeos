@@ -2,7 +2,7 @@
 
 // ColumnBinary exports for ClickHouse WASM UDFs (_cb suffix).
 // All macros dispatch to columnar_impl_wrapper (from columnar.hpp) — the
-// ColumnBinary wire frame is the same layout the CH side calls ColumnarV1Wire.
+// ColumnBinary wire frame is the same layout the CH side defines in ColumnBinaryWire.h.
 
 #include "columnar.hpp"
 

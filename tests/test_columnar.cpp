@@ -21,7 +21,7 @@ struct ColData {
     std::vector<uint8_t>  data;
 };
 
-// Assemble a COLUMNAR_V1 raw_buffer from a row count and per-column data.
+// Assemble a ColumnBinary raw_buffer from a row count and per-column data.
 static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
     uint32_t pos = HEADER_BYTES + static_cast<uint32_t>(cols.size()) * COL_DESC_BYTES;
 
@@ -678,7 +678,7 @@ TEST(ColComplex, OutputVectorOfPairs) {
 // Geo discriminators (CH global alphabetical order): 0=LineString, 1=MultiLineString,
 //   2=MultiPolygon, 3=Point, 4=Polygon, 5=Ring
 //
-// Helpers build a single-column COLUMNAR_V1 buffer with one COL_VARIANT column.
+// Helpers build a single-column ColumnBinary buffer with one COL_VARIANT column.
 
 // Build a COL_VARIANT buffer containing only Point sub-variants.
 // Each entry is {x, y} or nullopt for a NULL row.

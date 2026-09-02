@@ -28,7 +28,7 @@ static void write_le64(raw_buffer& buf, uint64_t v) {
     for (int j = 0; j < 8; ++j) buf.push_back(static_cast<uint8_t>(v >> (j * 8)));
 }
 
-// Build a COLUMNAR_V1 raw_buffer from num_rows, num_cols, and per-column data.
+// Build a ColumnBinary raw_buffer from num_rows, num_cols, and per-column data.
 // Each column: ColDescriptor (type, null_offset=0, offsets_offset, data_offset, data_size) + data.
 // For COL_BYTES: data = u32[N+1] offsets + raw bytes.
 // For fixed types: data = raw bytes.
@@ -97,7 +97,7 @@ static raw_buffer* make_col_buf(uint32_t num_rows, uint32_t num_cols,
     return buf;
 }
 
-// Simpler helper: build COLUMNAR_V1 buffer with a single fixed-width column.
+// Simpler helper: build ColumnBinary buffer with a single fixed-width column.
 static raw_buffer* make_col_fixed(uint32_t num_rows, uint8_t col_type,
                                    const std::vector<uint8_t>& data) {
     raw_buffer* buf = clickhouse_create_buffer(0);
@@ -117,7 +117,7 @@ static raw_buffer* make_col_fixed(uint32_t num_rows, uint8_t col_type,
     return buf;
 }
 
-// Build a COLUMNAR_V1 buffer with a single COL_BYTES (string) column.
+// Build a ColumnBinary buffer with a single COL_BYTES (string) column.
 // col_data: raw string bytes; col_offsets: u32[N+1] start offsets.
 static raw_buffer* make_col_string(uint32_t num_rows,
                                     const std::vector<uint8_t>& col_data,
@@ -146,7 +146,7 @@ static raw_buffer* make_col_string(uint32_t num_rows,
     return buf;
 }
 
-// Build a 2-column COLUMNAR_V1 buffer for geometry predicates.
+// Build a 2-column ColumnBinary buffer for geometry predicates.
 // Uses COL_BYTES for geometry columns.
 static raw_buffer* make_col_geom_buf(uint32_t num_rows,
                                       const std::vector<ch::Vector>& col0_wkbs,
@@ -206,7 +206,7 @@ static raw_buffer* make_col_geom_buf(uint32_t num_rows,
     return buf;
 }
 
-// Build a 3-column COLUMNAR_V1 buffer: geom, geom, double
+// Build a 3-column ColumnBinary buffer: geom, geom, double
 static raw_buffer* make_col_geom3(uint32_t num_rows,
     const std::vector<ch::Vector>& col0_wkbs,
     const std::vector<ch::Vector>& col1_wkbs,
@@ -275,7 +275,7 @@ static raw_buffer* make_col_geom3(uint32_t num_rows,
     return buf;
 }
 
-// Parse COLUMNAR_V1 output and read bool bytes.
+// Parse ColumnBinary output and read bool bytes.
 static std::vector<uint8_t> read_col_bool(raw_buffer* out, uint32_t n) {
     auto cb = parse_columnar(out);
     auto col = cb.col(0);

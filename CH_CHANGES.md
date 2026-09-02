@@ -42,16 +42,16 @@ instead of reading whatever sits there. Shipped in [PR #116548](https://github.c
 
 ---
 
-## 2. ColumnBinary Wire Format (a.k.a. COLUMNAR_V1)
+## 2. ColumnBinary Wire Format
 
 A call ABI that replaces row-at-a-time MsgPack for bulk predicate and scalar
-evaluation. The wire frame is defined in `ColumnarV1Wire.h` — hence the legacy
-"COLUMNAR_V1" name — and is registered user-facing as the **`ColumnBinary`
-serialization format** under the regular `ABI BUFFERED_V1` path (FormatFactory,
-`ColumnBinaryInputFormat` / `ColumnBinaryOutputFormat`). chgeos registers every
-function via `serialization_format = 'ColumnBinary'`; the dedicated legacy
-`ABI COLUMNAR_V1` registration branch in `UserDefinedWebAssembly.cpp` is no
-longer used by chgeos and is a removal candidate on the fork side.
+evaluation. The wire frame is defined in `ColumnBinaryWire.h` and is registered
+user-facing as the **`ColumnBinary` serialization format** under the regular
+`ABI BUFFERED_V1` path (FormatFactory, `ColumnBinaryInputFormat` /
+`ColumnBinaryOutputFormat`). chgeos registers every function via
+`serialization_format = 'ColumnBinary'`; the dedicated legacy columnar-ABI
+registration branch in `UserDefinedWebAssembly.cpp` is no longer used by chgeos
+and is a removal candidate on the fork side.
 Upstream: [PR #104424](https://github.com/ClickHouse/ClickHouse/pull/104424) ("Add the `ColumnBinary` format"), open.
 
 **Motivation.** The MsgPack path makes one host↔WASM boundary crossing per row. At 6M
@@ -69,8 +69,8 @@ than reading N identical copies. For spatial predicates, this triggers `Prepared
 construction on the constant side, amortizing the GEOS index build cost over the whole
 batch.
 
-**Extracted and tested.** The format is defined in `ColumnarV1Wire.h` with a standalone
-unit test suite, separate from the WASM execution machinery.
+**Extracted and tested.** The format is defined in `ColumnBinaryWire.h` with a standalone
+unit test suite (`gtest_column_binary`), separate from the WASM execution machinery.
 
 ---
 

@@ -1,6 +1,6 @@
 #pragma once
 
-// ColumnBinary wire format for ClickHouse WASM UDFs (CH fork: ColumnarV1Wire.h).
+// ColumnBinary wire format for ClickHouse WASM UDFs (CH fork: ColumnBinaryWire.h).
 //
 // Replaces RowBinary with a columnar layout.  Key benefit: ColumnConst data
 // (e.g. a constant 169 KB polygon) is passed ONCE regardless of num_rows.
