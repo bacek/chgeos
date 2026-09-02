@@ -20,19 +20,25 @@ WASM UDF into CH's constant-folding pipeline. Three cooperating changes were nee
 function registration records the flag, the analyzer propagates it through the function
 node, and the query resolver evaluates constant WASM calls at planning time rather than
 execution time. This allows expressions like `st_geomfromtext('POINT(0 0)')` to be
-evaluated once and reused.~~
+evaluated once and reused.~~ ([PR #100005](https://github.com/ClickHouse/ClickHouse/pull/100005), merged)
 
 **Dynamic block splitting.** Before calling a WASM UDF, the runtime now checks how much
 linear memory is available in the WASM instance and splits the input block if needed to
 stay within the instance's 4 GB address space. This prevents OOM kills for wide or
-high-cardinality input batches.
+high-cardinality input batches. ([PR #116552](https://github.com/ClickHouse/ClickHouse/pull/116552), open)
 
 ~~**system.functions visibility.** WASM UDFs now appear in `system.functions` with their
 full argument list and return type, matching the behaviour of built-in functions.~~
+([PR #101053](https://github.com/ClickHouse/ClickHouse/pull/101053), merged)
 
-~~**Bug fixes.** A Cranelift E-Graph compiler bug triggered SIGILL on aarch64-apple-darwin;
-the workaround disables the E-Graph optimization pass for that target. A null-pointer
-dereference in `WasmMemoryManagerV01::getMemoryView` was also fixed.~~
+~~**Cranelift SIGILL on aarch64-apple-darwin.** A Cranelift E-Graph compiler bug triggered
+SIGILL; the workaround disables the E-Graph optimization pass for that target. Fixed
+upstream independently (our [PR #103487](https://github.com/ClickHouse/ClickHouse/pull/103487) was closed in favour of the upstream fix).~~
+
+**Buffer data pointer enforcement.** A buffer declaring a non-zero size must not point at
+linear-memory offset 0; `WasmMemoryManagerV01::getMemoryView` now throws `WASM_ERROR`
+instead of reading whatever sits there. Shipped in [PR #116548](https://github.com/ClickHouse/ClickHouse/pull/116548)
+("Document the WASM UDF buffer data pointer requirement"), open.
 
 This allows to run benchmark, but probably affect actual performance.
 
@@ -48,6 +54,7 @@ serialization format** under the regular `ABI BUFFERED_V1` path (FormatFactory,
 function via `serialization_format = 'ColumnBinary'`; the dedicated legacy
 `ABI COLUMNAR_V1` registration branch in `UserDefinedWebAssembly.cpp` is no
 longer used by chgeos and is a removal candidate on the fork side.
+Upstream: [PR #104424](https://github.com/ClickHouse/ClickHouse/pull/104424) ("Add the `ColumnBinary` format"), open.
 
 **Motivation.** The MsgPack path makes one host↔WASM boundary crossing per row. At 6M
 rows per query this creates measurable overhead from serialization and repeated boundary
@@ -145,6 +152,7 @@ geometry as separate `xmin/ymin/xmax/ymax` columns. CH now reads these at two gr
 ~~The spatial filter is extracted from the query plan via the `KeyCondition` hyperrectangle
 pipeline, so any function that implements `isSpatialPredicate()` participates
 automatically. New `ProfileEvents` track the number of row groups and pages skipped.~~
+([PR #104435](https://github.com/ClickHouse/ClickHouse/pull/104435), "Geoparquet rowgroup pruning", merged)
 
 ### Iceberg
 
@@ -164,6 +172,7 @@ A new index type `spatial_bbox` can be declared on a geometry column (stored as 
 MergeTree table. At index build time, the granule's bounding box is accumulated over all
 rows. At query time, granules whose recorded bbox doesn't intersect the spatial filter's
 geometry are skipped, reducing the number of rows read by the storage engine.
+([PR #104437](https://github.com/ClickHouse/ClickHouse/pull/104437), "Add spatial_bbox skip index for MergeTree geometry columns", open)
 
 ---
 
