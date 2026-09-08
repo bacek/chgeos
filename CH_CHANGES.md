@@ -22,10 +22,10 @@ node, and the query resolver evaluates constant WASM calls at planning time rath
 execution time. This allows expressions like `st_geomfromtext('POINT(0 0)')` to be
 evaluated once and reused.~~ ([PR #100005](https://github.com/ClickHouse/ClickHouse/pull/100005), merged)
 
-**Dynamic block splitting.** Before calling a WASM UDF, the runtime now checks how much
+~~**Dynamic block splitting.** Before calling a WASM UDF, the runtime now checks how much
 linear memory is available in the WASM instance and splits the input block if needed to
 stay within the instance's 4 GB address space. This prevents OOM kills for wide or
-high-cardinality input batches. ([PR #116552](https://github.com/ClickHouse/ClickHouse/pull/116552), open)
+high-cardinality input batches. ([PR #116552](https://github.com/ClickHouse/ClickHouse/pull/116552), merged)~~
 
 ~~**system.functions visibility.** WASM UDFs now appear in `system.functions` with their
 full argument list and return type, matching the behaviour of built-in functions.~~
@@ -35,10 +35,10 @@ full argument list and return type, matching the behaviour of built-in functions
 SIGILL; the workaround disables the E-Graph optimization pass for that target. Fixed
 upstream independently (our [PR #103487](https://github.com/ClickHouse/ClickHouse/pull/103487) was closed in favour of the upstream fix).~~
 
-**Buffer data pointer enforcement.** A buffer declaring a non-zero size must not point at
+~~**Buffer data pointer enforcement.** A buffer declaring a non-zero size must not point at
 linear-memory offset 0; `WasmMemoryManagerV01::getMemoryView` now throws `WASM_ERROR`
 instead of reading whatever sits there. Shipped in [PR #116548](https://github.com/ClickHouse/ClickHouse/pull/116548)
-("Document the WASM UDF buffer data pointer requirement"), open.
+("Document the WASM UDF buffer data pointer requirement"), merged.~~
 
 ---
 
