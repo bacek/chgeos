@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.10)
-project(chgeos LANGUAGES CXX)
+project(chgeos LANGUAGES CXX C)
 
 set(CMAKE_VERBOSE_MAKEFILE)
 set(CMAKE_CXX_STANDARD 23)
@@ -68,11 +68,13 @@ option(BUILD_EXAMPLES "" OFF)
 add_subdirectory(third-party/msgpack23 msgpack23)
 
 if(CMAKE_CROSSCOMPILING)
-  add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/mem.cpp)
+  add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/mem.cpp
+                       third-party/tg/tg.c)
   target_link_libraries(chgeos PRIVATE geos msgpack23)
   target_include_directories(chgeos PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/geos/capi
-    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/xxhash)
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/xxhash
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/tg)
   set_target_properties(chgeos PROPERTIES SUFFIX ".wasm")
   target_link_options(chgeos PRIVATE
     "-Wl,--no-entry"
@@ -83,6 +85,13 @@ else()
   set(BUILD_TESTING ON CACHE BOOL "" FORCE)
   enable_testing()
   add_subdirectory(tests)
+
+  # tg vs GEOS spike (bench/tg_spike.cpp). Standalone, not part of ctest.
+  add_executable(tg_spike bench/tg_spike.cpp third-party/tg/tg.c)
+  target_link_libraries(tg_spike PRIVATE geos)
+  target_include_directories(tg_spike PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/src
+    ${CMAKE_CURRENT_SOURCE_DIR}/third-party/tg)
   # Suppress the NOT_BUILT placeholder test that msgpack23 registers.
   configure_file(
     ${CMAKE_SOURCE_DIR}/CTestCustom.cmake.in

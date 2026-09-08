@@ -19,14 +19,17 @@ add_executable(chgeos_tests
   test_rowbinary.cpp
   test_transforms.cpp
   test_col_binary.cpp
+  test_tg_area.cpp
   ${CMAKE_SOURCE_DIR}/src/geom/wkb.cpp
   ${CMAKE_SOURCE_DIR}/src/mem.cpp
+  ${CMAKE_SOURCE_DIR}/third-party/tg/tg.c
 )
 
 target_include_directories(chgeos_tests PRIVATE
   ${CMAKE_SOURCE_DIR}/src
   ${CMAKE_BINARY_DIR}/geos/capi
   ${CMAKE_SOURCE_DIR}/third-party/xxhash
+  ${CMAKE_SOURCE_DIR}/third-party/tg
 )
 
 target_link_libraries(chgeos_tests PRIVATE
