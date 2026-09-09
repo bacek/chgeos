@@ -25,7 +25,14 @@ evaluated once and reused.~~ ([PR #100005](https://github.com/ClickHouse/ClickHo
 ~~**Dynamic block splitting.** Before calling a WASM UDF, the runtime now checks how much
 linear memory is available in the WASM instance and splits the input block if needed to
 stay within the instance's 4 GB address space. This prevents OOM kills for wide or
-high-cardinality input batches. ([PR #116552](https://github.com/ClickHouse/ClickHouse/pull/116552), merged)~~
+high-cardinality input batches.~~
+([PR #116552](https://github.com/ClickHouse/ClickHouse/pull/116552), "Split WASM UDF input blocks by estimated memory size", merged 2026-09-07)
+
+**Whole-batch input measurement.** Follow-up to the block splitting above. The batch size is
+chosen by measuring a candidate batch whole, rather than by summing per-row probes, so
+per-block serialization overhead (`LowCardinality` dictionaries, `Dynamic`/`Variant`
+structure prefixes) is accounted for once per batch instead of being multiplied by the row
+count. ([PR #118989](https://github.com/ClickHouse/ClickHouse/pull/118989), open)
 
 ~~**system.functions visibility.** WASM UDFs now appear in `system.functions` with their
 full argument list and return type, matching the behaviour of built-in functions.~~
@@ -37,8 +44,8 @@ upstream independently (our [PR #103487](https://github.com/ClickHouse/ClickHous
 
 ~~**Buffer data pointer enforcement.** A buffer declaring a non-zero size must not point at
 linear-memory offset 0; `WasmMemoryManagerV01::getMemoryView` now throws `WASM_ERROR`
-instead of reading whatever sits there. Shipped in [PR #116548](https://github.com/ClickHouse/ClickHouse/pull/116548)
-("Document the WASM UDF buffer data pointer requirement"), merged.~~
+instead of reading whatever sits there.~~ Shipped in [PR #116548](https://github.com/ClickHouse/ClickHouse/pull/116548)
+("Document the WASM UDF buffer data pointer requirement"), merged 2026-09-07.
 
 ---
 
