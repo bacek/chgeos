@@ -253,7 +253,7 @@ def _apply_suffix(sql: str, suffix: str) -> str:
 # Helpers
 # ---------------------------------------------------------------------------
 
-def build_table_vars(sf, native):
+def build_table_vars(sf, native, legacy_data=False):
     """Map the {TRIP}/{ZONE}/{BUILDING}/{CUSTOMER} placeholders to table refs.
 
     Native reads MergeTree tables (sf1.trip etc.); otherwise parquet under
@@ -262,6 +262,10 @@ def build_table_vars(sf, native):
       e.g. sf1/trip/trip.1.parquet, sf1/trip/trip.2.parquet, sf1/zone/zone.*.parquet)
       -> file('<sf>/<table>/*.parquet', Parquet)  (CH file() glob)
     - single flat file sf1/<table>.parquet (legacy)
+
+    Both layouts can be present at once. The per-table directory wins by
+    default; legacy_data=True forces the flat file so the two generations of
+    data can be compared on the same build.
     """
     if native:
         return {name.upper(): f"{sf}.{name}"
@@ -272,7 +276,7 @@ def build_table_vars(sf, native):
     table_vars = {}
     for name in ("trip", "zone", "building", "customer"):
         table_dir = os.path.join(user_files, name)
-        if os.path.isdir(table_dir):
+        if os.path.isdir(table_dir) and not legacy_data:
             table_vars[name.upper()] = f"file('{table_dir}/*.parquet', Parquet)"
         else:
             table_vars[name.upper()] = f"file('{user_files}/{name}.parquet', Parquet)"
@@ -305,6 +309,9 @@ Usage:
     parser.add_argument("--timeout", type=int, default=int(os.environ.get("BENCH_TIMEOUT", 120)))
     parser.add_argument("--runs", type=int, default=int(os.environ.get("BENCH_RUNS", 5)))
     parser.add_argument("--native", action="store_true")
+    parser.add_argument("--legacy-data", action="store_true",
+                        help="read the flat <sf>/<table>.parquet files instead of "
+                             "the upstream per-table directories")
     parser.add_argument("--wire-protocol", default="cb", choices=["mp", "buffers", "cb"],
                         help="Wire format: 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix, default)")
     parser.add_argument("--settings", default=None)
@@ -456,9 +463,9 @@ def main():
     fuel5 = settings("query_plan_execute_functions_after_sorting=0")
     fuel_sort = fuel
 
-    table_vars = build_table_vars(sf, native)
+    table_vars = build_table_vars(sf, native, args.legacy_data)
 
-    format_label = "native" if native else "parquet"
+    format_label = "native" if native else ("parquet-legacy" if args.legacy_data else "parquet")
     print()
     print(f"Scale factor: {sf}  format: {format_label}  wire-protocol: {wire_protocol}  ({runs} runs each)")
 
