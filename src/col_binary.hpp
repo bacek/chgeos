@@ -1,14 +1,13 @@
 #pragma once
 
-// ColumnBinary exports for ClickHouse WASM UDFs (_cb suffix).
-// All macros dispatch to columnar_impl_wrapper (from columnar.hpp) — the
-// ColumnBinary wire frame is the same layout the CH side defines in ColumnBinaryWire.h.
+// COLUMNAR_V1 exports for ClickHouse WASM UDFs.
+// All macros dispatch to columnar_impl_wrapper (from columnar.hpp).
 
 #include "columnar.hpp"
 
 namespace ch {
 
-// ── CH_UDF_CB* macros: ColumnBinary exports ──────────────────────────────────
+// ── CH_UDF_CB* macros: COLUMNAR_V1 exports ───────────────────────────────────
 
 #define CH_UDF_CB(name)                                                      \
     __attribute__((export_name(#name "_cb")))                                \

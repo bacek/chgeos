@@ -1,8 +1,7 @@
 # ClickHouse Changes vs Upstream
 
-Four independent areas: WASM runtime extensions, a columnar call ABI
-(ColumnBinary), a spatial-predicate join engine, and spatial pruning at the
-storage layer.
+Four independent areas: WASM runtime extensions, a new columnar call
+ABI, a spatial-predicate join engine, and spatial pruning at the storage layer.
 
 ---
 
@@ -49,21 +48,20 @@ instead of reading whatever sits there.~~ Shipped in [PR #116548](https://github
 
 ---
 
-## 2. ColumnBinary Wire Format
+## 2. COLUMNAR_V1 Wire Format
 
 A call ABI that replaces row-at-a-time MsgPack for bulk predicate and scalar
-evaluation. The wire frame is defined in `ColumnBinaryWire.h` and is registered
-user-facing as the **`ColumnBinary` serialization format** under the regular
+evaluation. The wire frame is defined in `ColumnBinaryWire.h` and is reachable two
+ways: as the **`ColumnBinary` serialization format** under the regular
 `ABI BUFFERED_V1` path (FormatFactory, `ColumnBinaryInputFormat` /
-`ColumnBinaryOutputFormat`). chgeos registers every function via
-`serialization_format = 'ColumnBinary'`; the dedicated legacy columnar-ABI
-registration branch in `UserDefinedWebAssembly.cpp` is no longer used by chgeos
-and is a removal candidate on the fork side.
+`ColumnBinaryOutputFormat`), and through the dedicated `ABI COLUMNAR_V1`
+registration branch in `UserDefinedWebAssembly.cpp`. chgeos registers both, so the
+two can be benchmarked against each other.
 Upstream: [PR #104424](https://github.com/ClickHouse/ClickHouse/pull/104424) ("Add the `ColumnBinary` format"), open.
 
 **Motivation.** The MsgPack path makes one host↔WASM boundary crossing per row. At 6M
 rows per query this creates measurable overhead from serialization and repeated boundary
-crossings. The columnar format sends all N rows in a single call as a typed column buffer.
+crossings. COLUMNAR_V1 sends all N rows in a single call as a typed column buffer.
 
 **Format.** Each argument is a length-prefixed typed buffer. Supported column types:
 fixed-width scalars (bool, int32, int64, float64), variable-length bytes (WKB geometry,
@@ -76,8 +74,8 @@ than reading N identical copies. For spatial predicates, this triggers `Prepared
 construction on the constant side, amortizing the GEOS index build cost over the whole
 batch.
 
-**Extracted and tested.** The format is defined in `ColumnBinaryWire.h` with a standalone
-unit test suite (`gtest_column_binary`), separate from the WASM execution machinery.
+**Extracted and tested.** The format is defined in `ColumnarV1Wire.h` with a standalone
+unit test suite, separate from the WASM execution machinery.
 
 ---
 
