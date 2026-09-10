@@ -99,9 +99,8 @@ static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
     buf->resize(pos);
     uint8_t* p = buf->data();
     std::memset(p, 0, pos);
-    std::memcpy(p, &num_rows, 4);
     uint32_t nc = static_cast<uint32_t>(cols.size());
-    std::memcpy(p + 4, &nc, 4);
+    write_frame_header(p, num_rows, nc);
 
     for (size_t i = 0; i < cols.size(); ++i) {
         ColDescriptor d{};

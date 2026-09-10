@@ -49,9 +49,8 @@ static raw_buffer* make_columnar(uint32_t num_rows, std::vector<ColData> cols) {
     uint8_t* p = buf->data();
     std::memset(p, 0, pos);
 
-    std::memcpy(p, &num_rows, 4);
     uint32_t nc = static_cast<uint32_t>(cols.size());
-    std::memcpy(p + 4, &nc, 4);
+    write_frame_header(p, num_rows, nc);
 
     for (size_t i = 0; i < cols.size(); ++i) {
         ColDescriptor d{};
@@ -565,7 +564,7 @@ static ColData complex_array_string_col(const std::vector<ch::Vector>& wkbs) {
 // Geometry output is COL_BYTES (non-nullable — use std::optional<> for nullable).
 static std::string read_geom_col_wkt(raw_buffer* buf) {
     uint32_t num_rows;
-    std::memcpy(&num_rows, buf->data(), 4);
+    std::memcpy(&num_rows, buf->data() + 8, 4);
     ColDescriptor d;
     std::memcpy(&d, buf->data() + HEADER_BYTES, sizeof(d));
     EXPECT_EQ(d.type & ~static_cast<uint32_t>(COL_IS_CONST),
@@ -621,7 +620,7 @@ static std::vector<std::pair<uint64_t, double>> pair_vec_impl(int32_t n) {
 
 static std::vector<std::pair<uint64_t, double>> read_pair_vec_row(raw_buffer* buf, uint32_t row) {
     uint32_t num_rows;
-    std::memcpy(&num_rows, buf->data(), 4);
+    std::memcpy(&num_rows, buf->data() + 8, 4);
     ColDescriptor d;
     std::memcpy(&d, buf->data() + HEADER_BYTES, sizeof(d));
     EXPECT_EQ(d.type, static_cast<uint32_t>(COL_COMPLEX));

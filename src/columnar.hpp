@@ -6,7 +6,10 @@
 // (e.g. a constant 169 KB polygon) is passed ONCE regardless of num_rows.
 //
 // ┌──────────────────────────────────────────────────────────────────────────┐
-// │ BufHeader (8 bytes)                                                      │
+// │ FrameHeader (16 bytes)                                                   │
+// │   magic    : u32  — 'C','B','I','N'                                      │
+// │   version  : u16  — 1                                                    │
+// │   reserved : u16                                                         │
 // │   num_rows : u32                                                         │
 // │   num_cols : u32                                                         │
 // ├──────────────────────────────────────────────────────────────────────────┤
@@ -122,8 +125,22 @@ struct ColDescriptor {
 };
 static_assert(sizeof(ColDescriptor) == 40);
 
-static constexpr uint32_t HEADER_BYTES  = 8;   // sizeof BufHeader
+// Frame header, matching ClickHouse's ColumnBinaryWire.h:
+// [4 B magic | 2 B version | 2 B reserved | 4 B num_rows | 4 B num_cols]
+static constexpr uint32_t FRAME_MAGIC   = 0x4E494243u;  // 'C' | 'B'<<8 | 'I'<<16 | 'N'<<24
+static constexpr uint16_t FRAME_VERSION = 1;
+static constexpr uint32_t HEADER_BYTES  = 16;  // sizeof FrameHeader
 static constexpr uint32_t COL_DESC_BYTES = 40;  // sizeof ColDescriptor
+
+// Write the frame header at the start of an output buffer.
+inline void write_frame_header(uint8_t* p, uint32_t num_rows, uint32_t num_cols) {
+    const uint16_t reserved = 0;
+    std::memcpy(p,      &FRAME_MAGIC,   4);
+    std::memcpy(p + 4,  &FRAME_VERSION, 2);
+    std::memcpy(p + 6,  &reserved,      2);
+    std::memcpy(p + 8,  &num_rows,      4);
+    std::memcpy(p + 12, &num_cols,      4);
+}
 
 // ── Input column accessor ─────────────────────────────────────────────────────
 
@@ -216,8 +233,8 @@ inline ColumnarBuf parse_columnar(const raw_buffer* buf) {
     const uint8_t* p = buf->data();
     ColumnarBuf cb;
     cb.base = p;
-    std::memcpy(&cb.num_rows, p,     4);
-    std::memcpy(&cb.num_cols, p + 4, 4);
+    std::memcpy(&cb.num_rows, p + 8,  4);
+    std::memcpy(&cb.num_cols, p + 12, 4);
     cb.descs = reinterpret_cast<const ColDescriptor*>(p + HEADER_BYTES);
     return cb;
 }
@@ -231,9 +248,7 @@ inline void col_write_fixed_header(raw_buffer* out, uint32_t num_rows, uint32_t 
     out->resize(HEADER_BYTES + COL_DESC_BYTES + num_rows * static_cast<uint32_t>(sizeof(T)));
     uint8_t* p = out->data();
 
-    std::memcpy(p, &num_rows, 4);
-    const uint32_t one = 1;
-    std::memcpy(p + 4, &one, 4);
+    write_frame_header(p, num_rows, 1);
 
     ColDescriptor d{};
     d.type         = col_type;
@@ -264,9 +279,7 @@ struct ColBytesWriter {
         out->resize(data_base);
         uint8_t* p = out->data();
 
-        std::memcpy(p, &n, 4);
-        const uint32_t one = 1;
-        std::memcpy(p + 4, &one, 4);
+        write_frame_header(p, n, 1);
 
         ColDescriptor d{};
         d.type           = COL_BYTES | (is_nullable ? COL_IS_NULLABLE : 0u);
@@ -392,9 +405,7 @@ raw_buffer* write_complex_col(uint32_t n, GetVal get_val) {
     raw_buffer* out = clickhouse_create_buffer(0);
     out->resize(HEADER_BYTES + COL_DESC_BYTES);
     uint8_t* p = out->data();
-    std::memcpy(p,     &n,  4);
-    const uint32_t one = 1u;
-    std::memcpy(p + 4, &one, 4);
+    write_frame_header(p, n, 1);
     ColDescriptor d{};
     d.type = static_cast<uint32_t>(COL_COMPLEX);
     if constexpr (is_vector_v<Ret>) {

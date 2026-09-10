@@ -28,6 +28,17 @@ static void write_le64(raw_buffer& buf, uint64_t v) {
     for (int j = 0; j < 8; ++j) buf.push_back(static_cast<uint8_t>(v >> (j * 8)));
 }
 
+// FrameHeader: [4 B magic | 2 B version | 2 B reserved | 4 B num_rows | 4 B num_cols]
+static void write_frame_hdr(raw_buffer& buf, uint32_t num_rows, uint32_t num_cols) {
+    write_le32(buf, FRAME_MAGIC);
+    buf.push_back(static_cast<uint8_t>(FRAME_VERSION & 0xFF));
+    buf.push_back(static_cast<uint8_t>(FRAME_VERSION >> 8));
+    buf.push_back(0);
+    buf.push_back(0);
+    write_le32(buf, num_rows);
+    write_le32(buf, num_cols);
+}
+
 // Build a ColumnBinary raw_buffer from num_rows, num_cols, and per-column data.
 // Each column: ColDescriptor (type, null_offset=0, offsets_offset, data_offset, data_size) + data.
 // For COL_BYTES: data = u32[N+1] offsets + raw bytes.
@@ -40,15 +51,12 @@ static raw_buffer* make_col_buf(uint32_t num_rows, uint32_t num_cols,
     buf->clear();
 
     // BufHeader
-    write_le32(*buf, num_rows);
-    write_le32(*buf, num_cols);
-
-    // Build data area: interleaved offsets + data per column
+    write_frame_hdr(*buf, num_rows, num_cols);
     std::vector<uint8_t> data_area;
     std::vector<uint32_t> desc_offsets; // byte offset of each ColDescriptor in the final buffer
     desc_offsets.reserve(num_cols);
 
-    uint32_t header_end = 8u + num_cols * 40u;
+    uint32_t header_end = HEADER_BYTES + num_cols * 40u;
     uint32_t data_pos = header_end;
 
     // First pass: compute layout offsets.
@@ -103,14 +111,11 @@ static raw_buffer* make_col_fixed(uint32_t num_rows, uint8_t col_type,
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
 
-    write_le32(*buf, num_rows);
-    write_le32(*buf, 1u);
-
-    // ColDescriptor
+    write_frame_hdr(*buf, num_rows, 1u);
     write_le64(*buf, col_type);
     write_le64(*buf, 0u);     // null_offset
     write_le64(*buf, 0u);     // offsets_offset
-    write_le64(*buf, 8u + 40u); // data_offset
+    write_le64(*buf, HEADER_BYTES + 40u); // data_offset
     write_le64(*buf, static_cast<uint64_t>(data.size()));
 
     buf->append(data.data(), static_cast<uint32_t>(data.size()));
@@ -125,15 +130,14 @@ static raw_buffer* make_col_string(uint32_t num_rows,
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
 
-    write_le32(*buf, num_rows);
-    write_le32(*buf, 1u);
+    write_frame_hdr(*buf, num_rows, 1u);
 
-    uint64_t data_offset = 8u + 40u + (num_rows + 1u) * 8u;
+    uint64_t data_offset = HEADER_BYTES + 40u + (num_rows + 1u) * 8u;
 
     // ColDescriptor
     write_le64(*buf, COL_BYTES);
     write_le64(*buf, 0u);     // null_offset
-    write_le64(*buf, 8u + 40u); // offsets_offset
+    write_le64(*buf, HEADER_BYTES + 40u); // offsets_offset
     write_le64(*buf, data_offset); // data_offset
     write_le64(*buf, static_cast<uint64_t>(col_data.size()));
 
@@ -155,8 +159,7 @@ static raw_buffer* make_col_geom_buf(uint32_t num_rows,
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
 
-    write_le32(*buf, num_rows);
-    write_le32(*buf, 2u);
+    write_frame_hdr(*buf, num_rows, 2u);
 
     auto build_col = [&](const std::vector<ch::Vector>& wkbs, bool is_const) {
         uint32_t rows = is_const ? 1u : num_rows;
@@ -178,7 +181,7 @@ static raw_buffer* make_col_geom_buf(uint32_t num_rows,
     auto [offs0, data0] = build_col(col0_wkbs, const_col_idx == 0);
     auto [offs1, data1] = build_col(col1_wkbs, const_col_idx == 1);
 
-    uint64_t offsets0_off = 8u + 2u * 40u;  // header + 2 descriptors
+    uint64_t offsets0_off = HEADER_BYTES + 2u * 40u;  // header + 2 descriptors
     uint64_t offsets1_off = offsets0_off + offs0.size() * 8u;
     uint64_t data0_off    = offsets1_off + offs1.size() * 8u;
     uint64_t data1_off    = data0_off + data0.size();
@@ -215,8 +218,7 @@ static raw_buffer* make_col_geom3(uint32_t num_rows,
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
 
-    write_le32(*buf, num_rows);
-    write_le32(*buf, 3u);
+    write_frame_hdr(*buf, num_rows, 3u);
 
     auto build_geom_col = [&](const std::vector<ch::Vector>& wkbs, bool is_const) {
         uint32_t rows = is_const ? 1u : num_rows;
@@ -237,7 +239,7 @@ static raw_buffer* make_col_geom3(uint32_t num_rows,
     auto [offs0, data0] = build_geom_col(col0_wkbs, const_col_idx == 0);
     auto [offs1, data1] = build_geom_col(col1_wkbs, const_col_idx == 1);
 
-    uint64_t offsets0_off = 8u + 120u;  // header + 3 descriptors × 40
+    uint64_t offsets0_off = HEADER_BYTES + 120u;  // header + 3 descriptors × 40
     uint64_t offsets1_off = offsets0_off + offs0.size() * 8u;
     uint64_t data0_off    = offsets1_off + offs1.size() * 8u;
     uint64_t data1_off    = data0_off + data0.size();
@@ -313,26 +315,25 @@ TEST(ColumnarParse, MultiCol) {
 
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
-    write_le32(*buf, 2u); // num_rows
-    write_le32(*buf, 3u); // num_cols
+    write_frame_hdr(*buf, 2u, 3u);
 
     // ColDescriptor col0
     write_le64(*buf, COL_FIXED8);
     write_le64(*buf, 0u);
     write_le64(*buf, 0u);
-    write_le64(*buf, 8u + 120u);
+    write_le64(*buf, HEADER_BYTES + 120u);
     write_le64(*buf, 2u);
     // ColDescriptor col1
     write_le64(*buf, COL_FIXED8);
     write_le64(*buf, 0u);
     write_le64(*buf, 0u);
-    write_le64(*buf, 8u + 120u + 2u);
+    write_le64(*buf, HEADER_BYTES + 120u + 2u);
     write_le64(*buf, 3u);
     // ColDescriptor col2
     write_le64(*buf, COL_FIXED8);
     write_le64(*buf, 0u);
     write_le64(*buf, 0u);
-    write_le64(*buf, 8u + 120u + 5u);
+    write_le64(*buf, HEADER_BYTES + 120u + 5u);
     write_le64(*buf, 1u);
 
     buf->push_back(0xAA); buf->push_back(0xBB);
@@ -714,16 +715,13 @@ TEST(ColumnarImpl, ConstFlag) {
     auto poly = wkt2wkb(kSquare);
     const uint32_t n = 5;
 
-    // header=8, descriptor=40, offsets=2×8=16
-    constexpr uint64_t off_off  = 8u + 40u;
+    // header=16, descriptor=40, offsets=2×8=16
+    constexpr uint64_t off_off  = HEADER_BYTES + 40u;
     constexpr uint64_t data_off = off_off + 16u;
 
     raw_buffer* buf = clickhouse_create_buffer(0);
     buf->clear();
-    write_le32(*buf, n);
-    write_le32(*buf, 1u);
-
-    // ColDescriptor (5 × uint64)
+    write_frame_hdr(*buf, n, 1u);
     write_le64(*buf, COL_BYTES | COL_IS_CONST);
     write_le64(*buf, 0u);
     write_le64(*buf, off_off);
