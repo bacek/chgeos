@@ -5,6 +5,9 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="$(realpath "$SCRIPT_DIR/..")"
 CH="${CH:-$REPO/../ClickHouse/build/programs/clickhouse}"
 CONFIG="$REPO/clickhouse/config-test.xml"
+DATA_DIR="$REPO/tmp/data"
+USER_FILES="$DATA_DIR/user_files"
+TMP_CONFIG="$REPO/tmp/config-test-generated.xml"
 
 # List running server pids. Matching on the full command line alone is unsafe:
 # `pkill -f "clickhouse server"` also matches any shell, editor or grep whose
@@ -17,12 +20,15 @@ CONFIG="$REPO/clickhouse/config-test.xml"
 # the new one dies on the status-file lock, and the readiness probe then talks to
 # the old process — i.e. every subsequent measurement uses the wrong binary.
 #
-# Match on the "server" subcommand rather than "clickhouse server": a server run
-# from a copied binary has cmdline "/tmp/clickhouse-9d8edb43e21 server ...", which
-# does not contain the literal string "clickhouse server" at all.
+# Match on this config path, not on "server --config-file" in general. Servers for
+# other checkouts run from the same build tree with the same executable name, on
+# their own ports and data directory; killing those interrupts whatever they are
+# running (a long benchmark query dies as QUERY_WAS_CANCELLED) and, when they
+# outlive the wait below, blocks this script from starting at all. Only the server
+# holding this data directory can conflict with the one started here.
 server_pids() {
     local pid comm
-    for pid in $(pgrep -f "server --config-file" 2>/dev/null); do
+    for pid in $(pgrep -f -- "--config-file=$TMP_CONFIG" 2>/dev/null); do
         comm="$(cat "/proc/$pid/comm" 2>/dev/null)"
         [[ "$comm" == clickhouse* ]] && echo "$pid"
     done
@@ -43,12 +49,9 @@ if [[ -n "$(server_pids)" ]]; then
     exit 1
 fi
 
-DATA_DIR="$REPO/tmp/data"
-USER_FILES="$DATA_DIR/user_files"
 mkdir -p "$USER_FILES"
 
 # Write paths into config so it works cross-platform (no hardcoded /home/bacek)
-TMP_CONFIG="$REPO/tmp/config-test-generated.xml"
 sed -e "s|__DATA_DIR__|${DATA_DIR}|g" \
     -e "s|__USER_FILES_PATH__|${USER_FILES}|g" \
     < "$CONFIG" > "$TMP_CONFIG"
