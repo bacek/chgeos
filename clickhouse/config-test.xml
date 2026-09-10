@@ -62,6 +62,7 @@
             <allow_database_iceberg>true</allow_database_iceberg>
             <webassembly_udf_max_fuel>0</webassembly_udf_max_fuel>
             <webassembly_udf_max_memory>1073741824</webassembly_udf_max_memory>
+            <allow_experimental_column_binary_format>1</allow_experimental_column_binary_format>
         </default>
     </profiles>
 </clickhouse>
