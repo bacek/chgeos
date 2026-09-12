@@ -16,6 +16,7 @@
 //   row_buf:   standard COLUMNAR_V1 buffer (identical to what name_col receives)
 // clickhouse_can_chain_execute still uses chain_buf format only.
 
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <functional>
@@ -299,13 +300,148 @@ inline raw_buffer* chain_execute_flat(const std::vector<std::string>& fn_names,
     return reg.at(chain_resolve_name(fn_names.back())).as_sink_flat(*batch, n);
 }
 
+// ── Tiled flat execution ─────────────────────────────────────────────────────
+//
+// Runs the same flat hooks as chain_execute_flat, but over a row range (tile)
+// at a time instead of the whole block.  A block-sized FlatBatch is megabytes
+// of coordinates written by the source and read back exactly once by the sink;
+// at SF10 Q7 that round trip dominates guest time (microbench: batch 50 ns/row
+// vs tiled ~19, wasm).  A tile's batch stays cache-resident, and the tiling is
+// invisible to the stages: it slices the input by shifting the stored-row
+// pointers in the column descriptors — no data is copied.
+//
+// Prototype constraints (everything else keeps using the untiled flat path or
+// the GEOS path unchanged): every input column is BYTES or FIXED (VARIANT and
+// COMPLEX cannot be sliced by pointer shift), and the sink emits one
+// non-nullable fixed-width column so its per-tile output buffers can be
+// stitched into a single result.
+inline constexpr uint32_t CHAIN_FLAT_TILE     = 128;
+inline constexpr uint32_t CHAIN_FLAT_TILE_MIN = 2 * CHAIN_FLAT_TILE;
+
+inline uint32_t chain_tile_stride(uint64_t base_type) {
+    switch (base_type) {
+        case COL_FIXED8:  return 1;
+        case COL_FIXED16: return 2;
+        case COL_FIXED32: return 4;
+        case COL_FIXED64: return 8;
+        default:          return 0;
+    }
+}
+
+inline raw_buffer* chain_execute_flat_tiled(const std::vector<std::string>& fn_names,
+                                            const ColumnarBuf& cb, uint32_t n) {
+    if (n < CHAIN_FLAT_TILE_MIN) return chain_execute_flat(fn_names, cb, n);
+
+    for (uint32_t c = 0; c < cb.num_cols; ++c) {
+        ColDescriptor d;
+        std::memcpy(&d, cb.descs + c, sizeof(d));
+        uint64_t base_type = d.type & ~(COL_IS_CONST | COL_IS_NULLABLE);
+        if (base_type != COL_BYTES && chain_tile_stride(base_type) == 0)
+            return chain_execute_flat(fn_names, cb, n);
+    }
+
+    auto& reg      = chain_registry();
+    const auto& source = reg.at(chain_resolve_name(fn_names.front()));
+    const auto& sink   = reg.at(chain_resolve_name(fn_names.back()));
+
+    std::vector<ColDescriptor> descs(cb.num_cols);
+
+    raw_buffer* out     = nullptr;   // stitched output, allocated on tile 0
+    uint32_t    stride  = 0;
+    uint8_t*    payload = nullptr;
+
+    // Any decline after tile 0 discards the stitched output; like the untiled
+    // path, a decline returns nullptr and the caller re-runs the block in GEOS
+    // currency.
+    for (uint32_t base = 0; base < n; base += CHAIN_FLAT_TILE) {
+        uint32_t t = std::min<uint32_t>(CHAIN_FLAT_TILE, n - base);
+        for (uint32_t c = 0; c < cb.num_cols; ++c) {
+            std::memcpy(&descs[c], cb.descs + c, sizeof(ColDescriptor));
+            // Const columns store exactly one row; their null map / offsets
+            // array must not be shifted.  Byte offsets inside an offsets array
+            // are positions in the data section, so shifting the array pointer
+            // by 8*base leaves every stored value valid.
+            if ((descs[c].type & COL_IS_CONST) == 0) {
+                if (descs[c].null_offset)    descs[c].null_offset    += base;
+                if (descs[c].offsets_offset) descs[c].offsets_offset += 8ull * base;
+            }
+        }
+        ColumnarBuf tile_cb{ .num_rows = t, .num_cols = cb.num_cols,
+                             .descs = descs.data(), .base = cb.base };
+
+        auto batch = source.as_source_flat(tile_cb, t);
+        if (!batch) {
+            if (out) { clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out)); out = nullptr; }
+            return nullptr;
+        }
+
+        uint32_t col_offset = source.source_arity;
+        bool declined = false;
+        for (size_t i = 1; i + 1 < fn_names.size(); ++i) {
+            const auto& fn = reg.at(chain_resolve_name(fn_names[i]));
+            auto scalars = chain_scalar_cols(tile_cb, fn, col_offset);
+            if (!fn.as_xform_flat(*batch, scalars)) { declined = true; break; }
+            col_offset += fn.n_scalar_cols;
+        }
+        if (declined) {
+            if (out) { clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out)); out = nullptr; }
+            return nullptr;
+        }
+
+        raw_buffer* tile_out = sink.as_sink_flat(*batch, t);
+        if (!tile_out) {
+            if (out) { clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out)); out = nullptr; }
+            return nullptr;
+        }
+
+        if (!out) {
+            // Adopt tile 0's layout if it is stitchable; otherwise throw the
+            // whole block back to the untiled path (tile 0's work is redone
+            // once, then the decision is fixed for the block).
+            const uint8_t* p = tile_out->data();
+            uint32_t magic, t_rows, t_cols;
+            std::memcpy(&magic,   p,      4);
+            std::memcpy(&t_rows,  p + 8,  4);
+            std::memcpy(&t_cols,  p + 12, 4);
+            ColDescriptor td;
+            std::memcpy(&td, p + HEADER_BYTES, sizeof(td));
+            uint64_t base_type = td.type & ~(COL_IS_CONST | COL_IS_NULLABLE);
+            stride = chain_tile_stride(base_type);
+            bool ok = magic == FRAME_MAGIC && t_cols == 1 && t_rows == t && stride != 0 &&
+                      (td.type & COL_IS_NULLABLE) == 0 &&
+                      td.null_offset == 0 && td.offsets_offset == 0 &&
+                      td.data_offset == HEADER_BYTES + COL_DESC_BYTES &&
+                      td.data_size == static_cast<uint64_t>(stride) * t;
+            if (!ok) {
+                clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(tile_out));
+                return chain_execute_flat(fn_names, cb, n);
+            }
+            out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES +
+                                           static_cast<uint32_t>(stride) * n);
+            write_frame_header(out->data(), n, 1);
+            ColDescriptor fd{};
+            fd.type        = td.type & ~COL_IS_CONST;   // output broadcasts nothing
+            fd.data_offset = HEADER_BYTES + COL_DESC_BYTES;
+            fd.data_size   = static_cast<uint64_t>(stride) * n;
+            std::memcpy(out->data() + HEADER_BYTES, &fd, sizeof(fd));
+            payload = out->data() + HEADER_BYTES + COL_DESC_BYTES;
+        }
+
+        std::memcpy(payload + static_cast<size_t>(stride) * base,
+                    tile_out->data() + HEADER_BYTES + COL_DESC_BYTES,
+                    static_cast<size_t>(stride) * t);
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(tile_out));
+    }
+    return out;
+}
+
 inline raw_buffer* chain_execute_impl(raw_buffer* chain_buf, raw_buffer* row_buf, uint32_t /*n*/) {
     auto fn_names = parse_chain_names(chain_buf);
     auto cb       = parse_columnar(row_buf);
     uint32_t n    = cb.num_rows;
 
     if (chain_all_flat(fn_names))
-        if (raw_buffer* out = chain_execute_flat(fn_names, cb, n))
+        if (raw_buffer* out = chain_execute_flat_tiled(fn_names, cb, n))
             return out;
 
     auto& reg     = chain_registry();

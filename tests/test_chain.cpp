@@ -770,3 +770,87 @@ TEST(FlatBatch, EmptyRowRangeForAbsentRow) {
     EXPECT_EQ(fb.ring_end(1) - fb.ring_begin(1), 1u);
     EXPECT_EQ(fb.vertex_end(fb.ring_begin(1)) - fb.vertex_begin(fb.ring_begin(1)), 2u);
 }
+
+// ── Tiled flat execution ─────────────────────────────────────────────────────
+// Tiling must be invisible: same hooks, sliced inputs, stitched outputs.  These
+// compare the tiled path (chain_execute_impl over blocks > 2*CHAIN_FLAT_TILE)
+// bit-for-bit against the untiled flat path on the same bytes.
+
+TEST(ChainFlatTiled, BigBlock_MatchesUntiledFlat) {
+    constexpr uint32_t n = 600;  // not a multiple of CHAIN_FLAT_TILE: partial last tile
+    std::vector<Vector> as, bs;
+    std::vector<uint8_t> nulls(n, 0);
+    for (uint32_t i = 0; i < n; ++i) {
+        double x = i * 0.001, y = 1.0 - i * 0.0005;
+        as.push_back(wkt2wkb("POINT (" + std::to_string(x) + " " + std::to_string(y) + ")"));
+        bs.push_back(wkt2wkb("POINT (" + std::to_string(x + 3) + " " + std::to_string(y + 4) + ")"));
+        // Nulls on tile boundaries: last row of tiles 0-3, first row of tiles 1-3,
+        // and the final row of the block.
+        if (i % 128 == 0 || i % 128 == 127 || i == n - 1) nulls[i] = 1;
+    }
+
+    auto* col_buf = make_columnar(n, {null_bytes_col(false, as, nulls), bytes_col(false, bs)});
+    auto* chain   = make_chain_descriptor({"st_makeline", "st_length"});
+
+    auto* flat_out = chain_execute_flat({"st_makeline", "st_length"}, parse_columnar(col_buf), n);
+    ASSERT_NE(flat_out, nullptr);
+    auto* tiled_out = chain_execute_impl(chain, col_buf, n);
+    ASSERT_NE(tiled_out, nullptr);
+
+    // The stitched frame must describe the whole block.
+    auto tiled_cb = parse_columnar(tiled_out);
+    EXPECT_EQ(tiled_cb.num_rows, n);
+    EXPECT_EQ(tiled_cb.num_cols, 1u);
+
+    auto want = read_f64_col(flat_out, n);
+    auto got  = read_f64_col(tiled_out, n);
+    for (uint32_t i = 0; i < n; ++i)
+        expect_bit_equal(got[i], want[i], "row " + std::to_string(i));
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
+}
+
+TEST(ChainFlatTiled, DeclineMidBlock_FallsBackToGeos) {
+    constexpr uint32_t n = 300;
+    std::vector<Vector> as, bs;
+    for (uint32_t i = 0; i < n; ++i) {
+        as.push_back(i == 150 ? wkt2wkb("LINESTRING (0 0, 1 0)")
+                              : wkt2wkb("POINT (0 0)"));
+        bs.push_back(wkt2wkb("POINT (3 4)"));
+    }
+    // Tile 1 declines at row 150; the whole block must still come out right via GEOS.
+    auto got = run_makeline_length(as, bs);
+    for (uint32_t i = 0; i < n; ++i)
+        expect_bit_equal(got[i], generic_makeline_length(as[i], bs[i]), "row " + std::to_string(i));
+}
+
+TEST(ChainFlatTiled, XformScalarsAcrossTiles_MatchesUntiledFlat) {
+    constexpr uint32_t n = 400;
+    std::vector<Vector> as, bs;
+    for (uint32_t i = 0; i < n; ++i) {
+        as.push_back(wkt2wkb("POINT (" + std::to_string(1.0 * i) + " 2)"));
+        bs.push_back(wkt2wkb("POINT (-2 " + std::to_string(1.0 * i) + ")"));
+    }
+
+    auto* col_buf = make_columnar(n, {
+        bytes_col(false, as),
+        bytes_col(false, bs),
+        fixed64_col(1.5),   // dx
+        fixed64_col(2.5),   // dy
+    });
+    auto* chain = make_chain_descriptor({"st_makeline", "st_translate", "st_length"});
+
+    auto* flat_out  = chain_execute_flat({"st_makeline", "st_translate", "st_length"}, parse_columnar(col_buf), n);
+    auto* tiled_out = chain_execute_impl(chain, col_buf, n);
+    ASSERT_NE(flat_out, nullptr);
+    ASSERT_NE(tiled_out, nullptr);
+
+    auto want = read_f64_col(flat_out, n);
+    auto got  = read_f64_col(tiled_out, n);
+    for (uint32_t i = 0; i < n; ++i)
+        expect_bit_equal(got[i], want[i], "row " + std::to_string(i));
+
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
+}
