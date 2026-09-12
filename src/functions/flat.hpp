@@ -23,6 +23,7 @@
 #include "../chain.hpp"
 #include "../columnar.hpp"
 #include "../geom/flat_batch.hpp"
+#include "../geom/flat_hull.hpp"
 #include "../geom/wkb_point.hpp"
 
 namespace ch {
@@ -237,6 +238,105 @@ inline raw_buffer* flat_sink_st_npoints(const FlatBatch& fb, uint32_t n) {
         // chain_sink_run maps a null handle to 0; match it.
         res[i] = fb.present[i] ? static_cast<int32_t>(flat_row_vertex_count(fb, i)) : 0;
 
+    return out;
+}
+
+// SOURCE st_convexhull: the convex hull ring of every coordinate of the row,
+// computed on raw doubles.  The hull algorithm itself is the GEOS one — see
+// geom/flat_hull.hpp — so the ring, its vertex order and its closure are
+// identical to what Geometry::convexHull() would have produced, at zero GEOS
+// object cost per point.  Declines the block on non-finite coordinates, which
+// GEOS's own ordering comparisons would answer unpredictably for as well.
+inline std::optional<FlatBatch> flat_source_st_convexhull(const ColumnarBuf& cb, uint32_t n) {
+    ColView col = cb.col(0);
+
+    FlatBatch fb;
+    fb.reserve_rows(n);
+    fb.xy.reserve(static_cast<size_t>(n) * 8);
+
+    FlatBatch scratch;          // per-row coordinate walk, capacity retained
+    flat_hull::Buffers hull;
+    scratch.reserve_rows(1);
+
+    for (uint32_t i = 0; i < n; ++i) {
+        if (col.is_null(i)) {
+            fb.begin_row(false);
+            continue;
+        }
+
+        scratch.clear();
+        scratch.begin_row(true);
+        if (!flat_append_wkb(scratch, col.get_bytes(i))) return std::nullopt;
+
+        hull.pool.clear();
+        hull.pool.reserve(scratch.xy.size() / 2);
+        for (std::size_t v = 0; v < scratch.xy.size(); v += 2) {
+            // GEOS orders NaN by its own min/max comparisons; the outcome is
+            // not worth mirroring, and real WKB from CH never carries one.
+            if (std::isnan(scratch.xy[v]) || std::isnan(scratch.xy[v + 1]))
+                return std::nullopt;
+            hull.pool.emplace_back(scratch.xy[v], scratch.xy[v + 1]);
+        }
+        scratch.finish();
+
+        fb.begin_row(true);
+        flat_hull::append_hull_ring(hull, fb);
+    }
+
+    fb.finish();
+    return fb;
+}
+
+// SINK st_area: the absolute ring area, over exactly the coordinate sequence
+// the row carries.
+//
+// Equivalence: Polygon::getArea() is abs(Area::ofRing(shell)) and
+// Area::ofRingSigned accumulates (x[i] − x0)·(y[i−1] − y[i+1]) in index order;
+// this sink runs the identical loop in the identical order, so the doubles are
+// bit-identical, including for a reversed ring (where GEOS would flip the
+// sign before abs()).  A LINESTRING hull (open ring, < 3 vertices) and an
+// empty geometry are both 0, as in GEOS.  Rows with more than one ring are
+// refused for the whole block: a MultiPolygon's area needs the shell-versus-
+// hole distinction FlatBatch does not record, and no current chain produces
+// one — the guard exists so that a future flat source cannot make area wrong
+// silently.
+inline raw_buffer* flat_sink_st_area(const FlatBatch& fb, uint32_t n) {
+    for (uint32_t i = 0; i < n; ++i)
+        if (fb.ring_end(i) - fb.ring_begin(i) > 1) return nullptr;
+
+    raw_buffer* out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n * 8u);
+    col_write_fixed_header<double>(out, n, COL_FIXED64);
+    auto* res = reinterpret_cast<double*>(out->data() + HEADER_BYTES + COL_DESC_BYTES);
+
+    for (uint32_t i = 0; i < n; ++i) {
+        // chain_sink_run maps a null handle to NaN; match it.
+        if (!fb.present[i]) {
+            res[i] = std::numeric_limits<double>::quiet_NaN();
+            continue;
+        }
+
+        uint32_t r  = fb.ring_begin(i);
+        uint32_t v0 = fb.vertex_begin(r);
+        uint32_t v1 = fb.vertex_end(r);
+        if (v1 - v0 < 3) { res[i] = 0.0; continue; }
+
+        // Open rings (a hull that collapsed to a line keeps < 3 vertices, so
+        // anything open here is a genuine non-polygon) have area 0 in GEOS.
+        if (fb.xy[2 * v0]     != fb.xy[2 * (v1 - 1)] ||
+            fb.xy[2 * v0 + 1] != fb.xy[2 * (v1 - 1) + 1]) { res[i] = 0.0; continue; }
+
+        // GEOS's exact index form (Area::ofRingSigned keeps rolling variables
+        // but folds to this).
+        double x0  = fb.xy[2 * v0];
+        double sum = 0.0;
+        for (uint32_t v = v0 + 1; v + 1 < v1; ++v) {
+            double xr = fb.xy[2 * v] - x0;
+            double yprev = fb.xy[2 * (v - 1) + 1];
+            double ynext = fb.xy[2 * (v + 1) + 1];
+            sum += xr * (yprev - ynext);
+        }
+        res[i] = std::abs(sum / 2.0);
+    }
     return out;
 }
 

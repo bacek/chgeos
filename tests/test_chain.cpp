@@ -2,6 +2,7 @@
 #include <bit>
 #include <cstring>
 #include <cmath>
+#include <random>
 #include <vector>
 #include <string>
 
@@ -39,6 +40,8 @@ static bool chain_registered = [] {
     CH_CHAIN_FLAT_SINK(st_length,      flat_sink_st_length);
     CH_CHAIN_FLAT_SINK(st_npoints,     flat_sink_st_npoints);
     CH_CHAIN_FLAT_SINK(st_isempty,     flat_sink_st_isempty);
+    CH_CHAIN_FLAT_SOURCE(st_convexhull, flat_source_st_convexhull);
+    CH_CHAIN_FLAT_SINK(st_area,         flat_sink_st_area);
     return true;
 }();
 
@@ -853,4 +856,150 @@ TEST(ChainFlatTiled, XformScalarsAcrossTiles_MatchesUntiledFlat) {
 
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
+}
+
+// ── Flat convex hull + area ──────────────────────────────────────────────────
+// The flat hull is a port of GEOS's own ConvexHull on raw coordinates
+// (geom/flat_hull.hpp), so it must agree with the GEOS composition bit-for-bit,
+// not merely close.  Both the area sink and the length sink are exercised:
+// the length (perimeter) pins the ring's vertex order and closure, which the
+// area alone could hide.
+
+static std::vector<double> run_hull_sink(const std::string& sink,
+                                         const std::vector<Vector>& wkbs) {
+    uint32_t n = static_cast<uint32_t>(wkbs.size());
+    auto* col_buf = make_columnar(n, {bytes_col(false, wkbs)});
+    auto* chain   = make_chain_descriptor({"st_convexhull", sink});
+    auto* out     = chain_execute_impl(chain, col_buf, n);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
+    return read_f64_col(out, n);
+}
+
+static void assert_hull_flat_on(const std::vector<Vector>& wkbs) {
+    uint32_t n = static_cast<uint32_t>(wkbs.size());
+    auto* probe = make_columnar(n, {bytes_col(false, wkbs)});
+    ASSERT_TRUE(chain_all_flat({"st_convexhull", "st_area"}));
+    ASSERT_TRUE(flat_source_st_convexhull(parse_columnar(probe), n).has_value())
+        << "flat hull source must accept these shapes, or the GEOS agreement below proves nothing";
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(probe));
+}
+
+TEST(ChainFlatHull, AreaAndPerimeterMatchGeosOnTier1Shapes) {
+    auto wkbs = tier1_wkbs();
+    assert_hull_flat_on(wkbs);
+
+    auto area  = run_hull_sink("st_area", wkbs);
+    auto peri  = run_hull_sink("st_length", wkbs);
+    for (size_t i = 0; i < wkbs.size(); ++i) {
+        expect_bit_equal(area[i], st_area_impl(st_convexhull_impl(read_wkb(wkb(wkbs[i])))),
+                         tier1_geoms()[i] + " area");
+        expect_bit_equal(peri[i], st_length_impl(st_convexhull_impl(read_wkb(wkb(wkbs[i])))),
+                         tier1_geoms()[i] + " perimeter");
+    }
+}
+
+TEST(ChainFlatHull, DegenerateHullsMatchGeos) {
+    const std::vector<std::string> geoms = {
+        "POINT (5 5)",                                        // 1 coord
+        "POINT EMPTY",                                        // 0 coords
+        "MULTIPOINT ((1 1), (1 1))",                          // duplicates → 1 coord
+        "MULTIPOINT ((0 0), (3 4))",                          // 2 coords → LINESTRING
+        "MULTIPOINT ((0 0), (1 1), (2 2), (3 3))",            // collinear → LINESTRING
+        "LINESTRING (0 0, 1 0, 2 0)",                         // collinear linestring
+        "LINESTRING (0 0, 0 0)",                              // zero-length line
+        "GEOMETRYCOLLECTION (POINT (0 0), POINT EMPTY)",      // empty member
+        "GEOMETRYCOLLECTION EMPTY",                           // nothing at all
+    };
+    std::vector<Vector> wkbs;
+    for (auto& g : geoms) wkbs.push_back(wkt2wkb(g));
+    assert_hull_flat_on(wkbs);
+
+    auto area = run_hull_sink("st_area", wkbs);
+    auto peri = run_hull_sink("st_length", wkbs);
+    auto np   = [&] {
+        uint32_t n = static_cast<uint32_t>(wkbs.size());
+        auto* col_buf = make_columnar(n, {bytes_col(false, wkbs)});
+        auto* chain   = make_chain_descriptor({"st_convexhull", "st_npoints"});
+        auto* out     = chain_execute_impl(chain, col_buf, n);
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(chain));
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(col_buf));
+        return read_i32_col(out, n);
+    }();
+
+    for (size_t i = 0; i < wkbs.size(); ++i) {
+        auto reff = [&] { return st_convexhull_impl(read_wkb(wkb(wkbs[i]))); };
+        expect_bit_equal(area[i], st_area_impl(reff()), geoms[i] + " area");
+        expect_bit_equal(peri[i], st_length_impl(reff()), geoms[i] + " perimeter");
+        EXPECT_EQ(np[i], st_npoints_impl(reff())) << geoms[i] << " npoints";
+    }
+}
+
+TEST(ChainFlatHull, RandomCollectionsMatchGeosBitExact) {
+    // Sizes deliberately straddle TUNING_REDUCE_SIZE = 50 so both the plain
+    // extraction path and the octolateral reduce path run.  Coordinates mix
+    // wide-magnitude doubles, a duplicated previous point, and lattice points,
+    // so ties, collinear runs and near-collinear orientations all occur.
+    std::mt19937_64 rng(0x517CC1E5);
+    std::uniform_real_distribution<double> big(-120.0, 120.0);
+    std::uniform_int_distribution<int>      which(0, 3);
+
+    std::vector<Vector> wkbs;
+    for (int row = 0; row < 400; ++row) {
+        int m = 1 + (row % 130);
+        std::string wkt = "GEOMETRYCOLLECTION (";
+        double px = 0, py = 0;
+        for (int j = 0; j < m; ++j) {
+            double x, y;
+            switch (which(rng)) {
+                case 0: x = big(rng); y = big(rng); break;
+                case 1: x = std::round(big(rng)); y = std::round(big(rng)); break;
+                case 2: x = px; y = py; break;                       // exact duplicate
+                default: x = px + 1e-12; y = py + 1e-12; break;      // near duplicate
+            }
+            px = x; py = y;
+            wkt += "POINT (" + std::to_string(x) + " " + std::to_string(y) + "), ";
+        }
+        wkt.resize(wkt.size() - 2);
+        wkt += ")";
+        wkbs.push_back(wkt2wkb(wkt));
+    }
+    assert_hull_flat_on(wkbs);
+
+    auto area = run_hull_sink("st_area", wkbs);
+    auto peri = run_hull_sink("st_length", wkbs);
+    for (size_t i = 0; i < wkbs.size(); ++i) {
+        expect_bit_equal(area[i], st_area_impl(st_convexhull_impl(read_wkb(wkb(wkbs[i])))),
+                         "row " + std::to_string(i) + " area");
+        expect_bit_equal(peri[i], st_length_impl(st_convexhull_impl(read_wkb(wkb(wkbs[i])))),
+                         "row " + std::to_string(i) + " perimeter");
+    }
+}
+
+TEST(ChainFlatHull, NanCoordinatesDeclineBlock) {
+    // Hand-built POINT WKB with NaN ordinates — the flat source must decline,
+    // and the chain must still answer through GEOS without corrupting anything.
+    auto build = [](double x, double y) {
+        Vector v(5);
+        v[0] = 0x01;
+        uint32_t type = 1;
+        std::memcpy(v.data() + 1, &type, 4);
+        for (double d : {x, y}) {
+            size_t off = v.size();
+            v.resize(off + 8);
+            std::memcpy(v.data() + off, &d, 8);
+        }
+        return v;
+    };
+    const double nan = std::numeric_limits<double>::quiet_NaN();
+    std::vector<Vector> wkbs = {wkt2wkb("POLYGON ((0 0, 4 0, 4 3, 0 3, 0 0))"), build(nan, 1.0)};
+
+    uint32_t n = 2;
+    auto* probe = make_columnar(n, {bytes_col(false, wkbs)});
+    EXPECT_FALSE(flat_source_st_convexhull(parse_columnar(probe), n).has_value());
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(probe));
+
+    auto area = run_hull_sink("st_area", wkbs);
+    EXPECT_DOUBLE_EQ(area[0], 12.0);
+    EXPECT_TRUE(std::isnan(area[1]) || std::isfinite(area[1])); // GEOS answer, whatever it is
 }

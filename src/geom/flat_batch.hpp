@@ -46,6 +46,15 @@ struct FlatBatch {
         ring_start.reserve(rows + 1);
     }
 
+    // Empties all four arrays, keeping capacity — lets a caller reuse one
+    // batch as per-row scratch without allocator traffic per row.
+    void clear() {
+        xy.clear();
+        ring_start.clear();
+        row_ring.clear();
+        present.clear();
+    }
+
     // Call once per row, before that row's vertices are appended.
     void begin_row(bool row_present) {
         row_ring.push_back(static_cast<uint32_t>(ring_start.size()));

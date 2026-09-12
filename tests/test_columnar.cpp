@@ -8,6 +8,8 @@
 
 #include "helpers.hpp"
 #include "columnar.hpp"
+#include "functions/collect_fast.hpp"
+#include "functions/overlay.hpp"
 #include "functions/predicates.hpp"
 
 using namespace ch;
@@ -1172,4 +1174,113 @@ TEST(ColViewIsNull, NonVariantNullableUnchanged) {
     EXPECT_FALSE(col.is_null(2));
 
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+}
+
+// ── st_collect_agg fast export (functions/collect_fast.hpp) ─────────────────
+// The fast export must be byte-identical to the generic wrapper it replaces:
+// same WKB bytes per row, same frame.  Expected values are produced by running
+// the generic path on the same input elements.
+
+static ColData complex_array_string_rows(const std::vector<std::vector<ch::Vector>>& rows) {
+    ColData col;
+    col.col_type = static_cast<uint32_t>(COL_COMPLEX);
+
+    const uint64_t N = rows.size();
+    uint64_t M = 0;
+    for (auto& r : rows) M += r.size();
+
+    std::vector<uint64_t> outer_offs(N + 1u, 0);
+    for (uint64_t i = 0; i < N; ++i) outer_offs[i + 1u] = outer_offs[i] + rows[i].size();
+
+    std::vector<uint8_t> chars;
+    std::vector<uint64_t> inner_offs(M + 1u, 0);
+    uint64_t j = 0;
+    for (auto& r : rows)
+        for (auto& w : r) {
+            chars.insert(chars.end(), w.begin(), w.end());
+            inner_offs[++j] = chars.size();
+        }
+
+    const size_t outer_sz = (N + 1u) * sizeof(uint64_t);
+    const size_t inner_sz = (M + 1u) * sizeof(uint64_t);
+    col.data.resize(outer_sz + inner_sz + chars.size());
+    std::memcpy(col.data.data(), outer_offs.data(), outer_sz);
+    std::memcpy(col.data.data() + outer_sz, inner_offs.data(), inner_sz);
+    std::memcpy(col.data.data() + outer_sz + inner_sz, chars.data(), chars.size());
+    return col;
+}
+
+// Generic expectation: per-row WKB bytes, as columnar_impl_wrapper would emit.
+static std::vector<std::vector<uint8_t>> generic_collect_expect(
+        const std::vector<std::vector<ch::Vector>>& rows) {
+    std::vector<std::vector<uint8_t>> out;
+    for (auto& r : rows) {
+        std::vector<std::unique_ptr<geos::geom::Geometry>> geoms;
+        for (auto& w : r) geoms.push_back(read_wkb(wkb(w)));
+        auto coll = ch::st_collect_agg_impl(std::move(geoms));
+        auto bytes = ch::write_ewkb(coll);
+        out.emplace_back(bytes.begin(), bytes.end());
+    }
+    return out;
+}
+
+static std::vector<std::pair<const uint8_t*, size_t>> read_bytes_rows(raw_buffer* buf) {
+    uint32_t num_rows;
+    std::memcpy(&num_rows, buf->data() + 8, 4);
+    ColDescriptor d;
+    std::memcpy(&d, buf->data() + HEADER_BYTES, sizeof(d));
+    const uint64_t* offs = reinterpret_cast<const uint64_t*>(buf->data() + d.offsets_offset);
+    const uint8_t*  data = buf->data() + d.data_offset;
+    std::vector<std::pair<const uint8_t*, size_t>> rows;
+    for (uint32_t i = 0; i < num_rows; ++i) {
+        uint64_t s = offs[i], e = offs[i + 1];
+        rows.emplace_back(data + s, static_cast<size_t>(e - s));
+    }
+    return rows;
+}
+
+TEST(CollectFast, MultiRowByteIdentityFastAndFallback) {
+    auto pt_a = wkt2wkb("POINT (-111.7610 34.8697)");
+    auto pt_b = wkt2wkb("POINT (1 2)");
+    auto pt_c = wkt2wkb("POINT (1e-300 -1e-300)");
+    auto poly = wkt2wkb("POLYGON ((0 0, 2 0, 2 2, 0 2, 0 0))");
+    auto line = wkt2wkb("LINESTRING (0 0, 1 1)");
+
+    // Big-endian point WKB for the mixed-order row.
+    ch::Vector be_pt(21);
+    be_pt[0] = 0x00;
+    const uint8_t be_type_bytes[4] = {0x00, 0x00, 0x00, 0x01};
+    std::memcpy(be_pt.data() + 1, be_type_bytes, 4);
+    const double coords[2] = {7.5, -8.5};
+    for (int c = 0; c < 2; ++c) {
+        uint64_t bits;
+        std::memcpy(&bits, &coords[c], 8);
+        for (int by = 0; by < 8; ++by)
+            be_pt[5 + by] = (bits >> (8 * (7 - by))) & 0xFF;
+    }
+
+    std::vector<std::vector<ch::Vector>> rows = {
+        {pt_a, pt_b, pt_c},          // all LE points → fast
+        {},                          // empty array → fast (header only)
+        {pt_a, poly},                // mixed → generic fallback
+        {be_pt},                     // BE point → generic fallback (normalizes to LE)
+        {pt_b, line},                // fallback
+        {pt_c, pt_a, pt_b, pt_c},    // fast
+    };
+    uint32_t n = static_cast<uint32_t>(rows.size());
+
+    auto expected = generic_collect_expect(rows);
+
+    auto* buf = make_columnar(n, {complex_array_string_rows(rows)});
+    raw_buffer* out = ch::st_collect_agg_col_fast(buf, n);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+
+    auto got = read_bytes_rows(out);
+    ASSERT_EQ(got.size(), expected.size());
+    for (size_t i = 0; i < expected.size(); ++i) {
+        ASSERT_EQ(got[i].second, expected[i].size()) << "row " << i << " length";
+        EXPECT_TRUE(std::equal(expected[i].begin(), expected[i].end(), got[i].first))
+            << "row " << i << " bytes differ";
+    }
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(out));
 }

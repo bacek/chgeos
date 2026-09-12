@@ -3,6 +3,7 @@
 
 #include "functions.hpp"
 #include "functions/flat.hpp"
+#include "functions/collect_fast.hpp"
 #include "functions/knn.hpp"
 #include "rowbinary.hpp"
 #include "msgpack.hpp"
@@ -36,7 +37,9 @@ CH_UDF_RB_ONLY(st_makeline_agg)
 CH_UDF_RB_ONLY(st_convexhull_agg)
 // COLUMNAR_V1 variants (COL_COMPLEX input: Array(String) via groupArray())
 CH_UDF_COL(st_union_agg)
-CH_UDF_COL(st_collect_agg)
+// st_collect_agg has a hand-written COLUMNAR_V1 export (functions/collect_fast)
+// that skips the GEOS round trip for all-point arrays; the other pseudo-agg
+// entries stay generic.
 CH_UDF_COL(st_extent_agg)
 CH_UDF_COL(st_makeline_agg)
 CH_UDF_COL(st_convexhull_agg)
@@ -532,6 +535,10 @@ static void populate_chain_registry() {
     CH_CHAIN_FLAT_SINK(st_length,       ch::flat_sink_st_length);
     CH_CHAIN_FLAT_SINK(st_npoints,      ch::flat_sink_st_npoints);
     CH_CHAIN_FLAT_SINK(st_isempty,      ch::flat_sink_st_isempty);
+    // st_convexhull's flat source runs the GEOS hull algorithm on raw
+    // coordinates (geom/flat_hull.hpp); st_area consumes the ring they emit.
+    CH_CHAIN_FLAT_SOURCE(st_convexhull, ch::flat_source_st_convexhull);
+    CH_CHAIN_FLAT_SINK(st_area,         ch::flat_sink_st_area);
 
     ch::log(std::format("module_init: registered {} chain functions", reg.size()));
 }
