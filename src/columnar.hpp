@@ -90,9 +90,27 @@ enum ColType : uint32_t {
     //   pair/tuple (Tuple): recursive(N, T0) ++ recursive(N, T1) ++ ...  (columnar)
     COL_COMPLEX     = 5,
     COL_VARIANT     = 6,  // Variant(...): disc[N] + row_offs[N] + header{K, records} + sub-data
+    // Fixed-width payload whose width is not 1/2/4/8: UUID, IPv6, Int128/UInt128,
+    // Decimal128/256, FixedString(N) for N ∉ {1,2,4,8}.  No offsets array; the
+    // element width is recorded only as data_size / row_count.  Widths 1/2/4/8 —
+    // including FixedString(8) — are classed into COL_FIXED8/16/32/64 by the host,
+    // so signedness and logical type never reach the wire: interpretation comes
+    // from the declared C++ side, the tag only validates the width.
+    COL_FIXEDN      = 7,
+    // Top-level LowCardinality(T): offsets_offset → index[num_rows] of
+    // index_elem_width ∈ {1,2,4,8} bytes; data_offset → uint32 dict_row_count,
+    // uint8 index_elem_width, pad[3], an embedded ColDescriptor for the
+    // dictionary, then the dictionary sub-column.  null_offset is always 0:
+    // for LowCardinality(Nullable(T)) NULL rides on dictionary slot 0 and the
+    // wire is byte-identical to a plain LC whose dictionary starts with the
+    // default value, so this guest only ever decodes the non-nullable shape —
+    // any COL_IS_NULLABLE bit on a COL_LOWCARD descriptor is rejected, and the
+    // nullable form must be refused host-side before it reaches the wire.
+    COL_LOWCARD     = 8,
 
-    // Flags — OR'd onto base type; base types occupy values 0–6 (bits 0-2 only),
-    // so bits 5-7 are free for flags.
+    // Flags — OR'd onto base type.  Bits 5 and 7 as defined by the host; bits
+    // outside the two flags and the known base tags are rejected by
+    // ColumnarBuf::col rather than passed through.
     COL_IS_NULLABLE = 0x20u, // Nullable(T): null_offset carries u8[row_count] null map
     COL_IS_CONST    = 0x80u, // 1 stored row, broadcast to num_rows
 };
@@ -152,7 +170,18 @@ struct ColView {
                                   // COL_VARIANT: discriminators (0xFF = NULL)
     const uint64_t* offsets;      // start-based; nullptr for fixed-width
     const uint8_t*  data;
-    const uint8_t*  base;         // buffer base — needed for COL_VARIANT absolute offset navigation
+    uint64_t        data_size;    // descriptor's data blob size
+    uint32_t        fixed_width;  // COL_FIXED8/16/32/64: tag width;
+                                  // COL_FIXEDN: data_size / row_count (0 if row_count == 0)
+    const uint8_t*  base;         // buffer base — needed for absolute offset navigation
+
+    // COL_LOWCARD only: the shared index array and the dictionary sub-column's
+    // descriptor (absolute offsets into the same frame).  Populated by
+    // ColumnarBuf::col once the header and extents are validated.
+    const uint8_t*  lc_index;      // index[row_count], lc_index_width bytes each
+    uint8_t         lc_index_width;
+    uint32_t        lc_dict_rows;
+    ColDescriptor   lc_dict;
 
     // Map logical row to stored row index.
     uint32_t effective_row(uint32_t row) const noexcept {
@@ -174,6 +203,41 @@ struct ColView {
         uint64_t end   = offsets[idx + 1];
         uint64_t len   = end - start;
         return {data + start, static_cast<size_t>(len)};
+    }
+
+    // Fixed-width row bytes (COL_FIXED8/16/32/64 via fixed_width, and
+    // COL_FIXEDN).  The tag never says what the bytes mean — width only.
+    std::span<const uint8_t> get_fixed_bytes(uint32_t row) const {
+        if (fixed_width == 0u)
+            panic("columnar: fixed-width read of a column with no width");
+        uint32_t idx = effective_row(row);
+        uint64_t off = uint64_t(idx) * fixed_width;
+        if (off + fixed_width > data_size)
+            panic("columnar: fixed-width row extends past the column data");
+        return {data + off, fixed_width};
+    }
+
+    // COL_LOWCARD: the shared index value for a row, read at its wire width.
+    uint64_t lc_index_at(uint32_t row) const {
+        uint32_t idx = effective_row(row);
+        const uint8_t* p = lc_index + uint64_t(idx) * lc_index_width;
+        uint64_t v = 0;
+        std::memcpy(&v, p, lc_index_width);
+        return v;
+    }
+
+    // COL_LOWCARD with a COL_BYTES dictionary: the row's value bytes.
+    std::span<const uint8_t> lc_get_bytes(uint32_t row) const {
+        uint64_t e = lc_index_at(row);
+        if (e >= lc_dict_rows)
+            panic("columnar: LowCardinality index exceeds dictionary");
+        const uint64_t* dict_offs =
+            reinterpret_cast<const uint64_t*>(base + lc_dict.offsets_offset);
+        uint64_t start = dict_offs[e];
+        uint64_t end   = dict_offs[e + 1];
+        if (end > lc_dict.data_size)
+            panic("columnar: LowCardinality dictionary offsets exceed data");
+        return {base + lc_dict.data_offset + start, static_cast<size_t>(end - start)};
     }
 
     template <typename T>
@@ -211,30 +275,220 @@ struct ColView {
 struct ColumnarBuf {
     uint32_t              num_rows;
     uint32_t              num_cols;
+    uint64_t              total_bytes;
     const ColDescriptor*  descs;
     const uint8_t*        base;
 
+    // Resolve one column descriptor into a ColView, refusing frames the guest
+    // cannot interpret: an unknown base tag (the host's COL_FIXEDN/COL_LOWCARD
+    // or plain garbage), stray bits outside the two flags, or a descriptor
+    // whose null map / offsets array / data blob is not fully inside the frame.
+    // Masking flags and hoping the C++ accessor picks a compatible layout is
+    // exactly how a String column over a dictionary index array used to read
+    // out-of-frame bytes without any error — see the ColumnBinaryWire.h
+    // read-side branches, which validate every untrusted offset the same way.
     ColView col(uint32_t i) const {
         ColDescriptor d;
         std::memcpy(&d, descs + i, sizeof(d));
-        ColView v;
+
+        // Stray bits above the flags (anything but base-tag low bits, 0x20, 0x80).
+        if (d.type & ~(uint64_t)(COL_IS_CONST | COL_IS_NULLABLE | 0x0Fu))
+            panic("columnar: descriptor type word has bits outside the known flags");
+        const uint64_t base_tag = d.type & ~(uint64_t)(COL_IS_CONST | COL_IS_NULLABLE);
+        const bool is_nullable = (d.type & COL_IS_NULLABLE) != 0;
+        switch (base_tag) {
+            case COL_BYTES:
+            case COL_FIXED8:
+            case COL_FIXED16:
+            case COL_FIXED32:
+            case COL_FIXED64:
+            case COL_COMPLEX:
+            case COL_VARIANT:
+            case COL_FIXEDN:
+                break;
+            case COL_LOWCARD:
+                // null_offset is always 0 for the writer's LC columns and the
+                // dictionary's nullability never reaches the wire; a set bit is
+                // a shape this guest would silently misread.
+                if (is_nullable)
+                    panic("columnar: LowCardinality(Nullable) is not supported");
+                break;
+            default:
+                panic("columnar: unsupported column tag in descriptor");
+        }
+
+        ColView v{};
         v.is_const  = (d.type & COL_IS_CONST) != 0;
-        v.base_type = static_cast<ColType>(d.type & ~(COL_IS_CONST | COL_IS_NULLABLE));
-        v.null_map  = d.null_offset ? base + d.null_offset : nullptr;
+        v.base_type = static_cast<ColType>(base_tag);
         v.row_count = v.is_const ? 1u : num_rows;
+
+        // Every extent below is checked against the frame size before any
+        // pointer is formed from an untrusted offset.  0 keeps its "absent"
+        // meaning for null/offset maps.
+        // Extent checks mirror the host reader: an offset equal to the frame
+        // size is only valid with a zero-length extent (a zero-row column's
+        // empty blob legitimately ends the frame); the remaining-space form
+        // keeps a huge untrusted offset from wrapping past the comparison.
+        if (d.null_offset &&
+            (d.null_offset > total_bytes || v.row_count > total_bytes - d.null_offset))
+            panic("columnar: null map extends past end of frame");
+        if (d.data_offset > total_bytes ||
+            d.data_size > total_bytes - d.data_offset)
+            panic("columnar: column data range extends past end of frame");
+
+        // Fixed-width tags: record the element width and require the data blob
+        // to be exactly row_count elements (the host reader enforces the same
+        // equality; a short blob otherwise reads neighbouring columns as data).
+        switch (base_tag) {
+            case COL_FIXED8:  v.fixed_width = 1u; break;
+            case COL_FIXED16: v.fixed_width = 2u; break;
+            case COL_FIXED32: v.fixed_width = 4u; break;
+            case COL_FIXED64: v.fixed_width = 8u; break;
+            case COL_FIXEDN:
+                // Width lives only in data_size/row_count.  A zero-row blob
+                // has no width to recover; a non-divisible blob is corruption.
+                if (v.row_count == 0u) {
+                    if (d.data_size != 0u)
+                        panic("columnar: COL_FIXEDN data_size must be 0 for an empty column");
+                    v.fixed_width = 0u;
+                } else {
+                    if (d.data_size % v.row_count != 0u)
+                        panic("columnar: COL_FIXEDN data_size is not a multiple of row count");
+                    v.fixed_width = uint32_t(d.data_size / v.row_count);
+                    if (v.fixed_width == 0u)
+                        panic("columnar: COL_FIXEDN element width is zero");
+                }
+                break;
+            default:
+                break;
+        }
+        if (v.fixed_width != 0u &&
+            d.data_size != uint64_t(v.row_count) * v.fixed_width)
+            panic("columnar: fixed-width data_size does not match row count");
+
+        if (d.offsets_offset) {
+            // COL_BYTES reads offsets[idx + 1], so it needs row_count + 1
+            // uint64 entries; COL_LOWCARD's array holds one entry per row at
+            // the dictionary's index width (parsed below); other tagged users
+            // (COL_COMPLEX arrays keep offsets inside the data blob, COL_VARIANT
+            // reads one entry per row) need row_count at guest strides.
+            uint64_t bytes;
+            if (base_tag == COL_BYTES)
+                bytes = (v.row_count + 1u) * sizeof(uint64_t);
+            else if (base_tag == COL_LOWCARD)
+                bytes = uint64_t(v.row_count) * lc_header_index_width(d);
+            else
+                bytes = v.row_count * sizeof(uint64_t);
+            if (d.offsets_offset > total_bytes ||
+                bytes > total_bytes - d.offsets_offset)
+                panic("columnar: offsets array extends past end of frame");
+        }
+
+        v.null_map  = d.null_offset ? base + d.null_offset : nullptr;
         v.offsets   = d.offsets_offset ? reinterpret_cast<const uint64_t*>(base + d.offsets_offset) : nullptr;
         v.data      = base + d.data_offset;
-        v.base = base;
+        v.data_size = d.data_size;
+        v.base      = base;
+
+        if (base_tag == COL_LOWCARD)
+            load_lowcard(v, d);
         return v;
+    }
+
+private:
+    // index_elem_width from the COL_LOWCARD header at data_offset, validated to
+    // be 1/2/4/8.  The header prefix is bounds-checked here because the generic
+    // extent checks of col() consult the width before anything else reads it.
+    uint8_t lc_header_index_width(const ColDescriptor& d) const {
+        constexpr uint64_t prefix = 4u + 1u;
+        if (d.data_size < prefix ||
+            d.data_offset > total_bytes ||
+            prefix > total_bytes - d.data_offset)
+            panic("columnar: LowCardinality header truncated");
+        uint8_t w;
+        std::memcpy(&w, base + d.data_offset + 4u, 1);
+        if (w != 1u && w != 2u && w != 4u && w != 8u)
+            panic("columnar: LowCardinality index element width is not 1/2/4/8");
+        return w;
+    }
+
+    // Validate and attach the dictionary of a COL_LOWCARD view.  The embedded
+    // dict_desc is untrusted bytes, so every pointer formed from it is bounded
+    // against the frame the same way the top-level descriptor's pointers are.
+    void load_lowcard(ColView& v, const ColDescriptor& d) const {
+        constexpr uint64_t header_bytes = 4u + 4u + COL_DESC_BYTES;
+        if (d.data_size < header_bytes ||
+            d.data_offset > total_bytes - header_bytes)
+            panic("columnar: LowCardinality header truncated");
+        const uint8_t w = lc_header_index_width(d);
+        // The index array is mandatory for COL_LOWCARD — 0 is never a real
+        // offset (same rejection as the host's readColumnFromDesc).
+        if (d.offsets_offset == 0)
+            panic("columnar: LowCardinality descriptor has no index array");
+
+        uint32_t dict_rows;
+        std::memcpy(&dict_rows, base + d.data_offset, 4);
+        ColDescriptor dict{};
+        std::memcpy(&dict, base + d.data_offset + 8u, COL_DESC_BYTES);
+
+        // The writer never sets those bits on the dictionary descriptor, and a
+        // const or nullable dictionary would break navigation (the host reader
+        // rejects the const shape for the same reason).
+        if (dict.type & COL_IS_CONST)
+            panic("columnar: LowCardinality dictionary must not set COL_IS_CONST");
+        if (dict.type & COL_IS_NULLABLE)
+            panic("columnar: LowCardinality dictionary must not set COL_IS_NULLABLE");
+        // Only string-shaped dictionaries are decoded: that is the sole shape
+        // any consumer of a LowCardinality argument asks for.
+        if ((dict.type & ~uint64_t(COL_IS_CONST | COL_IS_NULLABLE)) != COL_BYTES)
+            panic("columnar: LowCardinality dictionary is not COL_BYTES");
+        // ColumnUnique reserves the leading default slot, so a real dictionary
+        // is never empty.
+        if (dict_rows < 1u)
+            panic("columnar: LowCardinality dictionary is empty");
+        if (dict.offsets_offset > total_bytes ||
+            (uint64_t(dict_rows) + 1u) * sizeof(uint64_t) > total_bytes - dict.offsets_offset)
+            panic("columnar: LowCardinality dictionary offsets exceed frame");
+        if (dict.data_offset > total_bytes ||
+            dict.data_size > total_bytes - dict.data_offset)
+            panic("columnar: LowCardinality dictionary data exceeds frame");
+
+        // offsets_offset is the shared index array.
+        v.lc_index        = base + d.offsets_offset;
+        v.lc_index_width  = w;
+        v.lc_dict_rows    = dict_rows;
+        v.lc_dict         = dict;
     }
 };
 
 inline ColumnarBuf parse_columnar(const raw_buffer* buf) {
     const uint8_t* p = buf->data();
+    const uint64_t total = buf->size();
+    if (total < HEADER_BYTES)
+        panic("columnar: frame shorter than header");
+
+    // The host's readFrameHeader validates magic, version, and the reserved
+    // field for the same reason: without it a layout change or a foreign byte
+    // range is parsed as an arbitrary frame and produces arbitrary answers.
+    uint32_t magic;
+    uint16_t version, reserved;
+    std::memcpy(&magic, p, 4);
+    std::memcpy(&version, p + 4, 2);
+    std::memcpy(&reserved, p + 6, 2);
+    if (magic != FRAME_MAGIC)
+        panic("columnar: bad frame magic");
+    if (version != FRAME_VERSION)
+        panic("columnar: unsupported frame version");
+    if (reserved != 0)
+        panic("columnar: reserved frame header field is non-zero");
+
     ColumnarBuf cb;
     cb.base = p;
+    cb.total_bytes = total;
     std::memcpy(&cb.num_rows, p + 8,  4);
     std::memcpy(&cb.num_cols, p + 12, 4);
+    if (cb.num_cols > (total - HEADER_BYTES) / COL_DESC_BYTES)
+        panic("columnar: descriptor table extends past end of frame");
     cb.descs = reinterpret_cast<const ColDescriptor*>(p + HEADER_BYTES);
     return cb;
 }
@@ -634,7 +888,7 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
 // actual stored ColType and widen via static_cast.  For floating-point targets,
 // bytes are bit-cast directly (no numeric cast across float/int boundary).
 template <typename T>
-T col_get_fixed_widened(const ColView& col, uint32_t row) noexcept {
+T col_get_fixed_widened(const ColView& col, uint32_t row) {
     uint32_t idx = col.effective_row(row);
     switch (col.base_type) {
         case COL_FIXED8: {
@@ -649,10 +903,52 @@ T col_get_fixed_widened(const ColView& col, uint32_t row) noexcept {
             uint32_t v; std::memcpy(&v, col.data + idx * 4u, 4u);
             return static_cast<T>(v);
         }
-        default: {
-            T v; std::memcpy(&v, col.data + idx * sizeof(T), sizeof(T));
+        case COL_FIXED64: {
+            // Read at the stored width first: memcpy'ing sizeof(T) from a
+            // stride-8 array mis-reads every row once T is narrower than 8.
+            uint64_t raw;
+            std::memcpy(&raw, col.data + uint64_t(idx) * 8u, 8u);
+            if constexpr (std::is_floating_point_v<T>) {
+                T v; std::memcpy(&v, &raw, 8u);   // Float64: bit-cast
+                return v;
+            } else {
+                return static_cast<T>(raw);        // numeric widening/truncation
+            }
+        }
+        // COL_FIXEDN: any width; take the interpretation from T and let the
+        // wire width veto a mismatch (it never carries signedness or type).
+        case COL_FIXEDN: {
+            if (col.fixed_width != uint32_t(sizeof(T)))
+                panic("columnar: COL_FIXEDN width does not match the requested type");
+            T v; std::memcpy(&v, col.data + uint64_t(idx) * sizeof(T), sizeof(T));
             return v;
         }
+        default: {
+            // Any non fixed-width tag (bytes/complex/variant/lowcard) is a
+            // hard error — the old default: memcpy'd sizeof(T) bytes from
+            // whatever `data` pointed at.
+            panic("columnar: col_get_fixed_widened called on non fixed-width column");
+        }
+    }
+}
+
+// Span-shaped argument (the FixedString/bytes shape chgeos declares):
+// dispatch by tag, validating the width rather than trusting it.  Interpretation
+// comes from the C++ side; the tag never carries logical type.
+inline std::span<const uint8_t> col_get_span_arg(const ColView& col, uint32_t row) {
+    switch (col.base_type) {
+        case COL_BYTES:
+            return col.get_bytes(row);
+        case COL_FIXED8:
+        case COL_FIXED16:
+        case COL_FIXED32:
+        case COL_FIXED64:
+        case COL_FIXEDN:
+            return col.get_fixed_bytes(row);
+        case COL_LOWCARD:
+            return col.lc_get_bytes(row);
+        default:
+            panic("columnar: span argument against an unsupported column tag");
     }
 }
 
@@ -661,7 +957,7 @@ T col_get_arg(const ColView& col, uint32_t row) {
     if constexpr (is_vector_v<T>) {
         return col_get_complex_array<typename T::value_type>(col, row);
     } else if constexpr (std::is_same_v<T, std::span<const uint8_t>>) {
-        return col.get_bytes(row);
+        return col_get_span_arg(col, row);
     } else if constexpr (std::is_same_v<T, double>) {
         return col_get_fixed_widened<double>(col, row);
     } else if constexpr (std::is_same_v<T, int32_t>) {
@@ -702,6 +998,11 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
 {
     using PGF = geos::geom::prep::PreparedGeometryFactory;
 
+    raw_buffer* out = nullptr;
+    try {
+    // Parsing lives inside the try: a malformed frame must trap through
+    // panic() like every other guest-side failure, not unwind through the
+    // WASM boundary.
     auto cb = parse_columnar(ptr);
     uint32_t n = cb.num_rows;
     constexpr size_t nargs = sizeof...(Args);
@@ -722,9 +1023,6 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
         for (size_t j = 0; j < nargs; ++j) null |= cols[j].is_null(row);
         return null;
     };
-
-    raw_buffer* out = nullptr;
-    try {
         // ── bool output (predicates) ──────────────────────────────────────────
         if constexpr (std::is_same_v<Ret, bool>) {
             out = clickhouse_create_buffer(HEADER_BYTES + COL_DESC_BYTES + n);
@@ -1008,6 +1306,8 @@ inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
     using KVPair   = std::pair<uint64_t, double>;
     using KNNResult = std::vector<KVPair>;
 
+    ch::raw_buffer* out = nullptr;
+    try {
     auto cb = ch::parse_columnar(ptr);
     uint32_t n     = cb.num_rows;
     ch::ColView col_q = cb.col(0);
@@ -1018,9 +1318,6 @@ inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
 
     if (k == 0 || n == 0)
         return ch::write_complex_col<KNNResult>(n, [](uint32_t) -> KNNResult { return {}; });
-
-    ch::raw_buffer* out = nullptr;
-    try {
         if (col_c.is_const) {
             auto wkbs = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, 0);
             ch::CentroidKNNIndex index(wkbs);

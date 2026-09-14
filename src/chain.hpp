@@ -366,7 +366,10 @@ inline raw_buffer* chain_execute_flat_tiled(const std::vector<std::string>& fn_n
                 if (descs[c].offsets_offset) descs[c].offsets_offset += 8ull * base;
             }
         }
+        // The shifted descriptors still address the original frame, so the
+        // tile view bounds itself against the original frame size.
         ColumnarBuf tile_cb{ .num_rows = t, .num_cols = cb.num_cols,
+                             .total_bytes = cb.total_bytes,
                              .descs = descs.data(), .base = cb.base };
 
         auto batch = source.as_source_flat(tile_cb, t);
