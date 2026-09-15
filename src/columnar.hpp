@@ -89,7 +89,7 @@ enum ColType : uint32_t {
     //   vector<T> (Array):  uint64[N+1] outer_offsets → M total, then recursive(M, T)
     //   pair/tuple (Tuple): recursive(N, T0) ++ recursive(N, T1) ++ ...  (columnar)
     COL_COMPLEX     = 5,
-    COL_VARIANT     = 6,  // Variant(...): disc[N] + row_offs[N] + header{K, records} + sub-data
+    COL_VARIANT     = 6,  // Variant(...): disc[N](u8) + row_offs[N](u32) + header{K, records} + sub-data
     // Fixed-width payload whose width is not 1/2/4/8: UUID, IPv6, Int128/UInt128,
     // Decimal128/256, FixedString(N) for N ∉ {1,2,4,8}.  No offsets array; the
     // element width is recorded only as data_size / row_count.  Widths 1/2/4/8 —
@@ -215,6 +215,19 @@ struct ColView {
         if (off + fixed_width > data_size)
             panic("columnar: fixed-width row extends past the column data");
         return {data + off, fixed_width};
+    }
+
+    // COL_VARIANT only: the row's position within its sub-column. The array at
+    // offsets_offset is uint32[row_count] — the host's writer stores uint32 there
+    // (ColumnBinaryWire.h, Variant branch of writeColData) and its reader loads
+    // uint32 back; it is NOT the uint64 offsets array COL_BYTES uses. Reading the
+    // u64 `offsets` pointer over this array reads pairs of row offsets as one
+    // (wrong) position per row.
+    uint32_t variant_offset_at(uint32_t row) const {
+        uint32_t idx = effective_row(row);
+        uint32_t v;
+        std::memcpy(&v, reinterpret_cast<const uint8_t*>(offsets) + uint64_t(idx) * sizeof(uint32_t), sizeof(uint32_t));
+        return v;
     }
 
     // COL_LOWCARD: the shared index value for a row, read at its wire width.
@@ -369,14 +382,16 @@ struct ColumnarBuf {
         if (d.offsets_offset) {
             // COL_BYTES reads offsets[idx + 1], so it needs row_count + 1
             // uint64 entries; COL_LOWCARD's array holds one entry per row at
-            // the dictionary's index width (parsed below); other tagged users
-            // (COL_COMPLEX arrays keep offsets inside the data blob, COL_VARIANT
-            // reads one entry per row) need row_count at guest strides.
+            // the dictionary's index width (parsed below); COL_VARIANT's holds
+            // uint32 row positions (see variant_offset_at); COL_COMPLEX keeps
+            // its offsets inside the data blob.
             uint64_t bytes;
             if (base_tag == COL_BYTES)
                 bytes = (v.row_count + 1u) * sizeof(uint64_t);
             else if (base_tag == COL_LOWCARD)
                 bytes = uint64_t(v.row_count) * lc_header_index_width(d);
+            else if (base_tag == COL_VARIANT)
+                bytes = uint64_t(v.row_count) * sizeof(uint32_t);
             else
                 bytes = v.row_count * sizeof(uint64_t);
             if (d.offsets_offset > total_bytes ||
@@ -777,8 +792,9 @@ col_get_variant_geom(const ColView& col, uint32_t row) {
     const uint8_t disc = col.null_map[eff];
     if (disc == 0xFFu) return nullptr;
 
-    // Row offset within the sub-column for this row.
-    const uint64_t off = col.offsets[eff];
+    // Row offset within the sub-column for this row — uint32 on the wire, not
+    // the uint64 COL_BYTES offsets array; see ColView::variant_offset_at.
+    const uint32_t off = col.variant_offset_at(row);
 
     // Parse variant header at col.data: uint32 K + K×{disc(1)+pad(3)+ColDescriptor(20)}.
     const uint8_t* hdr = col.data;

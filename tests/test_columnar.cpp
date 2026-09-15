@@ -692,7 +692,11 @@ static raw_buffer* make_variant_point_buf(
     for (auto& p : pts) if (p) ++M;
 
     std::vector<uint8_t> discs(N);
-    std::vector<uint64_t> row_offs(N, 0u);
+    // Row positions are uint32 on the wire (host writeColData Variant branch),
+    // not the uint64 COL_BYTES offsets. These fixtures wrote them as uint64 once,
+    // which is why a decoder reading them as uint64 passed every test while
+    // disagreeing with the real serializer on the field's width.
+    std::vector<uint32_t> row_offs(N, 0u);
     std::vector<double> xs, ys;
     uint32_t sub_idx = 0;
     for (uint32_t i = 0; i < N; ++i) {
@@ -711,10 +715,10 @@ static raw_buffer* make_variant_point_buf(
 
     uint32_t disc_off = pos;
     pos += N;
-    pos = (pos + 7u) & ~7u;  // align to 8
+    pos = (pos + 3u) & ~3u;  // align to 4 (host alignWriteCursor for this array)
 
     uint32_t offs_off = pos;
-    pos += N * 8u;
+    pos += N * 4u;
 
     uint32_t data_off = pos;  // variant header
     // Header: uint32 K + K×{disc(1)+pad(3)+ColDescriptor(20)}
@@ -746,7 +750,7 @@ static raw_buffer* make_variant_point_buf(
 
     // Discriminators and row offsets
     std::memcpy(p + disc_off, discs.data(), N);
-    std::memcpy(p + offs_off, row_offs.data(), N * 8u);
+    std::memcpy(p + offs_off, row_offs.data(), N * 4u);
 
     if (M > 0u) {
         // Variant header: K=1
@@ -787,7 +791,7 @@ static raw_buffer* make_variant_linestring_buf(
         }
 
     std::vector<uint8_t> discs(N);
-    std::vector<uint64_t> row_offs(N, 0u);
+    std::vector<uint32_t> row_offs(N, 0u);  // uint32 on the wire; see make_variant_point_buf
     uint32_t sub_idx = 0;
     for (uint32_t i = 0; i < N; ++i) {
         if (lines[i]) { discs[i] = 0u; row_offs[i] = sub_idx++; }
@@ -798,8 +802,8 @@ static raw_buffer* make_variant_linestring_buf(
 
     uint32_t pos = HEADER_BYTES + COL_DESC_BYTES;
     uint32_t disc_off = pos;  pos += N;
-    pos = (pos + 7u) & ~7u;
-    uint32_t offs_off = pos;  pos += N * 8u;
+    pos = (pos + 3u) & ~3u;
+    uint32_t offs_off = pos;  pos += N * 4u;
     pos = (pos + 7u) & ~7u;
     uint32_t data_off = pos;  // variant header
     uint32_t k = (M > 0u) ? 1u : 0u;
@@ -830,7 +834,7 @@ static raw_buffer* make_variant_linestring_buf(
     std::memcpy(p + HEADER_BYTES, &d, COL_DESC_BYTES);
 
     std::memcpy(p + disc_off, discs.data(), N);
-    std::memcpy(p + offs_off, row_offs.data(), N * 8u);
+    std::memcpy(p + offs_off, row_offs.data(), N * 4u);
 
     if (M > 0u) {
         std::memcpy(p + data_off, &k, 4u);
@@ -1676,4 +1680,53 @@ TEST(ColumnarLowCard, IndexPastDictionaryThrows) {
     auto col = cb.col(0);
     clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
     EXPECT_THROW((void)col_get_arg<std::span<const uint8_t>>(col, 0), WasmPanicException);
+}
+
+// ── COL_VARIANT row offsets are uint32 on the wire ─────────────────────────
+//
+// The host's Variant branch of writeColData places the per-row positions as
+// uint32[num_rows] at offsets_offset, and the host reader loads them back as
+// uint32. This frame is a verbatim dump of that writer (rows:
+// UInt64(10), String("hi"), UInt64(20), NULL — positions {0,0,1,0}). A decoder
+// walking the array as the uint64 COL_BYTES offsets uses reads two adjacent
+// positions per step and mislocates rows; validation sized for uint64 would
+// also reject legitimate short frames. See ColView::variant_offset_at.
+
+TEST(ColumnarVariant, HostFrameRowOffsetsAreUint32) {
+    auto* buf = make_buf(wire_fixture::VARIANT_U64_STRING, wire_fixture::VARIANT_U64_STRING_len);
+    auto cb = parse_columnar(buf);
+    auto col = cb.col(0);
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+
+    ASSERT_EQ(col.base_type, static_cast<ColType>(COL_VARIANT));
+    ASSERT_EQ(col.row_count, 4u);
+
+    // Discriminators live at null_offset (0xFF = NULL row).
+    ASSERT_FALSE(col.is_null(0));
+    ASSERT_FALSE(col.is_null(1));
+    ASSERT_FALSE(col.is_null(2));
+    ASSERT_TRUE(col.is_null(3));
+
+    // Positions within each sub-column, read at their wire width.
+    EXPECT_EQ(col.variant_offset_at(0), 0u);
+    EXPECT_EQ(col.variant_offset_at(1), 0u);
+    EXPECT_EQ(col.variant_offset_at(2), 1u);
+    EXPECT_EQ(col.variant_offset_at(3), 0u);
+}
+
+TEST(ColumnarVariant, Uint32SizedOffsetArrayAccepted) {
+    // Park the offsets array at the very end of the frame: row_count × 4 bytes
+    // fit exactly, row_count × 8 would not. A host-written frame this tight
+    // must validate — the array is uint32, sized like the host sizes it.
+    std::vector<uint8_t> bytes(wire_fixture::VARIANT_U64_STRING,
+                               wire_fixture::VARIANT_U64_STRING + wire_fixture::VARIANT_U64_STRING_len);
+    ColDescriptor d = desc_at(bytes.data(), 0);
+    ASSERT_GT(d.offsets_offset, 0u);
+    uint64_t new_offs = bytes.size() - 4u * 4u;   // 16 bytes, exactly row_count × 4
+    std::memcpy(bytes.data() + HEADER_BYTES + 16, &new_offs, 8);   // offsets_offset field
+
+    auto* buf = make_buf(bytes.data(), bytes.size());
+    auto cb = parse_columnar(buf);
+    EXPECT_NO_THROW((void)cb.col(0));
+    clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
 }
