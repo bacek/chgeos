@@ -259,3 +259,15 @@ DuckDB's 0.84 s. So the Q7 gap is the CH read (0.72 s) plus per-row column mater
 Closing it needs zero-copy guest access to CH column buffers (big design). Not started.
 perf -p <server> only samples idle threads (logger/sleep): server-attached perf is useless here; use clickhouse-local children.
 Next target: Q11 (45.6 s vs PyCanopy 43.0 s) — §"Q11 serial tail": ~13 s at 1-2 cores from SpatialRTreeJoin stragglers.
+
+## 19. Q11 straggler track — anatomy + hypothesis 3 (probe split) DEAD
+
+Q11 SF10 = two chained SpatialRTreeJoins (not the fused double join): join1 = zones (left, 455k rows) probing a tree of 60M trips;
+join2 = join1 output (31M rows) probing the zone tree. processors_profile_log (baseline 46.9 s):
+join1 24 streams busy 344 s, per-stream 6.1-25.0 s (median 13.1); join2 busy 407 s, 7.9-30.1 s (median 16.5), input 351k-3.0M rows/stream.
+Total join busy 751 s ≈ 31 s on 24 cores vs 47 s wall. Large-row mode (kLargeHit=4M) is never hit here: no single zone has 4M trips.
+- Parquet block 1024 / 8192 for the whole query: 77 s / 67 s (trip read gets slower). DEAD.
+- SplitChunksTransform (cut probe side into ≤N-row chunks before the join's existing resize), interleaved off/8192/1024 ×2, load 5→14:
+  Q11 wall 45.3/43.6/44.5 then 51.3/55.3/56.8; CPU-s 600/691/747 then 643/749/826; Q10 33.0/29.5/27.5 then 30.5/33.6/34.8.
+  CPU +15-28% (smaller chunks → less per-zone grouping in evaluateAndEmit), wall noise-level. DEAD; stashed in CH as "spatial probe split (dead, 2026-10-04)".
+Hypothesis (2) kLargeHit is moot for Q11 (never reached). Next: why per-stream cost varies 4× with equal row counts — cost is per-zone polygon complexity.
