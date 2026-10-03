@@ -32,6 +32,14 @@
         <table>trace_log</table>
         <flush_interval_milliseconds>1000</flush_interval_milliseconds>
     </trace_log>
+    <!-- Per-processor elapsed/wait timings. Off in the default profile so
+         benchmarks don't pay for it; opt in per query with
+         SETTINGS log_processors_profiles=1. -->
+    <processors_profile_log>
+        <database>system</database>
+        <table>processors_profile_log</table>
+        <flush_interval_milliseconds>1000</flush_interval_milliseconds>
+    </processors_profile_log>
     <users>
         <default>
             <password></password>
@@ -63,6 +71,7 @@
             <webassembly_udf_max_fuel>0</webassembly_udf_max_fuel>
             <webassembly_udf_max_memory>1073741824</webassembly_udf_max_memory>
             <allow_experimental_column_binary_format>1</allow_experimental_column_binary_format>
+            <log_processors_profiles>0</log_processors_profiles>
         </default>
     </profiles>
 </clickhouse>
