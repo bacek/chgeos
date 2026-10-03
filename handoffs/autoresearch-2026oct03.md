@@ -283,3 +283,18 @@ Hypothesis (2) kLargeHit is moot for Q11 (never reached). Next: why per-stream c
 - Hypothesis 2 (kLargeHit) moot: never reached on Q11. Hypothesis 3 (probe split) DEAD (§19).
 Track status: Q11 stays ~44-46 s vs PyCanopy 43.0 s. Remaining idea: fused SpatialRTreeDoubleJoin for this shape (join1 tree on trips is
 built at FillingRightJoinSide busy 82 s) — needs plan change, not attempted.
+
+## 21. Q10/Q11 goal — host overhead in SpatialRTreeJoin::evaluateAndEmit (CH 77700fc9f0a) — WIN
+
+joinBlock trace (send_logs_level=trace) on SF10 Q10: 405 s join total, only 47.6 s WASM (12%). Host bookkeeping dominated.
+Three fixes, verified individually by single runs (load 4-8):
+1. Left-run grouping: candidates arrive in ascending left_row order; when average run >= 4, group by runs instead of building
+   `unordered_map<right_row, vector>` over every candidate (millions for zone-probes-trips) and then a second left map.
+   Q10 34.5 -> 21.9 s (join total 405 -> 220 s).
+2. Column pointers resolved once per joinBlock instead of `getByName()` per copied row (pred-block build + output emission).
+   Q10 21.9 (flat), Q11 45 -> 37.3 s.
+3. Copy only predicate-required columns into the predicate input block (was: every right column per candidate).
+   Q10 -> 18.2 s (join 142 s).
+bench_sf 3 runs: Q10 19.1/19.3/19.6 s, Q11 35.1/36.5/37.3 s. verify_sf SF10 Q1-Q11 11/11 PASS.
+vs competitors: Q11 36.5 < PyCanopy 43.0 (met). Q10 19.3 vs Sedona 17.0 (still -12%).
+Q10 profile now: evaluateAndEmit self 12%, ColumnString::insertFrom 5%, rtree pack 6.6%, joinBlock 6%.
