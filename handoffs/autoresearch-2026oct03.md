@@ -138,3 +138,15 @@ Decide:
 
 Remaining gaps vs DuckDB 1.5.6: Q7 ~1.7x and Q6 ~1.2x. Both are bound by copy-in/out and the Parquet reader. Settings, fusion, the prefilter and wire tweaks are all exhausted.
 The only structural lever left is zero-copy WASM input: map CH column buffers into guest memory. That is a large design change.
+
+## 9. Q7 anatomy + max_parsing_threads=4 — LANDED
+
+Probe decomposition (SF10, mt12, 8k blocks): no-loc 195ms/2.8 CPU-s; + read both WKB cols 990ms/13.6; full Q7 1471ms/25.0.
+DuckDB read-only equivalent 610-710ms/~12 CPU-s → CH reader CPU same, not the gap.
+Read-only Q7 does NOT scale with max_threads (t1 1022ms, t12 969ms): Parquet decode runs in the parsing pool.
+Full Q7 CPU doubles t1→t12 (11.7→23.8 CPU-s) = contention inflation; perf: memcpy 18%, snappy 11%, kernel ~20%, guest JIT 27%.
+Fewer parsing threads cut contention: probe pt4/8 full Q7 1137ms vs 1392 default, CPU 13-15 vs 24.
+Clean bench sweep (bracketed): Q7 base 1255/1318 → pt4 1017 (−21%), pt8 1055, pt16 1095. Q1/Q3 lose with any pt cap; Q4/Q5/Q6/Q8/Q9 flat.
+Landed: Q7 QUERY_SETTINGS += max_parsing_threads=4. verify Q7 PASS.
+Q7 vs DuckDB 1.5.6 (840-860): ~1.2x now (was 1.7x).
+Tooling notes: perf report on CH binary spawned addr2line (20 GB, swap full) → poisoned one sweep; flat reports only.

@@ -249,7 +249,7 @@ QUERY_SETTINGS = {
     "Q2": ["max_threads=8", "max_parsing_threads=8", "input_format_parquet_max_block_size=32768"],
     "Q3": ["input_format_parquet_max_block_size=32768"],
     "Q5": ["query_plan_execute_functions_after_sorting=0"],
-    "Q7": ["max_threads=12", "input_format_parquet_max_block_size=8192"],
+    "Q7": ["max_threads=12", "max_parsing_threads=4", "input_format_parquet_max_block_size=8192"],
     "Q9": ["input_format_parquet_max_block_size=8192"],
 }
 
