@@ -158,3 +158,13 @@ Standalone Q6 build probe (count of zones intersecting the const polygon): 1096 
 Full suite interleaved A/B (on/off/on/off, 3 runs, CPU 74-80%): Q6 1880/1824 vs 1798/1817 — no gain; nothing else moves.
 The build-side saving doesn't reach Q6 wall time. Code: CH stash "wasm bbox prefilter + Nullable (dead x2)".
 Noted: Q7 now 915-925ms in these runs (with max_parsing_threads=4) vs DuckDB 840-860 → ~1.08x.
+
+## 11. Switch bench default wire cb → col — LANDED
+
+Found by accident: probe with plain (COLUMNAR_V1) function names ran Q1 in 279ms vs 441ms for the _cb (BUFFERED_V1 + ColumnBinary) names the bench uses.
+Isolated to st_dwithin: col 330ms / 3.6 user-s vs cb 575ms / 8.5 user-s (cb: 2.7 s ColumnBinary serialization + slower guest); st_x at parity.
+Guest code identical (same prep ops / fast paths both macros) → cost is the BUFFERED_V1 host marshal. (COLUMNAR path does not emit Wasm* ProfileEvents — those counters are BUFFERED-only.)
+Interleaved bench col/cb/col/cb (3 runs): Q1 283/276 vs 440/420 (−35%), Q3 287/274 vs 446/421 (−35%), Q2 −9%, Q6 −8%, Q5 −5%, Q4 +6% (1127/1079 vs 1082/1019), Q7/Q8/Q9 parity. Q10/Q11 1-run parity (29.1/44.2 vs 28.7/44.0 s).
+verify_sf (col) Q1-Q9 PASS. Default in bench_sf.py now --wire-protocol col.
+Contradicts the Sep-12 "col vs cb parity" memory: that predates this session's col-side fast paths? No — guest is shared; most likely the cb host serializer regressed or Q1/Q3 const-arg handling differs; worth a CH-side look if cb must stay.
+vs DuckDB 1.5.6: Q1 ~280 vs 330 (win), Q3 ~280 vs 460 (win), Q2 ~325 vs 480 (win).

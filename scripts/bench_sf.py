@@ -330,7 +330,7 @@ Usage:
     parser.add_argument("--legacy-data", action="store_true",
                         help="read the flat <sf>/<table>.parquet files instead of "
                              "the upstream per-table directories")
-    parser.add_argument("--wire-protocol", default="cb", choices=["col", "mp", "buffers", "cb"],
+    parser.add_argument("--wire-protocol", default="col", choices=["col", "mp", "buffers", "cb"],
                         help="Wire format: 'col' (COLUMNAR_V1, bare names), 'mp' (MsgPack, _mp suffix), 'buffers' (Buffers, _buffers suffix), or 'cb' (ColumnBinary, _cb suffix, default)")
     parser.add_argument("--settings", default=None)
     parser.add_argument("--query", action="append", dest="query", metavar="QUERY",
