@@ -334,3 +334,16 @@ Sampled 4×6 quantile grid, per-thread count+scatter into disjoint cells, one tr
 | scatter | 21.1 / 20.1 / 20.2 | 30.9 / 29.5 / 31.3 | 143 / 142 / 144 |
 
 Q10 CPU −7% but wall +2 s, same as uncapped kd. So the Q10 loss with spatially disjoint trip trees is not nth_element build cost; disjoint trees cut work but lose parallelism (hypothesis: a dense-Manhattan zone's candidates now come from 1–2 trees, so per-probe latency concentrates on hot zones and the straggler tail grows). Reverted. Also confirms 08e9f5beba7 Q11 ≈ 28–30 s.
+
+### 25. Large-row path name lookups — WIN, Q10 goal met
+
+Q10 anatomy (08e9f5beba7): 19.5 s wall / 160 CPU-s (~8 of 24 cores); JoiningTransform max 13.7 s vs avg 6.85 s; hottest joinBlock 9.06 s total vs 2.99 s WASM. System-wide perf of the tail window: Block::findPositionByName 11.7% + name-index hash find 9.7% + getPositionByName 5.3% + getByName 4.5% ≈ 31%. Source: processLargeRow (kLargeHit rows) still did getByName per candidate per column and per output row per column, and copied every left/right column into pred_block — 77700fc only fixed evaluateAndEmit.
+
+Fix: reuse right_columns_by_name / out_left_columns / out_right_columns, and only predicate_required columns into pred_block. Interleaved A/B, 3 rounds, load 8–11:
+
+| arm | Q10 | Q11 | Q10 CPU-s |
+|---|---|---|---|
+| 08e9f5beba7 | 18.3 / 17.4 / 18.7 | 27.5 / 28.8 / 27.3 | 153 / 152 / 151 |
+| fix | 14.3 / 14.4 / 14.0 | 26.6 / 25.7 / 26.3 | 147 / 150 / 148 |
+
+Q10 −22% → ~14.2 s, beats Sedona 17.0. Q11 −5% → ~26 s vs PyCanopy 43.0. verify_sf SF10 Q1–Q11 all PASS. Both Q10/Q11 competitor targets met.
