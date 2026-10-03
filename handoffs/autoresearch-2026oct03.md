@@ -124,3 +124,17 @@ Q1 440/432 vs 435/444 · Q2 359/361 vs 369/362 · Q3 453/444 vs 445/434 · Q4 11
 Zero gain: guest already rejects cheaply by bbox; cost is reading/marshalling the column, not the predicate.
 Code: CH stash "wasm bbox_disjoint_result prefilter (dead, 2026-10-03)"; create.sql reverted.
 Side bug (unfixed): `st_disjoint_cb` has is_spatial_predicate=1, but disjoint is TRUE for disjoint bboxes → unsafe for RTree join / Parquet GeoFilter. Flag should be cleared.
+
+## Morning pick-list
+
+Keep (already committed on autoresearch-2026oct03):
+1. Const-polygon cache (e0810df): Q2 762→632, Q10/Q11 flat.
+2. st_distance point-point WKB fast path (9d77f48): bit-exact, Q7 flat.
+3. Per-query settings (5a30d3b): Q1 423 / Q2 361 / Q3 449 / Q7 ~1450 / Q9 46 ms. Q1/Q2/Q9 at or under DuckDB 1.5.6.
+
+Decide:
+4. Clear `is_spatial_predicate` on `st_disjoint_cb`. This is a correctness fix, with no perf impact expected.
+5. Rebuild the CH binary. The running binary still contains the stashed prefilter code; it is inert because the default is -1.
+
+Remaining gaps vs DuckDB 1.5.6: Q7 ~1.7x and Q6 ~1.2x. Both are bound by copy-in/out and the Parquet reader. Settings, fusion, the prefilter and wire tweaks are all exhausted.
+The only structural lever left is zero-copy WASM input: map CH column buffers into guest memory. That is a large design change.
