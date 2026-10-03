@@ -41,4 +41,9 @@ using ColPrepPointOp = bool (*)(geos::geom::Location);
 // included.  An op must therefore never throw and never guess.
 using ColWkbScalarOp = std::optional<double> (*)(std::span<const uint8_t>);
 
+// Two-argument counterpart of ColWkbScalarOp (st_distance between points), with
+// the same contract: nullopt hands the row to the GEOS impl.
+using ColWkbPairOp = std::optional<double> (*)(std::span<const uint8_t>,
+                                               std::span<const uint8_t>);
+
 } // namespace ch

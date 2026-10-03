@@ -54,3 +54,15 @@ polygon + IPIAL; parse deferred until first point passes bbox; bind once per cal
   tg removed from the WASM target (unused there).
 - Q11 CPU avg 67-73% even on old guest = known SpatialRTreeJoin straggler tail.
 - Tooling: `.scratch/ar/run_cpu.sh <tag> <queries> [runs]` = bench + CPU% sampling.
+
+### 3. Q2 SQL bbox-prefilter rewrite — DEAD
+Bbox from st_envelope(poly) via readWKBPolygon, prefilter with readWKBPoint().1/.2 BETWEEN,
+then st_intersects on survivors. Correct (5499) but 1052 ms vs 650 — native readWKBPoint over
+60M rows costs more than the WASM bbox reject. Q2 residual: guest 4.0 + ser 3.0 CPU-s;
+ser is mostly the 169 KB const resent each call (CH-side const caching = bigger project).
+
+### 4. Q7 rewrite st_length(st_makeline(a,b)) -> st_distance(a,b) — NO GAIN (not applied)
+Bit-identical output. With GEOS st_distance: 3.1s (worse). Added generic ColWkbPairOp
+point-point fast path for st_distance (bit-exact vs GEOS, 2000-pair test): rewrite then
+ties original (~1.87s). => Q7 geometry is not the bottleneck (scan/WKB read/marshal/sort are).
+st_distance fast path kept as a generic improvement.

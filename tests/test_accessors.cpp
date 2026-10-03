@@ -464,3 +464,29 @@ TEST(StNumPoints, ThreePointLine) {
 TEST(StNumPoints, ThrowsOnNonLine) {
   EXPECT_THROW(st_numpoints_impl(geom("POINT (0 0)")), std::runtime_error);
 }
+
+// ── ST_DISTANCE point-point WKB fast path ─────────────────────────────────────
+// Claimed rows must carry the same bits as the GEOS impl; anything that is not
+// two non-empty points must be declined.
+TEST(StDistanceWkb, PointPointMatchesGeosBits) {
+  uint64_t s = 0x9E3779B97F4A7C15ull;
+  auto next = [&] { s ^= s << 13; s ^= s >> 7; s ^= s << 17; return s; };
+  auto coord = [&] { return (static_cast<double>(next() % 2000000001ull) - 1e9) * 1.37e-7; };
+  for (int i = 0; i < 2000; ++i) {
+    auto a = point_wkb(1, std::nullopt, {coord(), coord()});
+    auto b = point_wkb(1, std::nullopt, {coord(), coord()});
+    std::optional<double> fast = st_distance_wkb(a, b);
+    ASSERT_TRUE(fast.has_value());
+    double ref = st_distance_impl(read_wkb(a), read_wkb(b));
+    ASSERT_TRUE(SameBits(*fast, ref)) << "row " << i;
+  }
+}
+
+TEST(StDistanceWkb, DeclinesNonPointsAndEmpty) {
+  auto pt    = wkt2wkb("POINT (1 2)");
+  auto line  = wkt2wkb("LINESTRING (0 0, 1 1)");
+  auto empty = point_wkb(1, std::nullopt, {std::nan(""), std::nan("")});
+  EXPECT_FALSE(st_distance_wkb(pt, line).has_value());
+  EXPECT_FALSE(st_distance_wkb(line, pt).has_value());
+  EXPECT_FALSE(st_distance_wkb(pt, empty).has_value());
+}

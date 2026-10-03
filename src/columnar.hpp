@@ -1065,7 +1065,8 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                                   ColPrepDistOp  prep_b_dist  = nullptr,
                                   ColPrepPointOp prep_a_point = nullptr,  // A-const polygon, B varies as points
                                   ColPrepPointOp prep_b_point = nullptr,  // B-const polygon, A varies as points
-                                  ColWkbScalarOp wkb_scalar   = nullptr)  // 1-arg accessor read straight from WKB
+                                  ColWkbScalarOp wkb_scalar   = nullptr,  // 1-arg accessor read straight from WKB
+                                  ColWkbPairOp   wkb_pair     = nullptr)  // 2-arg measure read straight from WKB
 {
     using PGF = geos::geom::prep::PreparedGeometryFactory;
 
@@ -1284,6 +1285,20 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     return out;
                 }
             }
+            if constexpr (nargs == 2) {
+                if (wkb_pair && cols[0].base_type != COL_VARIANT
+                             && cols[1].base_type != COL_VARIANT) {
+                    for (uint32_t i = 0; i < n; ++i) {
+                        if (any_null(i)) {
+                            res[i] = std::numeric_limits<double>::quiet_NaN();
+                            continue;
+                        }
+                        std::optional<double> v = wkb_pair(cols[0].get_bytes(i), cols[1].get_bytes(i));
+                        res[i] = v ? *v : invoke(i);
+                    }
+                    return out;
+                }
+            }
 
             for (uint32_t i = 0; i < n; ++i) {
                 res[i] = any_null(i) ? std::numeric_limits<double>::quiet_NaN() : invoke(i);
@@ -1439,6 +1454,16 @@ inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
         return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
             nullptr, false, nullptr, nullptr, nullptr, nullptr,                  \
             nullptr, nullptr, ch::name##_wkb);                                   \
+    }
+
+// 2-arg measure returning double, with a ColWkbPairOp fast path that reads the
+// answer out of both WKBs.  Requires name##_wkb defined alongside name##_impl.
+#define CH_UDF_COL_WKB2(name)                                                    \
+    __attribute__((export_name(#name)))                                          \
+    ch::raw_buffer * name(ch::raw_buffer * ptr, uint32_t num_rows) {             \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,         \
+            nullptr, false, nullptr, nullptr, nullptr, nullptr,                  \
+            nullptr, nullptr, nullptr, ch::name##_wkb);                          \
     }
 
 // Canonical no-suffix alias for PRED3 functions that keep their _col export.

@@ -46,6 +46,15 @@ namespace ch {
             nullptr, nullptr, ch::name##_wkb);                               \
     }
 
+#define CH_UDF_CB_WKB2(name)                                                 \
+    __attribute__((export_name(#name "_cb")))                                \
+    ch::raw_buffer * name##_cb(ch::raw_buffer * ptr,                         \
+                               uint32_t num_rows) {                          \
+        return ch::columnar_impl_wrapper(ptr, num_rows, ch::name##_impl,     \
+            nullptr, false, nullptr, nullptr, nullptr, nullptr,              \
+            nullptr, nullptr, nullptr, ch::name##_wkb);                      \
+    }
+
 #define CH_UDF_CB_PRED3(name)                                                \
     __attribute__((export_name(#name "_cb")))                                \
     ch::raw_buffer * name##_cb(ch::raw_buffer * ptr,                         \

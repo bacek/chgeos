@@ -70,6 +70,21 @@ inline std::optional<double> st_y_wkb(std::span<const uint8_t> wkb) noexcept {
   return p->y;
 }
 
+// ColWkbPairOp fast path for st_distance between two non-empty points: GEOS
+// answers point-to-point with Coordinate::distance, sqrt(dx*dx + dy*dy), and so
+// does this, operation for operation.  Anything that is not two points — or an
+// empty or malformed one — is declined to the GEOS impl.
+inline std::optional<double> st_distance_wkb(std::span<const uint8_t> a,
+                                             std::span<const uint8_t> b) noexcept {
+  std::optional<XY> p = detail::wkb_nonempty_point(a);
+  if (!p) return std::nullopt;
+  std::optional<XY> q = detail::wkb_nonempty_point(b);
+  if (!q) return std::nullopt;
+  double dx = p->x - q->x;
+  double dy = p->y - q->y;
+  return std::sqrt(dx * dx + dy * dy);
+}
+
 inline std::unique_ptr<Geometry> st_centroid_impl(std::unique_ptr<Geometry> geometry) {
   return geometry->getCentroid();
 }
