@@ -323,3 +323,14 @@ Uncapped (3 rounds): Q11 30.4s vs 37.6s head, CPU 355 vs 490; **Q10 +15%** (20.9
 | kd uncapped | 20.8 / 20.7 | 30.1 / 32.6 | 361 / 359 |
 
 Committed the capped variant. verify_sf SF10 Q1–Q11 all PASS. Q10 still ~18 s vs Sedona 17.0 — next: parallel top-level partition (sample median + parallel std::partition) so the 60M build also gets disjoint trees without the serial cost.
+
+### 24. Parallel grid-scatter for the >10M build — DEAD
+
+Sampled 4×6 quantile grid, per-thread count+scatter into disjoint cells, one tree per cell (no serial nth_element). Env A/B on 08e9f5beba7, 3 rounds:
+
+| arm | Q10 | Q11 | Q10 CPU-s |
+|---|---|---|---|
+| off | 20.3 / 17.9 / 18.0 | 29.9 / 28.1 / 28.7 | 168 / 153 / 153 |
+| scatter | 21.1 / 20.1 / 20.2 | 30.9 / 29.5 / 31.3 | 143 / 142 / 144 |
+
+Q10 CPU −7% but wall +2 s, same as uncapped kd. So the Q10 loss with spatially disjoint trip trees is not nth_element build cost; disjoint trees cut work but lose parallelism (hypothesis: a dense-Manhattan zone's candidates now come from 1–2 trees, so per-probe latency concentrates on hot zones and the straggler tail grows). Reverted. Also confirms 08e9f5beba7 Q11 ≈ 28–30 s.
