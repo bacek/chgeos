@@ -271,3 +271,15 @@ Total join busy 751 s ≈ 31 s on 24 cores vs 47 s wall. Large-row mode (kLargeH
   Q11 wall 45.3/43.6/44.5 then 51.3/55.3/56.8; CPU-s 600/691/747 then 643/749/826; Q10 33.0/29.5/27.5 then 30.5/33.6/34.8.
   CPU +15-28% (smaller chunks → less per-zone grouping in evaluateAndEmit), wall noise-level. DEAD; stashed in CH as "spatial probe split (dead, 2026-10-04)".
 Hypothesis (2) kLargeHit is moot for Q11 (never reached). Next: why per-stream cost varies 4× with equal row counts — cost is per-zone polygon complexity.
+
+## 20. Q11 straggler — hypothesis 1 (parallel group eval) INCONCLUSIVE, reverse orientation DEAD
+
+- Reorder Q11 so trips probe zone trees in both joins (`FROM trip JOIN zone JOIN zone`): >200 s, killed. Zone-probe orientation is right.
+- Parallel predicate-group evaluation inside evaluateAndEmit (shared ThreadPool, threshold 100k candidates, env A/B; first version
+  used a function-static pool which blocked server shutdown >60 s → restart refused; fixed by a per-join member pool):
+  Q11 wall off/par8 pairs: 45.9/42.5, 46.1/42.9, 44.8/42.6, 44.4/45.3, 44.1/48.7 (last with processors log); par16 43.2, 45.3.
+  CPU-s +12% (600→680). Tail: join1 max 25.3→34.3 s (worse), join2 max 28.9→20.5 s (better). Load 8-15 throughout (external).
+  Net: no reliable wall win, consistent CPU cost. Stashed in CH as "spatial parallel group eval (inconclusive, 2026-10-04)".
+- Hypothesis 2 (kLargeHit) moot: never reached on Q11. Hypothesis 3 (probe split) DEAD (§19).
+Track status: Q11 stays ~44-46 s vs PyCanopy 43.0 s. Remaining idea: fused SpatialRTreeDoubleJoin for this shape (join1 tree on trips is
+built at FillingRightJoinSide busy 82 s) — needs plan change, not attempted.
