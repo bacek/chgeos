@@ -190,3 +190,20 @@ Sections 8/10 called it dead. Both A/Bs ran on the **cb** wire (then the bench d
 Clean col A/B (pre/no/pre/no, 3 runs): Q1 309/282 vs 425/418 (−29%), Q3 306/290 vs 432/426 (−30%), Q6 1728/1725 vs 1975/1959 (−12%), Q2 336/331 vs 362/356 (−7%), Q4 +3%, rest flat.
 verify Q1-Q11 PASS. CH commit on autoresearch-2026oct03; create.sql adds bbox_disjoint_result to the 35 spatial predicates (=1 for st_disjoint_cb).
 Harness trap found on the way: reload.sh's INSERT reads stdin in background jobs → hangs → functions vanish; use </dev/null.
+
+## 14. SpatialRTreeJoin occupancy grid — WIN (CH 5cfbb7b5a04)
+
+Hypothesis: Q8 probes 60M rows for 38.5k matches; each probe walks all sub-trees (~400ns/row). A 1024² occupancy
+grid over build-side bboxes rejects most probes in O(1).
+Guards: skip grid if right side >200k entries (Q4/Q6-style huge build sides); abort if >4M cells marked.
+Interleaved A/B (env toggle, same binary, removed before commit), SF10 col, 3 runs median:
+
+| arm    | Q4   | Q6   | Q8   | Q9 |
+|--------|------|------|------|----|
+| grid   | 1130 | 1735 | 538  | 48 |
+| nogrid | 1125 | 1789 | 1447 | 41 |
+| grid   | 1173 | 1750 | 552  | 42 |
+| nogrid | 1129 | 1792 | 1459 | 45 |
+
+Q8 −62%; Q4/Q6 flat. Earlier "Q4/Q6 +15-20%" reading was external load (root python3, load 20).
+verify_sf SF10 Q1–Q11: 11/11 PASS.
