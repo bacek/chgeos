@@ -298,3 +298,14 @@ Three fixes, verified individually by single runs (load 4-8):
 bench_sf 3 runs: Q10 19.1/19.3/19.6 s, Q11 35.1/36.5/37.3 s. verify_sf SF10 Q1-Q11 11/11 PASS.
 vs competitors: Q11 36.5 < PyCanopy 43.0 (met). Q10 19.3 vs Sedona 17.0 (still -12%).
 Q10 profile now: evaluateAndEmit self 12%, ColumnString::insertFrom 5%, rtree pack 6.6%, joinBlock 6%.
+
+### 22. Parallel group eval re-tested on 77700fc — DEAD
+
+Re-applied stash on top of the host-overhead fix. Interleaved A/B (AB_PAR_GROUPS 1/8/1/8), SF10, load 7-13:
+
+| arm | Q10 | Q11 | Q11 CPU-s |
+|---|---|---|---|
+| par=1 | 19.3 / 18.0 s | 42.1 / 35.2 s | 487 / 493 |
+| par=8 | 17.6 / 19.6 s | 34.5 / 34.8 s | 565 / 578 |
+
+Round 2 (cleaner): Q11 −1%, Q10 +9%; CPU +16%. Round-1 par=1 Q11 is an outlier. Not a win; re-stashed as "spatial parallel group eval (dead on 77700fc, 2026-10-04)". Q10 remaining gap (~18.9 vs Sedona 17.0) is not group-eval parallelism.
