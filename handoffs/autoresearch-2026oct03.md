@@ -245,3 +245,17 @@ Q4 = top-1000 trip build (probe.sh 185-208 ms) + zone probe scan (805 ms warm) �
   (`PREWHERE t_tripkey IN (top-1000 keys)`, equivalent since t_tripkey is unique) = 178 vs 185 ms, CPU 2.98 vs 1.79 s. DEAD:
   late materialization doesn't skip pages because the top-1000 rows are scattered across all row groups.
 Q4 at ~1.0-1.17 s vs DuckDB 1.08 is read-bound parity; nothing left on the chgeos/join side.
+
+## 18. Q7 anatomy at bench settings (2026-10-04 08:00, load ~7)
+
+probe.sh, exact bench settings (mt12, mpt4, block 8192), interleaved x2:
+| variant | ms | CPU-s |
+|---|---|---|
+| full (st_length(st_makeline)) | 1019 / 990 | 11.9 / 11.7 |
+| read-only (length(a)+length(b)) | 725 / 716 | 4.9 / 4.8 |
+| native L2Distance(readWKBPoint) | 926 / 914 | 8.6 / 8.6 |
+WASM adds ~280 ms / 7 CPU-s over the read. Even the pure-native expression adds ~200 ms / 3.7 CPU-s and stays above
+DuckDB's 0.84 s. So the Q7 gap is the CH read (0.72 s) plus per-row column materialization, not GEOS. The WASM-specific part is ~90 ms.
+Closing it needs zero-copy guest access to CH column buffers (big design). Not started.
+perf -p <server> only samples idle threads (logger/sleep): server-attached perf is useless here; use clickhouse-local children.
+Next target: Q11 (45.6 s vs PyCanopy 43.0 s) — §"Q11 serial tail": ~13 s at 1-2 cores from SpatialRTreeJoin stragglers.
