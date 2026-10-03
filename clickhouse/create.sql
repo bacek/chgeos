@@ -1726,7 +1726,7 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary';
 
 CREATE OR REPLACE FUNCTION st_equals_cb
 LANGUAGE WASM FROM 'chgeos'
