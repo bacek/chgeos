@@ -165,9 +165,9 @@ def is_boundary_tie(query: str, issues: list[dict], answer: pd.DataFrame) -> boo
     return True
 
 
-def build_query(tpl, table_vars, settings_clause, settings5_clause, suffix):
-    sql = tpl.format(**table_vars, FUEL=settings_clause,
-                     FUEL5=settings5_clause, FUEL_SORT=settings_clause)
+def build_query(tpl, table_vars, settings_default, settings_q5, suffix):
+    sql = tpl.format(**table_vars, SETTINGS=settings_default,
+                     SETTINGS_Q5=settings_q5)
     return _apply_suffix(sql, suffix)
 
 
@@ -220,6 +220,7 @@ def main() -> int:
             f"max_execution_time={args.timeout}",
             "max_bytes_ratio_before_external_group_by=0",
             "max_bytes_ratio_before_external_sort=0",
+            "max_streams_for_file_reading=4",
             # NULLs print as an empty CSV field, matching the answers' encoding
             "format_csv_null_representation=''",
             *extra,
@@ -228,8 +229,8 @@ def main() -> int:
             parts.append(args.settings)
         return "SETTINGS " + ", ".join(parts)
 
-    fuel = settings()
-    fuel5 = settings("query_plan_execute_functions_after_sorting=0")
+    settings_default = settings()
+    settings_q5 = settings("query_plan_execute_functions_after_sorting=0")
     table_vars = build_table_vars(args.sf, args.native)
     suffix = WIRE_SUFFIX[args.wire_protocol]
 
@@ -252,7 +253,7 @@ def main() -> int:
             print("| %-6s | %-8s | no committed answer" % (label, "SKIP"))
             continue
 
-        sql = build_query(tpl, table_vars, fuel, fuel5, suffix)
+        sql = build_query(tpl, table_vars, settings_default, settings_q5, suffix)
         try:
             result, err = run_csv(ch, args.port, sql, args.timeout)
         except subprocess.TimeoutExpired:

@@ -46,7 +46,7 @@ SELECT t_tripkey, st_x(t_pickuploc), st_y(t_pickuploc), t_pickuptime,
  WHERE st_dwithin(t_pickuploc, st_geomfromtext('POINT (-111.7610 34.8697)'), 0.45)
  ORDER BY distance_to_center ASC, t_tripkey ASC
  LIMIT 100
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q2",
@@ -55,7 +55,7 @@ SELECT count() AS trip_count
  FROM {TRIP} t
  WHERE st_intersects(t.t_pickuploc,
      (SELECT z_boundary FROM {ZONE} WHERE z_name = 'Coconino County' LIMIT 1))
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q3",
@@ -71,7 +71,7 @@ SELECT toStartOfMonth(t_pickuptime) AS pickup_month,
      0.045)
  GROUP BY pickup_month
  ORDER BY pickup_month
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q4",
@@ -82,7 +82,7 @@ SELECT z.z_zonekey, z.z_name, count() AS trip_count
    ON st_within(top_trips.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY trip_count DESC, z.z_zonekey ASC
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q5",
@@ -97,7 +97,7 @@ SELECT c.c_custkey, c.c_name AS customer_name,
  HAVING dropoff_count > 5
  ORDER BY monthly_travel_hull_area DESC, c.c_custkey ASC, pickup_month ASC
  LIMIT 100
- {FUEL5}""",
+ {SETTINGS_Q5}""",
     ),
     (
         "Q6",
@@ -114,7 +114,7 @@ SELECT z.z_zonekey, z.z_name,
   ) z ON st_within(t.t_pickuploc, z.z_boundary)
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY total_pickups DESC, z.z_zonekey ASC
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q7",
@@ -130,7 +130,7 @@ WITH trip_lengths AS (
  FROM trip_lengths
  ORDER BY detour_ratio DESC NULLS LAST, reported_distance_m DESC, t_tripkey ASC
  LIMIT 100
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q8",
@@ -141,7 +141,7 @@ SELECT b.b_buildingkey, b.b_name, count() AS nearby_pickup_count
  GROUP BY b.b_buildingkey, b.b_name
  ORDER BY nearby_pickup_count DESC, b.b_buildingkey ASC
  LIMIT 100
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q9",
@@ -161,7 +161,7 @@ WITH b1 AS (SELECT b_buildingkey AS id, b_boundary AS geom FROM {BUILDING}),
  FROM pairs
  ORDER BY iou DESC, building_1 ASC, building_2 ASC
  LIMIT 100
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q10",
@@ -175,7 +175,7 @@ SELECT z.z_zonekey, z.z_name AS pickup_zone,
  GROUP BY z.z_zonekey, z.z_name
  ORDER BY avg_duration DESC NULLS LAST, z.z_zonekey ASC
  LIMIT 100
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q11",
@@ -185,7 +185,7 @@ SELECT count() AS cross_zone_trip_count
  JOIN {TRIP} t            ON st_within(t.t_pickuploc,  pickup_zone.z_boundary)
  JOIN {ZONE} dropoff_zone ON st_within(t.t_dropoffloc, dropoff_zone.z_boundary)
  WHERE pickup_zone.z_zonekey != dropoff_zone.z_zonekey
- {FUEL}""",
+ {SETTINGS}""",
     ),
     (
         "Q12",
@@ -205,7 +205,7 @@ WITH
  GROUP BY t_tripkey
  ORDER BY avg_distance_to_5_nearest DESC, t_tripkey ASC
  LIMIT 100
- {FUEL_SORT}""",
+ {SETTINGS}""",
     ),
 ]
 
@@ -453,15 +453,15 @@ def main():
             f"max_execution_time={timeout}",
             "max_bytes_ratio_before_external_group_by=0",
             "max_bytes_ratio_before_external_sort=0",
+            "max_streams_for_file_reading=4",
             *extra,
         ]
         if extra_settings:
             parts.append(extra_settings)
         return "SETTINGS " + ", ".join(parts)
 
-    fuel = settings()
-    fuel5 = settings("query_plan_execute_functions_after_sorting=0")
-    fuel_sort = fuel
+    settings_default = settings()
+    settings_q5 = settings("query_plan_execute_functions_after_sorting=0")
 
     table_vars = build_table_vars(sf, native, args.legacy_data)
 
@@ -497,7 +497,7 @@ def main():
 
         for i in range(runs):
             # Build the query with table vars and wire-format suffix
-            tq = tpl.format(**{**table_vars, "FUEL": fuel, "FUEL5": fuel5, "FUEL_SORT": fuel_sort})
+            tq = tpl.format(**{**table_vars, "SETTINGS": settings_default, "SETTINGS_Q5": settings_q5})
             if wire_protocol == "mp":
                 suffix = "_mp"
             elif wire_protocol == "buffers":
