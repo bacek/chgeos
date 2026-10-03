@@ -66,3 +66,36 @@ Bit-identical output. With GEOS st_distance: 3.1s (worse). Added generic ColWkbP
 point-point fast path for st_distance (bit-exact vs GEOS, 2000-pair test): rewrite then
 ties original (~1.87s). => Q7 geometry is not the bottleneck (scan/WKB read/marshal/sort are).
 st_distance fast path kept as a generic improvement.
+
+### 5. Q6 probe — no lever in SpatialRTreeJoin
+processors_profile: JoiningTransform 12.25 busy-s/24 streams, File 7.7 s. Right side (filtered
+zones) < 200k entries → single sub-tree, so a global-bbox early reject = the rtree root check.
+Not built.
+
+### 6. WASM guest per-row floor (calibration, SF10 60M rows)
+| shape | wall | guest CPU-s | ser CPU-s |
+|---|---|---|---|
+| st_x(p) | 802 | 4.0 | 3.8 |
+| st_distance(p,q) fast path | 1489 | 7.9 | 8.6 |
+| st_length(st_makeline(p,q)) chain | 1425 | 13.1 | 7.3 |
+st_x wrapper: **native 2.7 ns/row; WASM single-thread 20 ns/row (flat across batch 1k..1M);
+WASM at 24 threads 67 ns/row.** => ~7x codegen + ~3x contention (bandwidth-bound, cf. memory:
+box saturates ~6.5 GB/s memcpy). Per-call overhead is not the issue. The remaining Q1/Q2/Q7 gap
+is the copy-in/copy-out architecture (zero-copy is what DuckDB has) — out of scope for this run.
+Possible small follow-up: devirtualise ColWkbScalarOp/ColWkbPairOp (template param instead of fn
+pointer) to cut the single-thread 20 ns; unlikely to matter at 24 threads.
+
+## Final same-session (after e0810df + 9d77f48), SF10, 5 runs, verify Q1-Q11 PASS
+| Q | chgeos before | chgeos after | DuckDB 1.5.6 | ratio after |
+|---|---|---|---|---|
+| Q1 | 535 | 534 | 580* | 0.92x |
+| Q2 | 762 | 632 | 480 | 1.32x |
+| Q3 | 550 | 565 | 480 | 1.18x |
+| Q4 | 1071 | 1134 | 1140 | 0.99x |
+| Q5 | 5644 | 5906 | 7150 | 0.83x |
+| Q6 | 1970 | 2039 | 1620 | 1.26x |
+| Q7 | 1816 | 1820 | 840 | 2.17x |
+| Q8 | 1433 | 1456 | 1510 | 0.96x |
+| Q9 | 99 | 99 | 130 | 0.76x |
+*DuckDB Q1 is its first query (cold); earlier run gave 330.
+chgeos CPU avg 84.5% during the suite. Only real move: Q2 −17%. Others within run-to-run drift.
