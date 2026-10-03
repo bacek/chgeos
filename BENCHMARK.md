@@ -22,7 +22,7 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 | Q1    | Point-in-radius filter             | 0.07 s   | 0.12 s   | 0.43 s  | 0.81 s   | chgeos   |
 | Q2    | Count trips in county polygon      | 0.08 s   | 0.18 s   | 1.13 s  | 1.68 s   | chgeos   |
 | Q3    | Monthly stats in bbox+buffer       | 0.05 s   | 0.17 s   | 0.50 s  | 0.64 s   | chgeos   |
-| Q4    | Zone distribution (top-1000 tips)  | 1.61 s   | 0.66 s   | 0.91 s  | 4.78 s   | DuckDB   |
+| Q4    | Zone distribution (top-1000 tips)  | 0.68 s   | 0.66 s   | 0.91 s  | 4.78 s   | Tie      |
 | Q5    | Convex hull area per customer/month| 0.46 s   | 0.79 s   | 2.00 s  | 1.16 s   | chgeos   |
 | Q6    | Zone stats for bbox-intersect zones| 0.77 s   | 0.92 s   | 0.87 s  | 2.88 s   | chgeos   |
 | Q7    | Detour ratio (all trips)           | 0.14 s   | 0.28 s   | 2.35 s  | 1.22 s   | chgeos   |
@@ -32,11 +32,11 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 | Q11   | Cross-zone trip count              | 6.41 s   | TIMEOUT  | 7.82 s  | 5.84 s   | PyCanopy |
 | Q12   | 5 nearest buildings per trip (kNN) | 2.44 s   | TIMEOUT  | 18.07 s | 5.71 s   | chgeos   |
 
-**SF1 wins — chgeos: 10, DuckDB: 1, Sedona: 0, PyCanopy: 1, Ties: 0**
+**SF1 wins — chgeos: 10, DuckDB: 0, Sedona: 0, PyCanopy: 1, Ties: 1**
 
-The SF1 chgeos Q4 average includes a cold first run (min/avg/max 0.71/1.61/2.24 s): it is the
-first query to read `zone.parquet` after the trip-only queries. Warm, chgeos is at ~0.7 s, close
-to DuckDB's 0.66 s, but still not ahead.
+SF1 Q4 was re-run warm on an idle box (10 runs, min/avg/max 0.66/0.68/0.71 s); the suite run's
+1.61 s average was one cold read of `zone.parquet`. Q4 is dominated by that zone read, which is the
+same file at every scale factor, so SF1 and SF10 Q4 land close together.
 
 **The SF1 tally understates DuckDB, and the cause is our Parquet files.** `sf1/trip.parquet`
 holds 6M rows in only 4 row groups. DuckDB caps a scan pipeline's thread count at the number
