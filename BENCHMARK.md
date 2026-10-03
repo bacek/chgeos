@@ -65,20 +65,26 @@ explained by this — see the Q7 note below.
 
 | Query | Description                        | chgeos    | DuckDB   | Sedona   | PyCanopy | Winner   |
 |-------|------------------------------------|-----------|----------|----------|----------|----------|
-| Q1    | Point-in-radius filter             | 0.52 s    | 0.38 s   | 0.94 s   | 18.93 s  | DuckDB   |
-| Q2    | Count trips in county polygon      | 0.67 s    | 0.54 s   | 1.64 s   | 12.81 s  | DuckDB   |
-| Q3    | Monthly stats in bbox+buffer       | 0.50 s    | 0.52 s   | 1.43 s   | 14.59 s  | Tie      |
-| Q4    | Zone distribution (top-1000 tips)  | 1.10 s    | 0.98 s   | 1.86 s   | 19.80 s  | DuckDB   |
-| Q5    | Convex hull area per customer/month| 8.95 s    | 6.11 s   | 42.43 s  | 21.93 s  | DuckDB   |
-| Q6    | Zone stats for bbox-intersect zones| 1.77 s    | 1.60 s   | 2.86 s   | 7.74 s   | DuckDB   |
-| Q7    | Detour ratio (all trips)           | 1.86 s    | 0.93 s   | 42.28 s  | 14.39 s  | DuckDB   |
-| Q8    | Nearby pickups per building        | 1.69 s    | 1.77 s   | 2.02 s   | 2.69 s   | Tie      |
+| Q1    | Point-in-radius filter             | 0.54 s    | 0.38 s   | 0.94 s   | 18.93 s  | DuckDB   |
+| Q2    | Count trips in county polygon      | 0.74 s    | 0.54 s   | 1.64 s   | 12.81 s  | DuckDB   |
+| Q3    | Monthly stats in bbox+buffer       | 0.57 s    | 0.52 s   | 1.43 s   | 14.59 s  | DuckDB   |
+| Q4    | Zone distribution (top-1000 tips)  | 1.11 s    | 0.98 s   | 1.86 s   | 19.80 s  | DuckDB   |
+| Q5    | Convex hull area per customer/month| 5.78 s    | 6.11 s   | 42.43 s  | 21.93 s  | chgeos   |
+| Q6    | Zone stats for bbox-intersect zones| 1.91 s    | 1.60 s   | 2.86 s   | 7.74 s   | DuckDB   |
+| Q7    | Detour ratio (all trips)           | 1.80 s    | 0.93 s   | 42.28 s  | 14.39 s  | DuckDB   |
+| Q8    | Nearby pickups per building        | 1.58 s    | 1.77 s   | 2.02 s   | 2.69 s   | chgeos   |
 | Q9    | Building conflation via IoU        | 0.10 s    | 0.13 s   | 0.37 s   | 0.06 s   | PyCanopy |
-| Q10   | Zone avg duration/distance         | 28.25 s   | TIMEOUT  | 17.02 s  | 27.05 s  | Sedona   |
-| Q11   | Cross-zone trip count              | 40.96 s   | TIMEOUT  | TIMEOUT  | 42.97 s  | Tie      |
-| Q12   | 5 nearest buildings per trip (kNN) | 27.29 s   | TIMEOUT  | TIMEOUT  | 98.60 s  | chgeos   |
+| Q10   | Zone avg duration/distance         | 30.29 s   | TIMEOUT  | 17.02 s  | 27.05 s  | Sedona   |
+| Q11   | Cross-zone trip count              | 42.25 s   | TIMEOUT  | TIMEOUT  | 42.97 s  | Tie      |
+| Q12   | 5 nearest buildings per trip (kNN) | 31.45 s   | TIMEOUT  | TIMEOUT  | 98.60 s  | chgeos   |
 
-**SF10 wins — chgeos: 1, DuckDB: 6, Sedona: 1, PyCanopy: 1, Ties: 3**
+**SF10 wins — chgeos: 3, DuckDB: 6, Sedona: 1, PyCanopy: 1, Ties: 1**
+
+The chgeos SF10 column was re-measured on 2026-10-03 at CH `fb4d4a02287` on the
+upstream split files (`max_streams_for_file_reading=4`, cb wire, 5 runs, averages).
+The competitor columns below were measured on the older single-file layout and
+have not been re-run on the split files, so treat SF10 rankings as approximate.
+The paragraph below describes the previous (2026-08-07) chgeos measurement.
 
 Both chgeos columns were re-measured on 2026-08-07 on an idle machine at commit
 `79063df`, and every query was checked against the spatialbench reference answers
