@@ -150,3 +150,11 @@ Clean bench sweep (bracketed): Q7 base 1255/1318 → pt4 1017 (−21%), pt8 1055
 Landed: Q7 QUERY_SETTINGS += max_parsing_threads=4. verify Q7 PASS.
 Q7 vs DuckDB 1.5.6 (840-860): ~1.2x now (was 1.7x).
 Tooling notes: perf report on CH binary spawned addr2line (20 GB, swap full) → poisoned one sweep; flat reports only.
+
+## 10. Prefilter retry with Nullable support — DEAD (again)
+
+Root cause of attempt 1 being inert on Q6: z_boundary is Nullable(String), prefilter required ColumnString. Extended to Nullable varying arg + Nullable(UInt8) result.
+Standalone Q6 build probe (count of zones intersecting the const polygon): 1096 → 865ms (−21%), same 18 rows.
+Full suite interleaved A/B (on/off/on/off, 3 runs, CPU 74-80%): Q6 1880/1824 vs 1798/1817 — no gain; nothing else moves.
+The build-side saving doesn't reach Q6 wall time. Code: CH stash "wasm bbox prefilter + Nullable (dead x2)".
+Noted: Q7 now 915-925ms in these runs (with max_parsing_threads=4) vs DuckDB 840-860 → ~1.08x.
