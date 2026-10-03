@@ -360,6 +360,45 @@ TEST(ColumnarPointPath, BoundaryIsPredicateSpecific_PolygonFirst) {
     }
 }
 
+// The point path keeps the const polygon (and its index) across calls.  Two
+// polygons of identical WKB size, alternated call by call, must each be
+// answered against their own geometry — a cache keyed on anything weaker than
+// the full bytes would answer the second call with the first polygon.
+TEST(ColumnarPointPath, ConstPolygonChangesBetweenCalls) {
+    auto left  = wkt2wkb("POLYGON ((0 0, 1 0, 1 1, 0 1, 0 0))");
+    auto right = wkt2wkb("POLYGON ((2 0, 3 0, 3 1, 2 1, 2 0))");
+    ASSERT_EQ(left.size(), right.size());
+
+    auto in_left  = wkt2wkb("POINT (0.5 0.5)");
+    auto in_right = wkt2wkb("POINT (2.5 0.5)");
+
+    auto run = [&](const std::vector<uint8_t>& poly, uint32_t n) {
+        std::vector<std::vector<uint8_t>> pts;
+        for (uint32_t i = 0; i < n; ++i) pts.push_back(i % 2 ? in_right : in_left);
+        auto* buf = make_columnar(n, {bytes_col(false, pts), bytes_col(true, {poly})});
+        auto got = read_bool_col(
+            columnar_impl_wrapper(buf, n, st_intersects_impl, bbox_op_intersects, false,
+                                  prep_a_st_intersects, prep_b_st_intersects,
+                                  nullptr, nullptr,
+                                  prep_a_pt_st_intersects, prep_b_pt_st_intersects),
+            n);
+        clickhouse_destroy_buffer(reinterpret_cast<uint8_t*>(buf));
+        return got;
+    };
+    auto expect = [](bool left_poly, uint32_t n) {
+        std::vector<uint8_t> e;
+        for (uint32_t i = 0; i < n; ++i) e.push_back((i % 2 == 0) == left_poly ? 1u : 0u);
+        return e;
+    };
+
+    for (uint32_t n : {4u, INDEXED_LOCATOR_MIN_ROWS + 4u}) {
+        SCOPED_TRACE("n=" + std::to_string(n));
+        EXPECT_EQ(run(left,  n), expect(true,  n));
+        EXPECT_EQ(run(right, n), expect(false, n));
+        EXPECT_EQ(run(left,  n), expect(true,  n));
+    }
+}
+
 TEST(ColumnarPrepGeom, ConstColNull_AllResultsZero) {
     // When the const geometry column is NULL, all output rows must be 0.
     auto dummy_wkb = wkt2wkb("POINT (0 0)");

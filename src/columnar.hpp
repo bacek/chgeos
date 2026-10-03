@@ -72,6 +72,61 @@ namespace ch {
 // 9–24 row band; 16 lands on the correct side at both extremes.
 inline constexpr uint32_t INDEXED_LOCATOR_MIN_ROWS = 16;
 
+// True when the WKB header names a plain 2D Polygon or MultiPolygon (either
+// byte order).  Read from the header alone so the point fast path can commit
+// to a polygon without parsing it; anything else — Z/M/SRID flags included —
+// says no and goes the general way.
+inline bool wkb_is_2d_area(std::span<const uint8_t> wkb) noexcept {
+    if (wkb.size() < 5 || wkb[0] > 1) return false;
+    uint32_t t = 0;
+    std::memcpy(&t, wkb.data() + 1, 4);
+    if (wkb[0] == 0) t = __builtin_bswap32(t);
+    return t == 3u || t == 6u;
+}
+
+// The const polygon of the point-in-area fast path, parsed and indexed at most
+// once per distinct WKB.  A constant argument arrives byte-identical in every
+// batch of a query, so rebuilding it per call costs O(edges) each time for no
+// answer change — on a 10k-vertex polygon that dwarfed the per-point work.
+// One entry is enough: a const argument is the same across a query's batches,
+// and a WASM instance runs one call at a time.
+class ConstAreaLocator {
+    using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
+
+    std::vector<uint8_t>                  wkb_;
+    std::unique_ptr<geos::geom::Geometry> geom_;
+    std::unique_ptr<IPIAL>                index_;  // borrows *geom_, so dies first
+
+public:
+    // Point the cache at `wkb`, reparsing only if the bytes differ.  The
+    // comparison is O(size), so call it once per batch, never per row.
+    void bind(std::span<const uint8_t> wkb) {
+        if (geom_ && wkb_.size() == wkb.size()
+            && std::memcmp(wkb_.data(), wkb.data(), wkb.size()) == 0)
+            return;
+        index_.reset();
+        geom_.reset();
+        wkb_.clear();
+        geom_ = read_wkb(wkb);
+        wkb_.assign(wkb.begin(), wkb.end());
+    }
+
+    // Locate c against the bound polygon.  `batch_rows` keeps the old
+    // break-even rule for building the index; once built it is reused.
+    geos::geom::Location locate(const geos::geom::CoordinateXY & c, uint32_t batch_rows) {
+        if (!index_ && batch_rows >= INDEXED_LOCATOR_MIN_ROWS)
+            index_ = std::make_unique<IPIAL>(*geom_);
+        return index_
+            ? index_->locate(&c)
+            : geos::algorithm::locate::SimplePointInAreaLocator::locate(c, geom_.get());
+    }
+
+    static ConstAreaLocator & instance() {
+        static ConstAreaLocator cache;
+        return cache;
+    }
+};
+
 // ── Type tags ────────────────────────────────────────────────────────────────
 
 enum ColType : uint32_t {
@@ -1074,39 +1129,29 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     if (cols[0].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_a = cols[0].get_bytes(0);
                     BBox  bbox_a = wkb_bbox(span_a);
-                    auto  geom_a = read_wkb(span_a);
 
-                    // Point fast path: col(1) contains 2D WKB points — no per-row GEOS alloc.
-                    if (prep_a_point && n > 0) {
-                        auto gtype = geom_a->getGeometryTypeId();
-                        if ((gtype == geos::geom::GEOS_POLYGON
-                          || gtype == geos::geom::GEOS_MULTIPOLYGON)
-                            && all_2d_points(cols[1], n)) {
-                            using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
-                            // Building the segment index costs O(edges); below the
-                            // break-even batch size a direct edge scan is cheaper.
-                            std::optional<IPIAL> locator;
-                            if (n >= INDEXED_LOCATOR_MIN_ROWS) locator.emplace(*geom_a);
-                            for (uint32_t i = 0; i < n; ++i) {
-                                if (cols[1].is_null(i)) { res[i] = 0u; continue; }
-                                auto span_b = cols[1].get_bytes(i);
-                                double px, py;
-                                memcpy(&px, span_b.data() + 5, 8);
-                                memcpy(&py, span_b.data() + 13, 8);
-                                if (bbox_op && !bbox_op(bbox_a, BBox{px, py, px, py})) {
-                                    res[i] = early_ret ? 1u : 0u; continue;
-                                }
-                                geos::geom::CoordinateXY c{px, py};
-                                auto loc = locator
-                                    ? locator->locate(&c)
-                                    : geos::algorithm::locate::SimplePointInAreaLocator::locate(
-                                          c, geom_a.get());
-                                res[i] = prep_a_point(loc) ? 1u : 0u;
+                    // Point fast path: col(1) contains 2D WKB points — no per-row GEOS alloc,
+                    // and the polygon is only parsed once a point survives the bbox test.
+                    if (prep_a_point && n > 0 && wkb_is_2d_area(span_a)
+                        && all_2d_points(cols[1], n)) {
+                        auto & area = ConstAreaLocator::instance();
+                        bool bound = false;  // parse only once a point passes the bbox
+                        for (uint32_t i = 0; i < n; ++i) {
+                            if (cols[1].is_null(i)) { res[i] = 0u; continue; }
+                            auto span_b = cols[1].get_bytes(i);
+                            double px, py;
+                            memcpy(&px, span_b.data() + 5, 8);
+                            memcpy(&py, span_b.data() + 13, 8);
+                            if (bbox_op && !bbox_op(bbox_a, BBox{px, py, px, py})) {
+                                res[i] = early_ret ? 1u : 0u; continue;
                             }
-                            return out;
+                            if (!bound) { area.bind(span_a); bound = true; }
+                            res[i] = prep_a_point(area.locate({px, py}, n)) ? 1u : 0u;
                         }
+                        return out;
                     }
 
+                    auto  geom_a = read_wkb(span_a);
                     auto  pa     = PGF::prepare(geom_a.get());
                     for (uint32_t i = 0; i < n; ++i) {
                         if (cols[1].is_null(i)) { res[i] = 0u; continue; }
@@ -1124,38 +1169,29 @@ raw_buffer* columnar_impl_wrapper(raw_buffer* ptr, uint32_t,
                     if (cols[1].is_null(0)) { std::fill(res, res + n, 0u); return out; }
                     auto span_b = cols[1].get_bytes(0);
                     BBox  bbox_b = wkb_bbox(span_b);
-                    auto  geom_b = read_wkb(span_b);
 
-                    // Point fast path: col(0) contains 2D WKB points — no per-row GEOS alloc.
-                    if (prep_b_point && n > 0) {
-                        auto gtype = geom_b->getGeometryTypeId();
-                        if ((gtype == geos::geom::GEOS_POLYGON
-                          || gtype == geos::geom::GEOS_MULTIPOLYGON)
-                            && all_2d_points(cols[0], n)) {
-                            using IPIAL = geos::algorithm::locate::IndexedPointInAreaLocator;
-                            // Building the segment index costs O(edges); below the
-                            // break-even batch size a direct edge scan is cheaper.
-                            std::optional<IPIAL> locator;
-                            if (n >= INDEXED_LOCATOR_MIN_ROWS) locator.emplace(*geom_b);
-                            for (uint32_t i = 0; i < n; ++i) {
-                                if (cols[0].is_null(i)) { res[i] = 0u; continue; }
-                                auto span_a = cols[0].get_bytes(i);
-                                double px, py;
-                                memcpy(&px, span_a.data() + 5, 8);
-                                memcpy(&py, span_a.data() + 13, 8);
-                                if (bbox_op && !bbox_op(BBox{px, py, px, py}, bbox_b)) {
-                                    res[i] = early_ret ? 1u : 0u; continue;
-                                }
-                                geos::geom::CoordinateXY c{px, py};
-                                auto loc = locator
-                                    ? locator->locate(&c)
-                                    : geos::algorithm::locate::SimplePointInAreaLocator::locate(
-                                          c, geom_b.get());
-                                res[i] = prep_b_point(loc) ? 1u : 0u;
+                    // Point fast path: col(0) contains 2D WKB points — no per-row GEOS alloc,
+                    // and the polygon is only parsed once a point survives the bbox test.
+                    if (prep_b_point && n > 0 && wkb_is_2d_area(span_b)
+                        && all_2d_points(cols[0], n)) {
+                        auto & area = ConstAreaLocator::instance();
+                        bool bound = false;  // parse only once a point passes the bbox
+                        for (uint32_t i = 0; i < n; ++i) {
+                            if (cols[0].is_null(i)) { res[i] = 0u; continue; }
+                            auto span_a = cols[0].get_bytes(i);
+                            double px, py;
+                            memcpy(&px, span_a.data() + 5, 8);
+                            memcpy(&py, span_a.data() + 13, 8);
+                            if (bbox_op && !bbox_op(BBox{px, py, px, py}, bbox_b)) {
+                                res[i] = early_ret ? 1u : 0u; continue;
                             }
-                            return out;
+                            if (!bound) { area.bind(span_b); bound = true; }
+                            res[i] = prep_b_point(area.locate({px, py}, n)) ? 1u : 0u;
                         }
+                        return out;
                     }
+
+                    auto  geom_b = read_wkb(span_b);
 
                     auto  pb     = PGF::prepare(geom_b.get());
                     for (uint32_t i = 0; i < n; ++i) {
