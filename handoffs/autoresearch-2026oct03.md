@@ -183,3 +183,10 @@ vs DuckDB 1.5.6: Q1 ~280 vs 330 (win), Q3 ~280 vs 460 (win), Q2 ~325 vs 480 (win
 | Q8 | 1447/1427 | 1530 | win 1.06x |
 | Q9 | 47/43 | 140 | win 3x |
 7 wins, 1 parity, 1 loss. Remaining targets: Q7, Q6.
+
+## 13. Host bbox prefilter — LANDED (sections 8 and 10 were measurement errors)
+
+Sections 8/10 called it dead. Both A/Bs ran on the **cb** wire (then the bench default); the prefilter lives in the COLUMNAR_V1 path only, so it never fired. The later "col beats cb by 35%" (section 11) was col **plus** prefilter: the server still had create_prefilter.sql loaded (reverted in git, never reloaded).
+Clean col A/B (pre/no/pre/no, 3 runs): Q1 309/282 vs 425/418 (−29%), Q3 306/290 vs 432/426 (−30%), Q6 1728/1725 vs 1975/1959 (−12%), Q2 336/331 vs 362/356 (−7%), Q4 +3%, rest flat.
+verify Q1-Q11 PASS. CH commit on autoresearch-2026oct03; create.sql adds bbox_disjoint_result to the 35 spatial predicates (=1 for st_disjoint_cb).
+Harness trap found on the way: reload.sh's INSERT reads stdin in background jobs → hangs → functions vanish; use </dev/null.

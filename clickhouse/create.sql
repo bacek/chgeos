@@ -212,21 +212,21 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_intersects_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_touches_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 -- st_dwithin: distance-based, bbox pruning is NOT safe (false negatives possible)
 CREATE OR REPLACE FUNCTION st_dwithin_mp
@@ -241,35 +241,35 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 --
 CREATE OR REPLACE FUNCTION st_intersects_extent_rb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'RowBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'RowBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_within_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_crosses_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_overlaps_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 -- st_disjoint: inverted bbox logic — pruning not safe
 CREATE OR REPLACE FUNCTION st_disjoint_mp
@@ -284,28 +284,28 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_covers_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_coveredby_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_containsproperly_mp
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, serialization_format = 'RowBinary';
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, serialization_format = 'RowBinary';
 
 CREATE OR REPLACE FUNCTION st_relate_mp
 LANGUAGE WASM FROM 'chgeos'
@@ -842,76 +842,76 @@ SETTINGS serialization_format = 'RowBinary';
 -- COLUMNAR_V1 — canonical names (no suffix)
 -- ---------------------------------------------------------------------------
 
--- Predicates (2 geometry args) — COLUMNAR_V1, is_spatial_predicate = 1
+-- Predicates (2 geometry args) — COLUMNAR_V1, is_spatial_predicate = 1, bbox_disjoint_result = 0
 CREATE OR REPLACE FUNCTION st_contains
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_intersects
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_touches
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_within
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_crosses
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_overlaps
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_equals
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_covers
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_coveredby
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_containsproperly
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 -- st_disjoint: inverted bbox logic — no spatial predicate flag
 CREATE OR REPLACE FUNCTION st_disjoint
@@ -925,7 +925,7 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String, dist Float64) RETURNS UInt8
 ABI COLUMNAR_V1
 DETERMINISTIC
-SETTINGS is_spatial_predicate = 1, spatial_expand_arg = 2;
+SETTINGS is_spatial_predicate = 1, bbox_disjoint_result = 0, spatial_expand_arg = 2;
 
 -- Scalar Float64 (1 geometry arg)
 CREATE OR REPLACE FUNCTION st_x
@@ -1571,7 +1571,7 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String, dist Float64) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, spatial_expand_arg = 2;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0, spatial_expand_arg = 2;
 
 -- UInt8 (1 geometry arg)
 
@@ -1691,70 +1691,70 @@ LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_touches_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_within_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_crosses_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_overlaps_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_disjoint_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary';
+SETTINGS serialization_format = 'ColumnBinary', bbox_disjoint_result = 1;
 
 CREATE OR REPLACE FUNCTION st_equals_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_covers_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_coveredby_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 CREATE OR REPLACE FUNCTION st_containsproperly_cb
 LANGUAGE WASM FROM 'chgeos'
 ARGUMENTS (a String, b String) RETURNS UInt8
 ABI BUFFERED_V1
 DETERMINISTIC
-SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1;
+SETTINGS serialization_format = 'ColumnBinary', is_spatial_predicate = 1, bbox_disjoint_result = 0;
 
 -- String (2 geometry args) — relation output
 
