@@ -168,3 +168,18 @@ Interleaved bench col/cb/col/cb (3 runs): Q1 283/276 vs 440/420 (−35%), Q3 287
 verify_sf (col) Q1-Q9 PASS. Default in bench_sf.py now --wire-protocol col.
 Contradicts the Sep-12 "col vs cb parity" memory: that predates this session's col-side fast paths? No — guest is shared; most likely the cb host serializer regressed or Q1/Q3 const-arg handling differs; worth a CH-side look if cb must stay.
 vs DuckDB 1.5.6: Q1 ~280 vs 330 (win), Q3 ~280 vs 460 (win), Q2 ~325 vs 480 (win).
+
+## 12. Same-session head-to-head (col wire, all landed changes) — 2026-10-03 night, box load 20-25
+
+| Q | chgeos a/b ms | DuckDB 1.5.6 | |
+|---|---|---|---|
+| Q1 | 295/314 | 360 | win 1.18x |
+| Q2 | 342/344 | 480 | win 1.40x |
+| Q3 | 324/299 | 520 | win 1.67x |
+| Q4 | 1164/1150 | 1520 | win 1.31x |
+| Q5 | 5796/5916 | 8500 | win 1.45x |
+| Q6 | 1769/1677 | 1740 | parity |
+| Q7 | 980/1025 | 850 | loss 1.18x |
+| Q8 | 1447/1427 | 1530 | win 1.06x |
+| Q9 | 47/43 | 140 | win 3x |
+7 wins, 1 parity, 1 loss. Remaining targets: Q7, Q6.
