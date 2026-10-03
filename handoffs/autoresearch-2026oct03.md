@@ -235,3 +235,13 @@ verify_sf SF10 Q1-Q11 on cb: 11/11 PASS. Interleaved cb/col/cb/col, 3 runs, load
 cb Q1 305/309 Q2 359/349 Q3 325/318 Q4 1087/1130 Q6 1730/1699 Q8 586/590
 col Q1 306/293 Q2 345/358 Q3 318/311 Q4 1130/1114 Q6 1706/1725 Q8 539/543
 cb now at parity with col on Q1-Q6 (was Q1 ~425, Q3 ~430 without prefilter). Q8 cb +8% (join path, unrelated).
+
+## 17. Q4 anatomy + two dead levers (2026-10-04 08:00, load ~3)
+
+Q4 = top-1000 trip build (probe.sh 185-208 ms) + zone probe scan (805 ms warm) ≈ 1.0-1.17 s; join itself ~0.
+- Zone-scan knob sweep (5 runs each): mpt16 866, mpt24 860, block 8192 823, block 4096+mpt16 812,
+  max_streams_for_file_reading=5 849, max_threads=48 887, default 805 → all flat/worse. DEAD.
+- Build without t_pickuploc is 91 ms, so reading pickuploc for 60M rows costs ~100 ms. Two-phase rewrite
+  (`PREWHERE t_tripkey IN (top-1000 keys)`, equivalent since t_tripkey is unique) = 178 vs 185 ms, CPU 2.98 vs 1.79 s. DEAD:
+  late materialization doesn't skip pages because the top-1000 rows are scattered across all row groups.
+Q4 at ~1.0-1.17 s vs DuckDB 1.08 is read-bound parity; nothing left on the chgeos/join side.
