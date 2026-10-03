@@ -99,3 +99,19 @@ pointer) to cut the single-thread 20 ns; unlikely to matter at 24 threads.
 | Q9 | 99 | 99 | 130 | 0.76x |
 *DuckDB Q1 is its first query (cold); earlier run gave 330.
 chgeos CPU avg 84.5% during the suite. Only real move: Q2 −17%. Others within run-to-run drift.
+
+## OVERNIGHT (started after user sign-off)
+
+### 7. Per-query settings — LANDED (>=10% bar)
+Sweep (.scratch/ar/sweep, sweep2; bracketing base runs agree within 2%). Kept:
+| Q | base | setting | after | Δ |
+|---|---|---|---|---|
+| Q1 | ~498 | parquet block 32k | 423 | −15% |
+| Q2 | ~615 | max_threads=8, max_parsing_threads=8, block 32k | 361 | −41% |
+| Q3 | ~512 | block 32k | 449 | −12% |
+| Q7 | ~1800 | max_threads=12, block 8k | ~1450 (noisy 1288–1999) | −19% |
+| Q9 | ~95 | block 8k | 46 | −52% |
+Q5 keeps query_plan_execute_functions_after_sorting=0. Rejected: Q4 mt8 (−2% confirm), anything for
+Q5/Q6/Q8 (block 8k makes Q5 +19%, Q6 +27%; mt8 makes Q8 +60%). Uniform block size is dead (as before).
+Implemented as QUERY_SETTINGS dict in bench_sf.py, shared by verify_sf.py. verify Q1-Q9 PASS.
+Note: DuckDB Q1 330 / Q2 480 / Q3 460 / Q7 840 / Q9 140 → Q1, Q2, Q3(~), Q9 now at/under DuckDB.

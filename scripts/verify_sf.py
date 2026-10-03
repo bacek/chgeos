@@ -38,7 +38,7 @@ import sys
 import numpy as np
 import pandas as pd
 
-from bench_sf import QUERIES, _apply_suffix, build_table_vars
+from bench_sf import QUERIES, QUERY_SETTINGS, _apply_suffix, build_table_vars
 
 DEFAULT_ANSWERS_ROOT = os.path.expanduser(
     "~/src/sedona-spatialbench/benchmark/answers"
@@ -165,9 +165,8 @@ def is_boundary_tie(query: str, issues: list[dict], answer: pd.DataFrame) -> boo
     return True
 
 
-def build_query(tpl, table_vars, settings_default, settings_q5, suffix):
-    sql = tpl.format(**table_vars, SETTINGS=settings_default,
-                     SETTINGS_Q5=settings_q5)
+def build_query(tpl, table_vars, settings_clause, suffix):
+    sql = tpl.format(**table_vars, SETTINGS=settings_clause)
     return _apply_suffix(sql, suffix)
 
 
@@ -229,8 +228,6 @@ def main() -> int:
             parts.append(args.settings)
         return "SETTINGS " + ", ".join(parts)
 
-    settings_default = settings()
-    settings_q5 = settings("query_plan_execute_functions_after_sorting=0")
     table_vars = build_table_vars(args.sf, args.native)
     suffix = WIRE_SUFFIX[args.wire_protocol]
 
@@ -253,7 +250,7 @@ def main() -> int:
             print("| %-6s | %-8s | no committed answer" % (label, "SKIP"))
             continue
 
-        sql = build_query(tpl, table_vars, settings_default, settings_q5, suffix)
+        sql = build_query(tpl, table_vars, settings(*QUERY_SETTINGS.get(label, [])), suffix)
         try:
             result, err = run_csv(ch, args.port, sql, args.timeout)
         except subprocess.TimeoutExpired:

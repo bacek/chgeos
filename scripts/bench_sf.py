@@ -97,7 +97,7 @@ SELECT c.c_custkey, c.c_name AS customer_name,
  HAVING dropoff_count > 5
  ORDER BY monthly_travel_hull_area DESC, c.c_custkey ASC, pickup_month ASC
  LIMIT 100
- {SETTINGS_Q5}""",
+ {SETTINGS}""",
     ),
     (
         "Q6",
@@ -234,6 +234,24 @@ _SPATIAL_FUNCS = sorted([
     # CH built-in geometry constructors used in queries
     "st_point",
 ])
+
+
+# Per-query session settings, appended after the shared defaults.  Each entry
+# was kept only for a >=10% same-session win at SF10 (handoffs/autoresearch-
+# 2026oct03.md, "per-query settings"); the rest of the suite is left on the
+# defaults because the same knobs make Q5/Q6/Q8 slower.
+#   Q5: run functions before the final sort (avoid spill-era plan, see memory).
+#   Q1/Q3: smaller Parquet blocks keep the WKB working set in cache.
+#   Q2: fewer threads cut WASM contention; smaller blocks as for Q1.
+#   Q7/Q9: 8k-row Parquet blocks (WKB-heavy scans).
+QUERY_SETTINGS = {
+    "Q1": ["input_format_parquet_max_block_size=32768"],
+    "Q2": ["max_threads=8", "max_parsing_threads=8", "input_format_parquet_max_block_size=32768"],
+    "Q3": ["input_format_parquet_max_block_size=32768"],
+    "Q5": ["query_plan_execute_functions_after_sorting=0"],
+    "Q7": ["max_threads=12", "input_format_parquet_max_block_size=8192"],
+    "Q9": ["input_format_parquet_max_block_size=8192"],
+}
 
 
 def _apply_suffix(sql: str, suffix: str) -> str:
@@ -460,8 +478,6 @@ def main():
             parts.append(extra_settings)
         return "SETTINGS " + ", ".join(parts)
 
-    settings_default = settings()
-    settings_q5 = settings("query_plan_execute_functions_after_sorting=0")
 
     table_vars = build_table_vars(sf, native, args.legacy_data)
 
@@ -497,7 +513,7 @@ def main():
 
         for i in range(runs):
             # Build the query with table vars and wire-format suffix
-            tq = tpl.format(**{**table_vars, "SETTINGS": settings_default, "SETTINGS_Q5": settings_q5})
+            tq = tpl.format(**{**table_vars, "SETTINGS": settings(*QUERY_SETTINGS.get(label, []))})
             if wire_protocol == "mp":
                 suffix = "_mp"
             elif wire_protocol == "buffers":
