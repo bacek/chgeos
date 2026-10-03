@@ -309,3 +309,17 @@ Re-applied stash on top of the host-overhead fix. Interleaved A/B (AB_PAR_GROUPS
 | par=8 | 17.6 / 19.6 s | 34.5 / 34.8 s | 565 / 578 |
 
 Round 2 (cleaner): Q11 −1%, Q10 +9%; CPU +16%. Round-1 par=1 Q11 is an outlier. Not a win; re-stashed as "spatial parallel group eval (dead on 77700fc, 2026-10-04)". Q10 remaining gap (~18.9 vs Sedona 17.0) is not group-eval parallelism.
+
+### 23. kd-partitioned sub-trees — WIN on Q11 (CH commit below)
+
+runPostBuildPhase built 24 sub-trees from contiguous slices of arrival-order entries → every tree spans the whole extent, every probe walks all 24. Now kd bisection (nth_element on box centres, alternating axes, recursive threads) gives spatially disjoint trees.
+
+Uncapped (3 rounds): Q11 30.4s vs 37.6s head, CPU 355 vs 490; **Q10 +15%** (20.9 vs 18.3s) — serial top-level nth_element on the 60M-trip build. Capped at 10M entries (trip build keeps contiguous slices), 2 rounds:
+
+| arm | Q10 | Q11 | Q11 CPU-s |
+|---|---|---|---|
+| head | 18.1 / 18.2 | 34.7 / 43.3 | 490 / 502 |
+| kd ≤10M | 17.6 / 18.1 | 31.1 / 26.6 | 379 / 370 |
+| kd uncapped | 20.8 / 20.7 | 30.1 / 32.6 | 361 / 359 |
+
+Committed the capped variant. verify_sf SF10 Q1–Q11 all PASS. Q10 still ~18 s vs Sedona 17.0 — next: parallel top-level partition (sample median + parallel std::partition) so the 60M build also gets disjoint trees without the serial cost.
