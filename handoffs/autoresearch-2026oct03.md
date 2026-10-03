@@ -115,3 +115,12 @@ Q5 keeps query_plan_execute_functions_after_sorting=0. Rejected: Q4 mt8 (−2% c
 Q5/Q6/Q8 (block 8k makes Q5 +19%, Q6 +27%; mt8 makes Q8 +60%). Uniform block size is dead (as before).
 Implemented as QUERY_SETTINGS dict in bench_sf.py, shared by verify_sf.py. verify Q1-Q9 PASS.
 Note: DuckDB Q1 330 / Q2 480 / Q3 460 / Q7 840 / Q9 140 → Q1, Q2, Q3(~), Q9 now at/under DuckDB.
+
+## 8. Host bbox prefilter for const-arg spatial predicates — DEAD
+
+CH COLUMNAR_V1 executeImpl: one const geometry arg → per-row wkbBBox, bbox-disjoint rows get per-function `bbox_disjoint_result`, only candidates go to guest (bail if >50% candidates).
+Interleaved A/B (on/off/on/off, 5 runs, same binary, CPU 63–75%), on vs off ms:
+Q1 440/432 vs 435/444 · Q2 359/361 vs 369/362 · Q3 453/444 vs 445/434 · Q4 1136/1080 vs 1101/1073 · Q6 2229*/1934 vs 1926/1911 · Q8 1487/1462 vs 1459/1466 (* noisy arm).
+Zero gain: guest already rejects cheaply by bbox; cost is reading/marshalling the column, not the predicate.
+Code: CH stash "wasm bbox_disjoint_result prefilter (dead, 2026-10-03)"; create.sql reverted.
+Side bug (unfixed): `st_disjoint_cb` has is_spatial_predicate=1, but disjoint is TRUE for disjoint bboxes → unsafe for RTree join / Parquet GeoFilter. Flag should be cleared.
