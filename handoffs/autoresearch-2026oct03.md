@@ -207,3 +207,23 @@ Interleaved A/B (env toggle, same binary, removed before commit), SF10 col, 3 ru
 
 Q8 −62%; Q4/Q6 flat. Earlier "Q4/Q6 +15-20%" reading was external load (root python3, load 20).
 verify_sf SF10 Q1–Q11: 11/11 PASS.
+
+## 15. Head-to-head after grid (2026-10-04 07:00, box load 7→29, external noise)
+
+| Q | chgeos a/b avg ms | DuckDB 1.5.6 | |
+|---|---|---|---|
+| Q1 | 398/357 | 370 | parity |
+| Q2 | 465/371 | 530 | win 1.1-1.4x |
+| Q3 | 423/344 | 490 | win 1.2-1.4x |
+| Q4 | 1246/1198 | 1220 | parity |
+| Q5 | 6294/5570 | 8850 | win 1.4-1.6x |
+| Q6 | 1906/1823 | 2010 | win 1.1x |
+| Q7 | 1073/1051 | 960 | loss 1.1x |
+| Q8 | 573/549 | 1640 | **win 3.0x** |
+| Q9 | 47/42 | 130 | win 3x |
+
+Q6 anatomy (probe.sh): zone build subquery alone 855ms/10 CPU-s + trip probe-side scan alone 877ms/16.6 CPU-s = whole Q6;
+join itself ~0. Both reader-bound. Late materialization (PREWHERE on pickuploc) saves only 8% (810 vs 877):
+matching rows are scattered, pages still decode → spatial runtime-filter pushdown is not worth building.
+Q7 native rewrite `L2Distance(readWKBPoint(a), readWKBPoint(b))` is bit-identical but only −11% (1390→1235 probe);
+read-bound; not adopted (bypasses the library for a marginal gain).
