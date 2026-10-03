@@ -227,3 +227,11 @@ join itself ~0. Both reader-bound. Late materialization (PREWHERE on pickuploc) 
 matching rows are scattered, pages still decode → spatial runtime-filter pushdown is not worth building.
 Q7 native rewrite `L2Distance(readWKBPoint(a), readWKBPoint(b))` is bit-identical but only −11% (1390→1235 probe);
 read-bound; not adopted (bypasses the library for a marginal gain).
+
+## 16. bbox prefilter on cb (buffered) path (CH, after 5cfbb7b5a04)
+
+tryBboxPrefilter only wrapped run_columnar; buffered `execute()` never called it. Now both paths do.
+verify_sf SF10 Q1-Q11 on cb: 11/11 PASS. Interleaved cb/col/cb/col, 3 runs, load ~15:
+cb Q1 305/309 Q2 359/349 Q3 325/318 Q4 1087/1130 Q6 1730/1699 Q8 586/590
+col Q1 306/293 Q2 345/358 Q3 318/311 Q4 1130/1114 Q6 1706/1725 Q8 539/543
+cb now at parity with col on Q1-Q6 (was Q1 ~425, Q3 ~430 without prefilter). Q8 cb +8% (join path, unrelated).
