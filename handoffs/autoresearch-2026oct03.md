@@ -347,3 +347,14 @@ Fix: reuse right_columns_by_name / out_left_columns / out_right_columns, and onl
 | fix | 14.3 / 14.4 / 14.0 | 26.6 / 25.7 / 26.3 | 147 / 150 / 148 |
 
 Q10 −22% → ~14.2 s, beats Sedona 17.0. Q11 −5% → ~26 s vs PyCanopy 43.0. verify_sf SF10 Q1–Q11 all PASS. Both Q10/Q11 competitor targets met.
+
+### 26. kd cap 10M → 1M for SF1 (CH 4cae932a453)
+
+SF1 Q10/Q11 had drifted from the morning baseline (2.62/5.86 s) to 3.27/6.41 s in the 5-run suite. SF1's 6M-trip build fell under the 10M kd cap. Env A/B on SF1, 2 rounds × 3 runs, load 4–10:
+
+| cap | Q10 | Q11 |
+|---|---|---|
+| 10M | 2.54 / 2.65 | 6.07 / 6.11 |
+| 1M | 2.60 / 2.45 | 5.90 / 5.94 |
+
+Q11 −3%, back within 1–2% of morning; Q10 noise (the 3.27 suite figure was noise, A/B shows ~2.5–2.6 either way). Zone tree (same file at all SFs) stays kd-partitioned, SF10 trip build was already above the cap. SF10 check at 4cae932a453 (load 12): Q10 14.11 s, Q11 28.06 s (vs 14.05/26.87 suite at load 19 — inside noise). verify_sf SF1 Q10/Q11 and SF10 Q8–Q11 PASS.
