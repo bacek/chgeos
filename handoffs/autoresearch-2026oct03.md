@@ -368,3 +368,12 @@ Fresh-server SF1 Q11 ≈ 5.8–6.3 s vs PyCanopy 5.84 (tie). Named WASM profile 
 - Flat WKB rings + GEOS RayCrossingCounter (bit-exact vs SimplePointInAreaLocator, unit-tested) below N points, 2 rounds: N=16 ≈ head (5.88/5.94 vs 5.81/6.29), N=64 worse (6.36/6.49), unlimited catastrophic (Q11 59 s, Q10 34 s — large polygons need the index). Same family as tg / Y-slab, same verdict.
 Reverted. No point-in-polygon engine work left for Q11; remaining structural lever is the fused double join (broken on this query shape: `Not found column __table1.z_zonekey`; was 7× slower in April).
 - Fused SpatialRTreeDoubleJoin reviewed, not built: it probes the zone tree with every trip twice (pickup + dropoff) and evaluates per zone group. Join2 today already costs ~60 guest CPU-s for 3M trips probing zones; fused would do that for 6M pickups + 6M dropoffs (~4× join2's work) and lose join1's zone-major amortisation (one IPIAL per zone for thousands of trips). Structurally explains April's 7× loss — dead, not just unfinished.
+
+### 28. Fused join removed (CH 83b4f08a2a9); Q11 SQL rewrite probe
+
+Removed SpatialRTreeDoubleJoin + SpatialJoinFusePass + query_plan_fuse_spatial_joins (−589 lines). Root cause of its "missing column" error: the planner never set fused_first_probe_left_col, so the inner join was dropped but the double join never built. verify_sf SF1 Q9–Q11 PASS.
+
+Rewrite: two independent zone-major joins (pickup, dropoff) each yielding (t_tripkey, zonekey), hash-joined on t_tripkey, WHERE pz != dz. Same SF1 count 176391.
+- SF1: 5.03 / 4.84 / 4.86 s vs canonical ~6.0 s (−19%, beats PyCanopy 5.84).
+- SF10: 31.6 / 30.7 s vs canonical 26.9 s (+15% — two 60M-trip tree builds). Count 2727523 (not checked against reference answer).
+Not applied to bench_sf.py: benchmarks run the canonical spatialbench SQL for every engine.
