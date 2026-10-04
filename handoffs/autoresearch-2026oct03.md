@@ -377,3 +377,7 @@ Rewrite: two independent zone-major joins (pickup, dropoff) each yielding (t_tri
 - SF1: 5.03 / 4.84 / 4.86 s vs canonical ~6.0 s (−19%, beats PyCanopy 5.84).
 - SF10: 31.6 / 30.7 s vs canonical 26.9 s (+15% — two 60M-trip tree builds). Count 2727523 (not checked against reference answer).
 Not applied to bench_sf.py: benchmarks run the canonical spatialbench SQL for every engine.
+
+### 29. Q11 runs PyCanopy's two-join plan (bench_sf.py)
+
+PyCanopy's Q11 is hand-coded Polars (two independent within_joins → (tripkey, zonekey), joined per aligned morsel). bench_sf.py Q11 now uses the same plan in SQL: two zone-probes-trips joins matched on t_tripkey. verify_sf PASS at SF1 and SF10. Fresh-server 5 runs: SF1 4.60 s (vs chained ~6.0 s; PyCanopy 5.84), SF10 28.2 s (min 26.1; chained 26.9). BENCHMARK.md note explains the plan difference. Variant B (single 12M-point join + per-trip |P|·|D|−|P∩D|): SF1 3.7–4.0 s but SF10 34–36 s — not used.

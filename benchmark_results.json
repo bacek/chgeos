@@ -65,7 +65,7 @@
         {
           "query": "q11",
           "status": "success",
-          "time_seconds": 6.031
+          "time_seconds": 4.603
         },
         {
           "query": "q12",
@@ -131,7 +131,7 @@
         {
           "query": "q11",
           "status": "success",
-          "time_seconds": 26.872
+          "time_seconds": 28.215
         },
         {
           "query": "q12",

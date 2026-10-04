@@ -177,14 +177,22 @@ SELECT z.z_zonekey, z.z_name AS pickup_zone,
  LIMIT 100
  {SETTINGS}""",
     ),
+    # Q11 runs the plan PyCanopy hand-codes (bench/spatial_bench/queries/q11.py):
+    # resolve pickup and dropoff zones with two independent spatial joins, then
+    # match them on t_tripkey, rather than chaining the dropoff join on the
+    # pickup join's output as the spatialbench SQL text does.
     (
         "Q11",
         """\
 SELECT count() AS cross_zone_trip_count
- FROM {ZONE} pickup_zone
- JOIN {TRIP} t            ON st_within(t.t_pickuploc,  pickup_zone.z_boundary)
- JOIN {ZONE} dropoff_zone ON st_within(t.t_dropoffloc, dropoff_zone.z_boundary)
- WHERE pickup_zone.z_zonekey != dropoff_zone.z_zonekey
+ FROM (SELECT t.t_tripkey AS tripkey, pickup_zone.z_zonekey AS pickup_zonekey
+         FROM {ZONE} pickup_zone
+         JOIN {TRIP} t ON st_within(t.t_pickuploc, pickup_zone.z_boundary)) p
+ JOIN (SELECT t.t_tripkey AS tripkey, dropoff_zone.z_zonekey AS dropoff_zonekey
+         FROM {ZONE} dropoff_zone
+         JOIN {TRIP} t ON st_within(t.t_dropoffloc, dropoff_zone.z_boundary)) d
+   ON p.tripkey = d.tripkey
+ WHERE p.pickup_zonekey != d.dropoff_zonekey
  {SETTINGS}""",
     ),
     (
