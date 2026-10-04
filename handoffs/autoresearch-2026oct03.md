@@ -360,3 +360,10 @@ SF1 Q10/Q11 had drifted from the morning baseline (2.62/5.86 s) to 3.27/6.41 s i
 Q11 −3%, back within 1–2% of morning; Q10 noise (the 3.27 suite figure was noise, A/B shows ~2.5–2.6 either way). Zone tree (same file at all SFs) stays kd-partitioned, SF10 trip build was already above the cap. SF10 check at 4cae932a453 (load 12): Q10 14.11 s, Q11 28.06 s (vs 14.05/26.87 suite at load 19 — inside noise). verify_sf SF1 Q10/Q11 and SF10 Q8–Q11 PASS.
 
 **Correction to §26:** the SF1 Q10/Q11 "regression" is mostly server state, not code. Same build 4cae932a453, quiet box: after prior SF10/verify work Q10 3.19 / Q11 6.48 s; right after restart_ch+reload Q10 2.58 / Q11 6.03 s (5 runs each). The kd cap change is worth ~3% on Q11 at most. BENCHMARK.md SF1 Q10/Q11 now use fresh-server numbers. Cause of the warm-server slowdown (allocator/page-cache/WASM instance state?) not investigated.
+
+### 27. SF1 Q11 vs PyCanopy — guest point-in-polygon levers DEAD
+
+Fresh-server SF1 Q11 ≈ 5.8–6.3 s vs PyCanopy 5.84 (tie). Named WASM profile (wasmtime perfmap + `--profiling-funcs`): guest = GEOS WKB parse ~19%, IPIAL STRtree build ~15%, ring locate ~13%; trips span ~worldwide zones so each join2 call sees a new zone with ~28 points.
+- Multi-entry LRU for ConstAreaLocator (256 entries): flat (6.09 vs 6.03 s). Same finding as the 2026-04 IPIAL-cache memo (hit rate too low) — should have checked memory first.
+- Flat WKB rings + GEOS RayCrossingCounter (bit-exact vs SimplePointInAreaLocator, unit-tested) below N points, 2 rounds: N=16 ≈ head (5.88/5.94 vs 5.81/6.29), N=64 worse (6.36/6.49), unlimited catastrophic (Q11 59 s, Q10 34 s — large polygons need the index). Same family as tg / Y-slab, same verdict.
+Reverted. No point-in-polygon engine work left for Q11; remaining structural lever is the fused double join (broken on this query shape: `Not found column __table1.z_zonekey`; was 7× slower in April).
