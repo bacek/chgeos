@@ -13,13 +13,15 @@ This is my pet-project with `-Ofun` mentality.
 
 Having said that, I'm not saying it will never be useful.
 
-## Status (2026-10-04)
+## Status (2026-10-05)
 
 **Mostly done in its current scope.** On the [SpatialBench](https://github.com/apache/sedona-spatialbench)
-suite chgeos is the fastest engine on 11 of 12 queries at SF1 (one tie) and 9 of 12 at SF10
-(one tie), against DuckDB 1.5.6, SedonaDB 0.4.1 and PyCanopy 0.4.1. The only two losses,
-SF10 Q4 and Q7, are to DuckDB, and both are bound by ClickHouse's Parquet reader, not by
-geometry. See [BENCHMARK.md](BENCHMARK.md).
+suite, with every engine measured on an idle machine, chgeos is the fastest engine on 7 of 12
+queries at SF1 (two ties) and 6 of 12 at SF10 (three ties), against DuckDB 1.5.6, SedonaDB 0.4.1
+and PyCanopy 0.4.1. It wins every scan, filter and aggregation query except SF10 Q7, which
+DuckDB takes and which is bound by ClickHouse's Parquet reader. The losses are the heavy
+spatial joins and the kNN: PyCanopy takes Q10–Q12 at SF1 and Q11–Q12 at SF10. See
+[BENCHMARK.md](BENCHMARK.md).
 
 What is left is not in this repository:
 - **Parquet read speed.** ClickHouse's reader is 1.6–2.7× slower than DuckDB's on a plain scan
