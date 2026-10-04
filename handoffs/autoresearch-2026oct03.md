@@ -358,3 +358,5 @@ SF1 Q10/Q11 had drifted from the morning baseline (2.62/5.86 s) to 3.27/6.41 s i
 | 1M | 2.60 / 2.45 | 5.90 / 5.94 |
 
 Q11 −3%, back within 1–2% of morning; Q10 noise (the 3.27 suite figure was noise, A/B shows ~2.5–2.6 either way). Zone tree (same file at all SFs) stays kd-partitioned, SF10 trip build was already above the cap. SF10 check at 4cae932a453 (load 12): Q10 14.11 s, Q11 28.06 s (vs 14.05/26.87 suite at load 19 — inside noise). verify_sf SF1 Q10/Q11 and SF10 Q8–Q11 PASS.
+
+**Correction to §26:** the SF1 Q10/Q11 "regression" is mostly server state, not code. Same build 4cae932a453, quiet box: after prior SF10/verify work Q10 3.19 / Q11 6.48 s; right after restart_ch+reload Q10 2.58 / Q11 6.03 s (5 runs each). The kd cap change is worth ~3% on Q11 at most. BENCHMARK.md SF1 Q10/Q11 now use fresh-server numbers. Cause of the warm-server slowdown (allocator/page-cache/WASM instance state?) not investigated.

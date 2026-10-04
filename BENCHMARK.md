@@ -28,15 +28,20 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 | Q7    | Detour ratio (all trips)           | 0.14 s   | 0.28 s   | 2.35 s  | 1.22 s   | chgeos   |
 | Q8    | Nearby pickups per building        | 0.05 s   | 0.46 s   | 0.35 s  | 0.25 s   | chgeos   |
 | Q9    | Building conflation via IoU        | 0.02 s   | 0.03 s   | 0.24 s  | 0.03 s   | chgeos   |
-| Q10   | Zone avg duration/distance         | 3.27 s   | 111.59 s | 4.87 s  | 5.70 s   | chgeos   |
-| Q11   | Cross-zone trip count              | 6.41 s   | TIMEOUT  | 7.82 s  | 5.84 s   | PyCanopy |
+| Q10   | Zone avg duration/distance         | 2.58 s   | 111.59 s | 4.87 s  | 5.70 s   | chgeos   |
+| Q11   | Cross-zone trip count              | 6.03 s   | TIMEOUT  | 7.82 s  | 5.84 s   | Tie      |
 | Q12   | 5 nearest buildings per trip (kNN) | 2.44 s   | TIMEOUT  | 18.07 s | 5.71 s   | chgeos   |
 
-**SF1 wins — chgeos: 10, DuckDB: 0, Sedona: 0, PyCanopy: 1, Ties: 1**
+**SF1 wins — chgeos: 10, DuckDB: 0, Sedona: 0, PyCanopy: 0, Ties: 2**
 
 SF1 Q4 was re-run warm on an idle box (10 runs, min/avg/max 0.66/0.68/0.71 s); the suite run's
 1.61 s average was one cold read of `zone.parquet`. Q4 is dominated by that zone read, which is the
 same file at every scale factor, so SF1 and SF10 Q4 land close together.
+
+SF1 Q10/Q11 are from a freshly restarted server (CH `4cae932a453`, 5 runs: Q10 2.49/2.58/2.66 s,
+Q11 5.89/6.03/6.24 s). On a server that has already run the SF10 suite they come out ~20% / ~7%
+slower (3.19 s / 6.48 s measured back to back, same build): the slowdown is server state left by
+earlier heavy queries, not the code.
 
 **The SF1 tally understates DuckDB, and the cause is our Parquet files.** `sf1/trip.parquet`
 holds 6M rows in only 4 row groups. DuckDB caps a scan pipeline's thread count at the number
