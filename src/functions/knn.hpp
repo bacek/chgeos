@@ -31,7 +31,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <limits>
+#include <memory>
 #include <span>
 #include <utility>
 #include <vector>
@@ -97,7 +99,7 @@ class CentroidKNNIndex
         double qx, qy;
         uint32_t k;
         std::vector<std::pair<double, uint64_t>> heap; // max-heap of centroid d²
-        std::vector<uint64_t> collected;
+        std::vector<std::pair<double, uint64_t>> collected; // (centroid d², idx)
         double collect_r2 = std::numeric_limits<double>::infinity();
     };
 
@@ -105,9 +107,14 @@ class CentroidKNNIndex
     static bool cmp_x(const Point& a, const Point& b) { return a.x < b.x; }
     static bool cmp_y(const Point& a, const Point& b) { return a.y < b.y; }
 
+    // Subtrees this small are scanned linearly instead of split further: a
+    // handful of contiguous points costs less than the recursion and the
+    // scattered loads of descending into them.
+    static constexpr size_t LEAF_SIZE = 8;
+
     void build(size_t lo, size_t hi, int depth)
     {
-        if (hi <= lo + 1) return;
+        if (hi - lo <= LEAF_SIZE) return;
         size_t mid = lo + (hi - lo) / 2;
         std::nth_element(tree_.begin() + lo, tree_.begin() + mid,
                          tree_.begin() + hi,
@@ -132,13 +139,8 @@ class CentroidKNNIndex
         s.collect_r2 = radius * radius;
     }
 
-    void __attribute__((noinline)) search(size_t lo, size_t hi, int depth, Search& s) const
+    void consider(const Point& p, Search& s) const
     {
-        if (hi <= lo) return;
-
-        size_t mid = lo + (hi - lo) / 2;
-        const Point& p = tree_[mid];
-
         double dx = s.qx - p.x, dy = s.qy - p.y;
         double d2 = dx * dx + dy * dy;
 
@@ -159,7 +161,22 @@ class CentroidKNNIndex
         // The collect radius only ever shrinks, so a node rejected here can
         // never come back into contention later.
         if (d2 <= s.collect_r2)
-            s.collected.push_back(p.idx);
+            s.collected.emplace_back(d2, p.idx);
+    }
+
+    void __attribute__((noinline)) search(size_t lo, size_t hi, int depth, Search& s) const
+    {
+        if (hi - lo <= LEAF_SIZE)
+        {
+            for (size_t i = lo; i < hi; ++i)
+                consider(tree_[i], s);
+            return;
+        }
+
+        size_t mid = lo + (hi - lo) / 2;
+        const Point& p = tree_[mid];
+        consider(p, s);
+        double dx = s.qx - p.x, dy = s.qy - p.y;
 
         // Choose near vs far subtree based on which side of the split qx/qy is on.
         double split_delta = (depth % 2 == 0) ? dx : dy;
@@ -247,20 +264,40 @@ public:
             if (!qgeom) return {};
         }
 
+        // Nodes collected while the radius was still wide may be out of
+        // contention now; the final radius is the tightest bound the search
+        // reached.  Refining nearest-centroid first then lets the loop stop as
+        // soon as even the closest remaining footprint (centroid distance less
+        // r_max) is strictly farther than the k-th exact distance in hand, so
+        // ties are still settled by knn_result_less below.
+        std::erase_if(s.collected, [&](const auto& c) { return c.first > s.collect_r2; });
+        std::sort(s.collected.begin(), s.collected.end());
+
         std::vector<std::pair<uint64_t, double>> result;
         result.reserve(s.collected.size());
-        for (uint64_t idx : s.collected)
+        double kth = std::numeric_limits<double>::infinity();
+        for (auto [d2, idx] : s.collected)
         {
+            if (result.size() >= k && std::sqrt(d2) - r_max_ > kth)
+                break;
+            double d;
             if (point_query)
             {
                 auto [first, last] = ring_span_[idx];
-                result.emplace_back(idx, flat_rings_point_distance(
-                    coords_, rings_, first, last, s.qx, s.qy));
+                d = flat_rings_point_distance(coords_, rings_, first, last, s.qx, s.qy);
             }
             else
             {
                 auto g = read_wkb(wkbs_[idx]);
-                if (g) result.emplace_back(idx, qgeom->distance(g.get()));
+                if (!g) continue;
+                d = qgeom->distance(g.get());
+            }
+            result.emplace_back(idx, d);
+            if (result.size() >= k)
+            {
+                std::nth_element(result.begin(), result.begin() + (k - 1), result.end(),
+                                 knn_result_less);
+                kth = result[k - 1].second;
             }
         }
 
@@ -269,6 +306,58 @@ public:
                           knn_result_less);
         result.resize(take);
         return result;
+    }
+};
+
+// The index over a const candidate array, built at most once per distinct
+// array.  A const argument arrives byte-identical in every batch of a query,
+// and rebuilding the tree per batch (flattening every candidate's rings) cost
+// more than the queries themselves at small block sizes.  The index keeps
+// spans into its candidates, so the cache owns a copy of their bytes; the
+// per-batch check is one memcmp pass over them.  One entry is enough: a WASM
+// instance runs one call at a time.
+class ConstKNNIndex
+{
+    std::vector<uint8_t> bytes_;
+    std::vector<std::span<const uint8_t>> wkbs_; // into bytes_
+    std::unique_ptr<CentroidKNNIndex> index_;     // borrows wkbs_, so dies first
+
+    bool holds(const std::vector<std::span<const uint8_t>>& wkbs) const
+    {
+        if (!index_ || wkbs.size() != wkbs_.size()) return false;
+        for (size_t i = 0; i < wkbs.size(); ++i)
+            if (wkbs[i].size() != wkbs_[i].size()
+                || std::memcmp(wkbs[i].data(), wkbs_[i].data(), wkbs[i].size()) != 0)
+                return false;
+        return true;
+    }
+
+public:
+    const CentroidKNNIndex& bind(const std::vector<std::span<const uint8_t>>& wkbs)
+    {
+        if (holds(wkbs)) return *index_;
+        index_.reset();
+        size_t total = 0;
+        for (const auto& w : wkbs) total += w.size();
+        bytes_.clear();
+        bytes_.reserve(total);
+        for (const auto& w : wkbs) bytes_.insert(bytes_.end(), w.begin(), w.end());
+        wkbs_.clear();
+        wkbs_.reserve(wkbs.size());
+        size_t pos = 0;
+        for (const auto& w : wkbs)
+        {
+            wkbs_.emplace_back(bytes_.data() + pos, w.size());
+            pos += w.size();
+        }
+        index_ = std::make_unique<CentroidKNNIndex>(wkbs_);
+        return *index_;
+    }
+
+    static ConstKNNIndex& instance()
+    {
+        static ConstKNNIndex cache;
+        return cache;
     }
 };
 

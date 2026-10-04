@@ -1387,7 +1387,7 @@ inline ch::raw_buffer* st_knn_col(ch::raw_buffer* ptr, uint32_t)
         return ch::write_complex_col<KNNResult>(n, [](uint32_t) -> KNNResult { return {}; });
         if (col_c.is_const) {
             auto wkbs = ch::col_get_complex_array<std::span<const uint8_t>>(col_c, 0);
-            ch::CentroidKNNIndex index(wkbs);
+            const auto& index = ch::ConstKNNIndex::instance().bind(wkbs);
             return ch::write_complex_col<KNNResult>(n, [&](uint32_t row) -> KNNResult {
                 if (col_q.is_null(row)) return {};
                 return index.query(col_q.get_bytes(row), k);
