@@ -15,22 +15,21 @@ Having said that, I'm not saying it will never be useful.
 
 ## Status (2026-10-05)
 
-**Mostly done in its current scope.** On the [SpatialBench](https://github.com/apache/sedona-spatialbench)
-suite chgeos is the fastest engine on 10 of 12 queries at SF1 (one tie) and 9 of 12 at SF10
-(two ties), against DuckDB 1.5.6, SedonaDB 0.4.1 and PyCanopy 0.4.1. The two losses are SF10 Q7,
-which DuckDB takes and which is bound by ClickHouse's Parquet reader, and SF1 Q11 (cross-zone
-trips), which PyCanopy takes. See
-[BENCHMARK.md](BENCHMARK.md).
+**Mostly done in its current scope.** On the
+[SpatialBench](https://github.com/apache/sedona-spatialbench) suite chgeos is the fastest engine
+on 10 of 12 queries at SF1 (one tie) and 9 of 12 at SF10 (two ties), against DuckDB 1.5.6,
+SedonaDB 0.4.1 and PyCanopy 0.4.1. It loses two: PyCanopy is faster on SF1 Q11 (cross-zone
+trips), and DuckDB is faster on SF10 Q7 (detour ratio), because it reads points straight from
+the Parquet bytes while chgeos still parses each value. All 12 queries return the correct
+answers at both scales. See [BENCHMARK.md](BENCHMARK.md).
 
-What is left is not in this repository:
-- **Parquet read speed.** ClickHouse's reader is 1.6–2.7× slower than DuckDB's on a plain scan
-  of the same file, for every column type. This is the floor under Q1–Q4 and Q7.
-- **The WASM boundary.** Guest code runs ~7× slower per row than the same code natively, and
-  the per-call copy is ~6% of Q7's CPU. Closing that is wasmtime and ClickHouse UDF work.
-- **Upstreaming.** The spatial R-tree join and the WASM UDF improvements live in a ClickHouse
-  fork (see [CH_CHANGES.md](CH_CHANGES.md)) and need to land upstream to be useful to anyone else.
-
-The remaining chgeos-side item is correctness, not speed: a NULL-handling bug for Variant columns.
+What is left is mostly outside this repository:
+- **Parquet read speed.** ClickHouse reads Parquet 1.6–2.7× slower than DuckDB on a plain scan.
+  chgeos still wins the scan-heavy queries, but this sets how fast they can get.
+- **The WASM boundary.** Code inside WASM runs several times slower per row than the same code
+  built natively. Closing that gap is work in wasmtime and in ClickHouse's UDF support.
+- **Upstreaming.** The spatial join and the WASM UDF changes live in a ClickHouse fork (see
+  [CH_CHANGES.md](CH_CHANGES.md)) and need to land upstream before anyone else can use them.
 
 ## Motivation
 
