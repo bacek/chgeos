@@ -1,9 +1,9 @@
 #pragma once
 
 // COLUMNAR_V1 exports for ClickHouse WASM UDFs.
-// All macros dispatch to columnar_impl_wrapper (from columnar.hpp).
+// All macros dispatch to columnar_impl_wrapper (from geo_columnar.hpp).
 
-#include "columnar.hpp"
+#include "geo_columnar.hpp"
 
 namespace ch {
 

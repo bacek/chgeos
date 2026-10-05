@@ -9,7 +9,7 @@
 #include <geos/operation/union/UnaryUnionOp.h>
 
 #include "../geom/wkb.hpp"
-#include "../clickhouse.hpp"
+#include <clickhouse_wasm/abi.hpp>
 
 namespace ch {
 

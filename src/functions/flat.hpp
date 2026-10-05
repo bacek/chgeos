@@ -21,7 +21,7 @@
 #include <utility>
 
 #include "../chain.hpp"
-#include "../columnar.hpp"
+#include "../geo_columnar.hpp"
 #include "../geom/flat_batch.hpp"
 #include "../geom/flat_hull.hpp"
 #include "../geom/wkb_point.hpp"

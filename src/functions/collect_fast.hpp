@@ -20,7 +20,7 @@
 
 #include <geos/geom/Geometry.h>
 
-#include "../columnar.hpp"
+#include "../geo_columnar.hpp"
 #include "overlay.hpp"
 
 namespace ch {
@@ -105,7 +105,7 @@ inline ch::raw_buffer* st_collect_agg_col_fast(ch::raw_buffer* ptr, uint32_t)
                 geoms.push_back(read_wkb(std::span<const uint8_t>{chars + s,
                                                                   static_cast<size_t>(e - s)}));
             }
-            w.push_geom(st_collect_agg_impl(std::move(geoms)));
+            w.push_value(st_collect_agg_impl(std::move(geoms)));
         }
 
         w.finish();

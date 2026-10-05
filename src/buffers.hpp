@@ -32,9 +32,8 @@
 #include <type_traits>
 #include <vector>
 
-#include "clickhouse.hpp"
+#include <clickhouse_wasm/abi.hpp>
 #include "geom/wkb.hpp"
-#include "mem.hpp"
 
 namespace ch {
 

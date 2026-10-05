@@ -2,7 +2,7 @@
 
 ## Three wire formats (overview)
 
-**MsgPack** (`src/msgpack.hpp`, `src/mem.hpp`):
+**MsgPack** (`src/msgpack.hpp`; `raw_buffer` from `clickhouse_wasm/abi.hpp`):
 - One call per row; ClickHouse serializes each row as a msgpack sequence
 - `impl_wrapper(buf, n, fn_impl)` — unpacks args row by row
 - Registered via `CH_UDF_FUNC` macro
@@ -11,7 +11,7 @@
 - One call per batch; generic `rowbinary_impl_wrapper` deduces types from `_impl`
 - Registered via `CH_UDF_RB_ONLY` / `CH_UDF_RB_BBOX2` macros
 
-**COLUMNAR_V1** (`src/columnar.hpp`):
+**COLUMNAR_V1** (`src/geo_columnar.hpp` over `clickhouse_wasm/columnar.hpp`):
 - One call for all N rows; ClickHouse sends columns (not rows)
 - Constant columns (`COL_IS_CONST` flag) send one value broadcast to all rows
 - `columnar_impl_wrapper(buf, n, fn_impl, ...)` — single generic template
@@ -89,10 +89,10 @@ Sub-column wire layouts (COL_COMPLEX recursive):
 ```
 src/
   main.cpp              — all UDF registrations (macros only, no logic)
-  columnar.hpp          — COLUMNAR_V1 wire format, ColView, columnar_impl_wrapper
+  geo_columnar.hpp      — GEOS layer on clickhouse_wasm/columnar.hpp: geometry codec,
+                          Variant geometry decoder, columnar_impl_wrapper fast paths
   rowbinary.hpp         — RowBinary wire format, rowbinary_impl_wrapper
   msgpack.hpp           — MsgPack wire format, impl_wrapper
-  mem.hpp / mem.cpp     — raw_buffer, clickhouse_create_buffer, etc.
   col_prep_op.hpp       — ColPrepOp and ColPrepDistOp type aliases
   functions.hpp         — includes all function headers
   functions/
@@ -179,7 +179,8 @@ Adding a new function:
 ## Runtime stubs
 
 Native (`clickhouse_throw`, `clickhouse_random`, `clickhouse_log`) in `tests/test_functions.cpp`.
-WASM-only (`__cxa_*`, `getentropy`, `__assert_fail`) in `src/mem.cpp` under `#ifdef __wasi__`.
+WASM-only (`getentropy`, `__assert_fail`, buffer exports) in
+`third-party/clickhouse-wasm-columnar/src/abi.cpp` under `#ifdef __EMSCRIPTEN__`.
 CH WasmTime provides WASI preview1 stubs via `define_wasi()` + `set_wasi()` in `WasmTimeRuntime.cpp`.
 `chgeos` executable only built when cross-compiling (native build skips it).
 
@@ -248,3 +249,11 @@ CH_UDF_CB_PRED3(name)                        // + PreparedGeometry dist (3-arg: 
 ```
 
 Functions are exported as `name_cb`. The `st_knn_cb` function is hand-written (not macro-generated) due to its `Array(Tuple(UInt64, Float64))` return type.
+
+## COLUMNAR_V1 library
+
+Frame parsing/validation, `ColView`, writers, `col_get_arg`, `write_result_column` and
+`raw_buffer` live in `third-party/clickhouse-wasm-columnar` (github.com/bacek/clickhouse-wasm-columnar,
+namespace `ch`). chgeos plugs geometry in by specializing `ch::bytes_codec` and
+`ch::column_reader` for `std::unique_ptr<geos::geom::Geometry>` in `src/geo_columnar.hpp`.
+Frame-level tests and the host-written wire fixtures are in the library, not here.

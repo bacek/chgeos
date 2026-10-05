@@ -6,7 +6,7 @@
 
 #include <geos/geom/Geometry.h>
 
-#include "../mem.hpp"
+#include <clickhouse_wasm/abi.hpp>
 
 namespace ch {
 

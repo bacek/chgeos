@@ -20,9 +20,8 @@
 #include <tuple>
 #include <type_traits>
 
-#include "clickhouse.hpp"
+#include <clickhouse_wasm/abi.hpp>
 #include "geom/wkb.hpp"
-#include "mem.hpp"
 
 namespace ch {
 

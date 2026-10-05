@@ -21,7 +21,6 @@ add_executable(chgeos_tests
   test_col_binary.cpp
   test_tg_area.cpp
   ${CMAKE_SOURCE_DIR}/src/geom/wkb.cpp
-  ${CMAKE_SOURCE_DIR}/src/mem.cpp
   ${CMAKE_SOURCE_DIR}/third-party/tg/tg.c
 )
 
@@ -35,6 +34,7 @@ target_include_directories(chgeos_tests PRIVATE
 target_link_libraries(chgeos_tests PRIVATE
   geos
   msgpack23
+  clickhouse_wasm_abi
   GTest::gtest_main
 )
 

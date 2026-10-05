@@ -7,7 +7,7 @@
 #include "functions/knn.hpp"
 #include "rowbinary.hpp"
 #include "msgpack.hpp"
-#include "columnar.hpp"
+#include "geo_columnar.hpp"
 #include "col_binary.hpp"
 #include "buffers.hpp"
 #include "chain.hpp"
@@ -442,7 +442,7 @@ CH_UDF_BUFFERS(st_buffer)
 CH_UDF_BUFFERS(st_simplify)
 
 // ── st_knn: k-nearest-neighbour spatial query ─────────────────────────────────
-// COLUMNAR_V1: st_knn_col in columnar.hpp
+// COLUMNAR_V1: st_knn_col in geo_columnar.hpp
 // ColumnBinary: st_knn_cb in col_binary.hpp
 //
 // Signature: st_knn(query String, candidates Array(String), k UInt32)

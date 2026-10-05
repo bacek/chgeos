@@ -5,9 +5,8 @@
 #include <msgpack23/msgpack23.h>
 
 #include "helpers.hpp"
-#include "mem.hpp"
+#include <clickhouse_wasm/abi.hpp>
 #include "msgpack.hpp"
-#include "clickhouse.hpp"
 #include "functions/overlay.hpp"
 
 using namespace ch;

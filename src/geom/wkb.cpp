@@ -15,7 +15,7 @@
 #include <geos/io/WKTReader.h>
 #include <geos/io/WKTWriter.h>
 
-#include "../clickhouse.hpp"
+#include <clickhouse_wasm/abi.hpp>
 
 namespace ch {
 

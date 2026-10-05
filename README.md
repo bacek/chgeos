@@ -132,6 +132,12 @@ fastest, and chgeos uses it by default for every function that supports it:
 The standard PostGIS names (`st_contains`, `st_distance` and the others) are SQL aliases. An
 alias calls the `_col` function if it exists, and the `_mp` function if not.
 
+The COLUMNAR_V1 frame format, the column readers and writers, and the buffer exports come from
+[clickhouse-wasm-columnar](https://github.com/bacek/clickhouse-wasm-columnar), a separate
+library that any WASM UDF can use. It is a git submodule in `third-party/`. chgeos adds the GEOS
+parts on top: geometry encoding, the native `Geometry` (Variant) decoder, and the fast paths
+described below.
+
 One template, `columnar_impl_wrapper<Ret, Args...>`, gets the argument and return types from
 the `_impl` function pointer. To add a columnar function, you write two lines: the C++
 implementation and a `CH_UDF_COL(name)` macro call.

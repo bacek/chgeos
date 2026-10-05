@@ -29,10 +29,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "columnar.hpp"
+#include "geo_columnar.hpp"
 #include "geom/flat_batch.hpp"
 #include "geom/wkb.hpp"
-#include "mem.hpp"
+#include <clickhouse_wasm/abi.hpp>
 
 namespace ch {
 
@@ -203,7 +203,7 @@ raw_buffer* chain_sink_run(std::vector<GeomPtr> handles, uint32_t n) {
         ColBytesWriter w(out, n);
         for (uint32_t i = 0; i < n; ++i) {
             if (!handles[i]) { w.push_null(); continue; }
-            w.push_geom(Impl(std::move(handles[i])));
+            w.push_value(Impl(std::move(handles[i])));
         }
         w.finish();
         return out;

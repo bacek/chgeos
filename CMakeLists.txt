@@ -66,12 +66,14 @@ add_subdirectory(third-party/geos geos)
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 option(BUILD_EXAMPLES "" OFF)
 add_subdirectory(third-party/msgpack23 msgpack23)
+set(CLICKHOUSE_WASM_COLUMNAR_TESTS OFF CACHE BOOL "" FORCE)
+add_subdirectory(third-party/clickhouse-wasm-columnar clickhouse-wasm-columnar)
 
 if(CMAKE_CROSSCOMPILING)
   # tg stays out of the module: nothing in it calls tg, and tg.c's layout
   # static_asserts assume 64-bit pointers, so it does not compile for wasm32.
-  add_executable(chgeos src/main.cpp src/geom/wkb.cpp src/mem.cpp)
-  target_link_libraries(chgeos PRIVATE geos msgpack23)
+  add_executable(chgeos src/main.cpp src/geom/wkb.cpp)
+  target_link_libraries(chgeos PRIVATE geos msgpack23 clickhouse_wasm_abi)
   target_include_directories(chgeos PRIVATE
     ${CMAKE_CURRENT_BINARY_DIR}/geos/capi
     ${CMAKE_CURRENT_SOURCE_DIR}/third-party/xxhash)

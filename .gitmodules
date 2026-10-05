@@ -13,3 +13,6 @@
 [submodule "third-party/tg"]
 	path = third-party/tg
 	url = https://github.com/bacek/tg.git
+[submodule "third-party/clickhouse-wasm-columnar"]
+	path = third-party/clickhouse-wasm-columnar
+	url = git@github.com:bacek/clickhouse-wasm-columnar.git

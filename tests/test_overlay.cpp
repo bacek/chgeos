@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 #include "helpers.hpp"
 #include "functions/processing.hpp"
-#include "clickhouse.hpp"
+#include <clickhouse_wasm/abi.hpp>
 
 using namespace ch;
 

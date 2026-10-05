@@ -3,7 +3,7 @@
 #include <span>
 #include <string_view>
 
-#include "../clickhouse.hpp"
+#include <clickhouse_wasm/abi.hpp>
 #include "../geom/wkb.hpp"
 #include "../geom/wkb_envelope.hpp"
 #include "predicates.hpp"

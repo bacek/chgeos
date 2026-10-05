@@ -14,10 +14,9 @@
 #include <msgpack23/msgpack23.h>
 #include <vector>
 
-#include "clickhouse.hpp"
+#include <clickhouse_wasm/abi.hpp>
 #include "geom/chgeom.hpp"
 #include "geom/wkb.hpp"
-#include "mem.hpp"
 
 namespace ch {
 
