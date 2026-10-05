@@ -38,18 +38,18 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 Q4 is dominated by reading `zone.parquet`, which is the same file at every scale factor, so SF1
 and SF10 Q4 land close together (0.66 s / 0.97 s).
 
-**The SF1 tally understates DuckDB, and the cause is our Parquet files.** `sf1/trip.parquet`
-holds 6M rows in only 4 row groups. DuckDB caps a scan pipeline's thread count at the number
+**The SF1 tally understates DuckDB, and the cause is the upstream Parquet layout.** The SF1
+trip table (`sf1/trip/*.parquet`, 2 files) holds 6M rows in only 4 row groups. DuckDB caps a scan pipeline's thread count at the number
 of row groups in the file — the row group is its atomic unit of scan parallelism, with no
 sub-splitting — so DuckDB ran these queries on at most 4 of the machine's 24 threads. At SF10
-the same file layout gives it 31 row groups and full parallelism, which is most of why its
+the 15 trip files hold 45 row groups, enough for full parallelism, which is most of why its
 SF1→SF10 curve looks sublinear. ClickHouse has no equivalent limit: its Parquet reader splits
 row groups into subgroups and is at full parallelism at both scales. Several SF1 rows,
 particularly the sub-second Q1–Q3, are therefore partly measuring DuckDB's row-group cap
 rather than chgeos being faster, and DuckDB would likely take some of them on files with
 smaller row groups. We cannot say how many: two scale factors are not enough to separate the
 thread cap from DuckDB's fixed per-query overhead (~0.15 s, versus roughly zero for chgeos),
-and the two models do not predict the same SF10 times. Until the data is regenerated with
+and the two models do not predict the same SF10 times. Until the upstream data has
 smaller row groups, **treat SF10 as the primary comparison.** The SF10 Q7 gap is not
 explained by this — see the Q7 note below.
 
