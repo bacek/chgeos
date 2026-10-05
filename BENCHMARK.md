@@ -117,8 +117,9 @@ Two settings are important for this query:
 - At SF10, the query also needs `max_bytes_ratio_before_external_group_by=0`. Its 3.1M groups
   use about 15 GiB, and with the default setting ClickHouse writes them to disk.
 
-`st_collect_agg` runs as a normal function on the result of `groupArray`. This was faster than
-a native aggregate function.
+`st_collect_agg` runs as a WASM aggregate function. In an interleaved test at SF10 it was about
+3.5% faster than a normal function on the result of `groupArray`, and it is the form that DuckDB
+and Sedona users write.
 
 ### Q7 (detour ratio)
 
