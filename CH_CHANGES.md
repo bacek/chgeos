@@ -14,13 +14,9 @@ The struck-through items below are merged upstream.
 
 ## 1. WebAssembly UDF runtime
 
-Upstream ClickHouse has two WASM call interfaces. `ROW_DIRECT` calls the module one time per
-row. `BUFFERED_V1` sends a full block in one call, serialized in a row format such as MsgPack.
-The fork extends the runtime as follows.
-
 Aggregate functions (UDAFs). The setting `is_aggregate = 1` in `CREATE FUNCTION` registers a
 WASM export as an aggregate function. The runtime calls `addBatchSinglePlace` to send batches of
-rows into the accumulator. It serializes the state between merge steps with MsgPack.
+rows into the accumulator.
 
 ~~**DETERMINISTIC constant folding.** Adding `DETERMINISTIC` to `CREATE FUNCTION` opts a
 WASM UDF into CH's constant-folding pipeline. Three cooperating changes were needed: the
@@ -35,11 +31,11 @@ stay within the instance's 4 GB address space. This prevents OOM kills for wide 
 high-cardinality input batches.~~
 ([PR #116552](https://github.com/ClickHouse/ClickHouse/pull/116552), "Split WASM UDF input blocks by estimated memory size", merged 2026-09-07)
 
-Whole-batch input measurement. This change follows the block splitting above. The runtime
+~~Whole-batch input measurement. This change follows the block splitting above. The runtime
 chooses the batch size from the measured size of a complete candidate batch. It does not add
 the sizes of single rows. Thus the fixed cost of each block (`LowCardinality` dictionaries and
 the structure prefixes of `Dynamic` and `Variant` columns) counts one time per batch, and not
-one time per row. ([PR #118989](https://github.com/ClickHouse/ClickHouse/pull/118989), open)
+one time per row.~~ ([PR #118989](https://github.com/ClickHouse/ClickHouse/pull/118989), merged)
 
 ~~**system.functions visibility.** WASM UDFs now appear in `system.functions` with their
 full argument list and return type, matching the behaviour of built-in functions.~~
@@ -52,7 +48,7 @@ upstream independently (our [PR #103487](https://github.com/ClickHouse/ClickHous
 ~~**Buffer data pointer enforcement.** A buffer declaring a non-zero size must not point at
 linear-memory offset 0; `WasmMemoryManagerV01::getMemoryView` now throws `WASM_ERROR`
 instead of reading whatever sits there.~~ Shipped in [PR #116548](https://github.com/ClickHouse/ClickHouse/pull/116548)
-("Document the WASM UDF buffer data pointer requirement"), merged 2026-09-07.
+("Document the WASM UDF buffer data pointer requirement") merged.
 
 ---
 

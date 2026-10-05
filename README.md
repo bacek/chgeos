@@ -66,7 +66,7 @@ Iceberg. The data is a large set of geometries in a lakehouse. ClickHouse is the
 The geometry is WKB in Parquet `BYTE_ARRAY` columns, which is the industry standard.
 
 ClickHouse reads the WKB correctly, but many functions are missing. I wanted to use them to
-make a particular database quack in awe. I did not succeed.
+make a particular database quack in awe. I did ~~not~~ succeed.
 
 ### Why not a pull request to ClickHouse?
 
