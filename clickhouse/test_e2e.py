@@ -213,6 +213,23 @@ def _tests() -> list[Test]:
     t("st_convexhull_agg",
       "SELECT round(st_area(st_convexhull_agg(geom)), 1) FROM (SELECT st_geomfromtext('POINT (0 0)') AS geom UNION ALL SELECT st_geomfromtext('POINT (1 0)') UNION ALL SELECT st_geomfromtext('POINT (0 1)'))", "0.5")
 
+    # Aggregates with GROUP BY: each group gets its own result (group 1: 3 points, group 2: 2 points)
+    t("st_union_agg_group_by",
+      "SELECT arrayStringConcat(groupArray(toString(v)), ',') FROM (SELECT k, st_numgeometries(st_union_agg(g)) AS v FROM (SELECT 1 AS k, st_geomfromtext(arrayJoin(['POINT (0 0)','POINT (2 0)','POINT (0 2)'])) AS g UNION ALL SELECT 2, st_geomfromtext(arrayJoin(['POINT (10 10)','POINT (13 14)']))) GROUP BY k ORDER BY k)",
+      "3,2")
+    t("st_collect_agg_group_by",
+      "SELECT arrayStringConcat(groupArray(toString(v)), ',') FROM (SELECT k, st_numgeometries(st_collect_agg(g)) AS v FROM (SELECT 1 AS k, st_geomfromtext(arrayJoin(['POINT (0 0)','POINT (2 0)','POINT (0 2)'])) AS g UNION ALL SELECT 2, st_geomfromtext(arrayJoin(['POINT (10 10)','POINT (13 14)']))) GROUP BY k ORDER BY k)",
+      "3,2")
+    t("st_extent_agg_group_by",
+      "SELECT arrayStringConcat(groupArray(toString(v)), ',') FROM (SELECT k, round(st_area(st_extent_agg(g))) AS v FROM (SELECT 1 AS k, st_geomfromtext(arrayJoin(['POINT (0 0)','POINT (2 0)','POINT (0 2)'])) AS g UNION ALL SELECT 2, st_geomfromtext(arrayJoin(['POINT (10 10)','POINT (13 14)']))) GROUP BY k ORDER BY k)",
+      "4,12")
+    t("st_makeline_agg_group_by",
+      "SELECT arrayStringConcat(groupArray(toString(v)), ',') FROM (SELECT k, st_npoints(st_makeline_agg(g)) AS v FROM (SELECT 1 AS k, st_geomfromtext(arrayJoin(['POINT (0 0)','POINT (2 0)','POINT (0 2)'])) AS g UNION ALL SELECT 2, st_geomfromtext(arrayJoin(['POINT (10 10)','POINT (13 14)']))) GROUP BY k ORDER BY k)",
+      "3,2")
+    t("st_convexhull_agg_group_by",
+      "SELECT arrayStringConcat(groupArray(toString(v)), ',') FROM (SELECT k, round(st_area(st_convexhull_agg(g)), 1) AS v FROM (SELECT 1 AS k, st_geomfromtext(arrayJoin(['POINT (0 0)','POINT (2 0)','POINT (0 2)'])) AS g UNION ALL SELECT 2, st_geomfromtext(arrayJoin(['POINT (10 10)','POINT (13 14)']))) GROUP BY k ORDER BY k)",
+      "2,0")
+
     # st_knn: k-nearest-neighbour
     t("st_knn_basic",
       "WITH cands AS (SELECT groupArray(g) AS arr FROM (SELECT st_makepoint(0.0,0.0) AS g UNION ALL SELECT st_makepoint(3.0,4.0) UNION ALL SELECT st_makepoint(10.0,0.0))), r AS (SELECT st_knn(st_makepoint(1.0,0.0), (SELECT arr FROM cands), 2) AS res) SELECT concat(toString(length(res)), ',', toString(arraySort(x -> x.1, res)[1].1), ',', toString(round(arraySort(x -> x.1, res)[1].2, 1))) FROM r",
