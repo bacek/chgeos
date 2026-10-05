@@ -6,12 +6,12 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 **Hardware:** AMD Ryzen 9 5900X, 128 GB RAM  
 **Dataset:** synthetic taxi trip data from https://github.com/apache/sedona-spatialbench — SF1 = 6M trips, SF10 = 60M trips  
 **Timeout:** 120 s (all engines)  
-**chgeos version:** 2026-10-04 (CH `d0c96a2e6aa`)  
+**chgeos version:** 2026-10-05 (CH `d2d24230309`, chgeos `f1fc30a`)  
 **DuckDB version:** 1.5.6  
 **SedonaDB version:** 0.4.1  
 **PyCanopy version:** 0.4.1 (Polars 1.44.2)  
 **Competitors measured:** 2026-10-04/05, same box and split Parquet files, via sedona-spatialbench `run_benchmark.py`, straight after the chgeos runs on an otherwise idle machine  
-**Runs:** 5 per query (average reported)  
+**Runs:** chgeos 3 per query, competitors 5 per query (average reported)  
 **Winner:** fastest engine; margins under 5% are reported as a tie
 
 ---
@@ -22,26 +22,25 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 |-------|------------------------------------|----------|----------|---------|----------|----------|
 | Q1    | Point-in-radius filter             | 0.05 s   | 0.12 s   | 0.15 s  | 0.28 s   | chgeos   |
 | Q2    | Count trips in county polygon      | 0.06 s   | 0.18 s   | 0.68 s  | 0.23 s   | chgeos   |
-| Q3    | Monthly stats in bbox+buffer       | 0.04 s   | 0.17 s   | 0.28 s  | 0.29 s   | chgeos   |
-| Q4    | Zone distribution (top-1000 tips)  | 0.68 s   | 0.66 s   | 0.72 s  | 1.48 s   | Tie      |
-| Q5    | Convex hull area per customer/month| 0.39 s   | 0.67 s   | 2.63 s  | 0.74 s   | chgeos   |
-| Q6    | Zone stats for bbox-intersect zones| 0.68 s   | 0.83 s   | 0.70 s  | 1.50 s   | Tie      |
-| Q7    | Detour ratio (all trips)           | 0.14 s   | 0.27 s   | 0.53 s  | 0.53 s   | chgeos   |
+| Q3    | Monthly stats in bbox+buffer       | 0.06 s   | 0.17 s   | 0.28 s  | 0.29 s   | chgeos   |
+| Q4    | Zone distribution (top-1000 tips)  | 0.66 s   | 0.66 s   | 0.72 s  | 1.48 s   | Tie      |
+| Q5    | Convex hull area per customer/month| 0.38 s   | 0.67 s   | 2.63 s  | 0.74 s   | chgeos   |
+| Q6    | Zone stats for bbox-intersect zones| 0.63 s   | 0.83 s   | 0.70 s  | 1.50 s   | chgeos   |
+| Q7    | Detour ratio (all trips)           | 0.13 s   | 0.27 s   | 0.53 s  | 0.53 s   | chgeos   |
 | Q8    | Nearby pickups per building        | 0.04 s   | 0.45 s   | 0.16 s  | 0.27 s   | chgeos   |
 | Q9    | Building conflation via IoU        | 0.02 s   | 0.03 s   | 0.03 s  | 0.03 s   | chgeos   |
-| Q10   | Zone avg duration/distance         | 2.46 s   | 103.21 s | 2.44 s  | 2.20 s   | PyCanopy |
-| Q11   | Cross-zone trip count              | 4.25 s   | TIMEOUT  | 3.99 s  | 2.47 s   | PyCanopy |
-| Q12   | 5 nearest buildings per trip (kNN) | 2.25 s   | TIMEOUT  | 3.19 s  | 1.74 s   | PyCanopy |
+| Q10   | Zone avg duration/distance         | 1.81 s   | 103.21 s | 2.44 s  | 2.20 s   | chgeos   |
+| Q11   | Cross-zone trip count              | 3.40 s   | TIMEOUT  | 3.99 s  | 2.47 s   | PyCanopy |
+| Q12   | 5 nearest buildings per trip (kNN) | 1.61 s   | TIMEOUT  | 3.19 s  | 1.74 s   | chgeos   |
 
-**SF1 wins — chgeos: 7, DuckDB: 0, Sedona: 0, PyCanopy: 3, Ties: 2**
+**SF1 wins — chgeos: 10, DuckDB: 0, Sedona: 0, PyCanopy: 1, Ties: 1**
 
 Q4 is dominated by reading `zone.parquet`, which is the same file at every scale factor, so SF1
-and SF10 Q4 land close together (0.68 s / 1.02 s) and all three fast engines tie on it.
+and SF10 Q4 land close together (0.66 s / 0.97 s).
 
-SF1 Q10–Q12 go to PyCanopy (2.20 / 2.47 / 1.74 s against chgeos 2.46 / 4.25 / 2.25 s); SedonaDB
-is also ahead of chgeos on Q10 and Q11 (2.44 / 3.99 s). These three queries are the spatial joins
-and the kNN, where chgeos does its work in `SpatialRTreeJoin` and the WASM `st_knn`; see the Q10,
-Q11 and Q12 notes below.
+After the 2026-10-05 `SpatialRTreeJoin` and `st_knn` work chgeos takes SF1 Q10 and Q12
+(1.81 / 1.61 s against PyCanopy 2.20 / 1.74 s). SF1 Q11 is the one query PyCanopy still wins,
+2.47 s against chgeos 3.40 s; see the Q10, Q11 and Q12 notes below.
 
 **The SF1 tally understates DuckDB, and the cause is our Parquet files.** `sf1/trip.parquet`
 holds 6M rows in only 4 row groups. DuckDB caps a scan pipeline's thread count at the number
@@ -66,29 +65,45 @@ explained by this — see the Q7 note below.
 
 | Query | Description                        | chgeos    | DuckDB   | Sedona   | PyCanopy | Winner   |
 |-------|------------------------------------|-----------|----------|----------|----------|----------|
-| Q1    | Point-in-radius filter             | 0.29 s    | 0.32 s   | 0.62 s   | 2.23 s   | chgeos   |
-| Q2    | Count trips in county polygon      | 0.34 s    | 0.47 s   | 1.36 s   | 2.02 s   | chgeos   |
-| Q3    | Monthly stats in bbox+buffer       | 0.32 s    | 0.44 s   | 1.04 s   | 2.89 s   | chgeos   |
-| Q4    | Zone distribution (top-1000 tips)  | 1.02 s    | 1.02 s   | 1.77 s   | 5.39 s   | Tie      |
-| Q5    | Convex hull area per customer/month| 5.14 s    | 6.54 s   | 20.87 s  | 8.63 s   | chgeos   |
-| Q6    | Zone stats for bbox-intersect zones| 1.49 s    | 1.51 s   | 2.05 s   | 6.37 s   | Tie      |
-| Q7    | Detour ratio (all trips)           | 0.92 s    | 0.81 s   | 1.92 s   | 7.07 s   | DuckDB   |
-| Q8    | Nearby pickups per building        | 0.51 s    | 1.50 s   | 1.37 s   | 3.32 s   | chgeos   |
-| Q9    | Building conflation via IoU        | 0.04 s    | 0.13 s   | 0.05 s   | 0.06 s   | chgeos   |
-| Q10   | Zone avg duration/distance         | 14.10 s   | TIMEOUT  | 14.32 s  | 21.09 s  | Tie      |
-| Q11   | Cross-zone trip count              | 25.72 s   | TIMEOUT  | 29.98 s  | 15.86 s  | PyCanopy |
-| Q12   | 5 nearest buildings per trip (kNN) | 32.54 s   | TIMEOUT  | 36.37 s  | 19.45 s  | PyCanopy |
+| Q1    | Point-in-radius filter             | 0.27 s    | 0.32 s   | 0.62 s   | 2.23 s   | chgeos   |
+| Q2    | Count trips in county polygon      | 0.31 s    | 0.47 s   | 1.36 s   | 2.02 s   | chgeos   |
+| Q3    | Monthly stats in bbox+buffer       | 0.27 s    | 0.44 s   | 1.04 s   | 2.89 s   | chgeos   |
+| Q4    | Zone distribution (top-1000 tips)  | 0.97 s    | 1.02 s   | 1.77 s   | 5.39 s   | chgeos   |
+| Q5    | Convex hull area per customer/month| 4.86 s    | 6.54 s   | 20.87 s  | 8.63 s   | chgeos   |
+| Q6    | Zone stats for bbox-intersect zones| 1.50 s    | 1.51 s   | 2.05 s   | 6.37 s   | Tie      |
+| Q7    | Detour ratio (all trips)           | 0.91 s    | 0.81 s   | 1.92 s   | 7.07 s   | DuckDB   |
+| Q8    | Nearby pickups per building        | 0.46 s    | 1.50 s   | 1.37 s   | 3.32 s   | chgeos   |
+| Q9    | Building conflation via IoU        | 0.03 s    | 0.13 s   | 0.05 s   | 0.06 s   | chgeos   |
+| Q10   | Zone avg duration/distance         | 8.00 s    | TIMEOUT  | 14.32 s  | 21.09 s  | chgeos   |
+| Q11   | Cross-zone trip count              | 14.32 s   | TIMEOUT  | 29.98 s  | 15.86 s  | chgeos   |
+| Q12   | 5 nearest buildings per trip (kNN) | 19.16 s   | TIMEOUT  | 36.37 s  | 19.45 s  | Tie      |
 
-**SF10 wins — chgeos: 6, DuckDB: 1, Sedona: 0, PyCanopy: 2, Ties: 3**
+**SF10 wins — chgeos: 9, DuckDB: 1, Sedona: 0, PyCanopy: 0, Ties: 2**
 
-chgeos SF10 was re-measured on 2026-10-04 at CH `d0c96a2e6aa` (COLUMNAR_V1 wire,
-5 runs, averages, idle machine, load average ~1 at start). An earlier run the same day at
+chgeos SF1 and SF10 were re-measured on 2026-10-05 at CH `d2d24230309` (COLUMNAR_V1 wire,
+3 runs, averages; the machine was not idle, load average ~17 at start, so chgeos is if anything
+understated against the idle competitor runs). Both scales pass the spatialbench reference
+answers on all 12 queries. The previous chgeos run, 2026-10-04 at CH `d0c96a2e6aa`, was on an idle machine
+(5 runs, load average ~1 at start). An earlier run the same day at
 load ~19 was 4–10% slower on Q1–Q4, Q6, Q7 and Q11; a same-session A/B confirmed the
 difference was machine load, not code. DuckDB, SedonaDB and PyCanopy were all re-measured the same day on the same split files
 (5 runs, averages, 120 s timeout) straight after the chgeos runs, also on an idle machine. An
 earlier competitor run on 2026-10-04 on a busier machine had PyCanopy roughly 2× slower on
-Q10–Q12; with every engine measured on an idle machine, PyCanopy takes SF10 Q11 and Q12 and
-SedonaDB ties Q10.
+Q10–Q12. With the 2026-10-05 chgeos numbers chgeos takes SF10 Q10 and Q11 and ties PyCanopy
+on Q12 (19.16 s against 19.45 s).
+
+Q10–Q12 since 2026-10-04 (SF10: Q10 14.1 → 8.0 s, Q11 25.7 → 14.3 s, Q12 32.5 → 19.2 s):
+- `SpatialRTreeJoin` replaces the boost STR R-tree with a static Hilbert-packed R-tree (one
+  32-bit-key radix sort per sub-tree, flat node arrays, leaves stored as row position plus point
+  coordinates when the build side is all points), built straight from the per-block entry
+  chunks; the 60M-trip build went from 2.4 s to 1.3 s per join;
+- predicate batches of one heavy probe row, and the slices of large candidate groups, run on a
+  shared pool, and a probe recruits helpers once most other probe streams have finished, which
+  removed the single-thread tail at the end of each join;
+- candidate and output columns are gathered column by column with prefetching instead of a
+  row-major `insertFrom` over random right-side rows;
+- `st_knn` keeps the index for a constant candidate array across calls and refines candidates in
+  centroid-distance order with an early exit.
 
 Q10 and Q11 got 2× faster since 2026-10-03 (Q10 30.0 → 14.1 s, Q11 45.6 → 25.7 s), all from
 host-side work in `SpatialRTreeJoin`, not WASM:
@@ -200,10 +215,9 @@ predicate, cutting candidate pairs dramatically. All engines land at or below 0.
 resolution of these measurements; chgeos is 0.02 s / 0.04 s against SedonaDB 0.03 s / 0.05 s
 and PyCanopy 0.03 s / 0.06 s.
 
-**Q10:** at SF10 chgeos 14.1 s and SedonaDB 14.3 s tie, PyCanopy is 21.1 s and DuckDB times
-out. At SF1 PyCanopy wins, 2.20 s against SedonaDB 2.44 s and chgeos 2.46 s. The remaining
-cost is the 60M-trip R-tree build (~5 s) plus a probe tail: a few zone blocks with millions of
-candidate trips each run longer than the rest on one thread.
+**Q10:** chgeos wins at both scales, 1.81 s / 8.00 s against PyCanopy 2.20 s / 21.1 s and
+SedonaDB 2.44 s / 14.3 s; DuckDB times out at SF10. The former single-thread probe tail (a few
+zones with 4–8M candidate trips each) now runs on the shared pool.
 
 **Q11 (cross-zone trips):** chgeos runs the plan PyCanopy hand-codes in Polars
 (`bench/spatial_bench/queries/q11.py` in the PyCanopy repo): resolve each trip's pickup zone and
@@ -211,7 +225,8 @@ dropoff zone with two independent spatial joins, then match the two results on `
 The spatialbench SQL text instead chains the dropoff join onto the pickup join's output; the
 answer is identical (verified against the reference at SF1 and SF10). With the chained text
 chgeos measured ~6.0 s at SF1 (a tie with PyCanopy) and 26.9 s at SF10; with the two-join
-plan it is 4.25 s and 25.7 s. PyCanopy is faster at both scales, 2.47 s / 15.9 s, and SedonaDB
+plan it was 4.25 s and 25.7 s on 2026-10-04 and is 3.40 s and 14.3 s now. PyCanopy (2.47 s / 15.9 s)
+still wins SF1 and loses SF10, and SedonaDB
 is 3.99 s / 30.0 s. DuckDB runs the chained SQL and times out at both scales.
 
 **Q12 (kNN):** WASM `st_knn` uses a static 2-D centroid k-d tree for candidate selection,
@@ -219,6 +234,6 @@ then refines the surviving candidates to an exact point-to-geometry distance. Th
 alone reports centroid distance, which is not what `ST_Distance` means — before the
 refinement landed, Q12 disagreed with the reference answers. Refinement reads coordinates
 flattened once at index build, so it needs no GEOS parse per row, and Q12 got
-*faster*: 10.9 s → 2.0 s at SF1, 103.8 s → 27.3 s at SF10. chgeos is now 2.25 s / 32.5 s;
-PyCanopy leads at both scales with 1.74 s / 19.5 s, SedonaDB is 3.19 s / 36.4 s and DuckDB
-times out at both.
+*faster*: 10.9 s → 2.0 s at SF1, 103.8 s → 27.3 s at SF10. With the cached index and
+distance-ordered refinement chgeos is now 1.61 s / 19.2 s against PyCanopy 1.74 s / 19.5 s (a
+win at SF1, a tie at SF10); SedonaDB is 3.19 s / 36.4 s and DuckDB times out at both.
