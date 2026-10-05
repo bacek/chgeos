@@ -1,18 +1,25 @@
-# ClickHouse Changes vs Upstream
+# ClickHouse changes compared to upstream
 
-Four independent areas: WASM runtime extensions, a new columnar call
-ABI, a spatial-predicate join engine, and spatial pruning at the storage layer.
+chgeos uses a ClickHouse fork with changes in five areas:
+
+1. Extensions to the WebAssembly (WASM) UDF runtime.
+2. A new columnar call interface, COLUMNAR_V1.
+3. A join engine for spatial predicates.
+4. Spatial pruning at the storage layer.
+5. Fusion of chained WASM function calls.
+
+The struck-through items below are merged upstream.
 
 ---
 
-## 1. WebAssembly UDF Runtime
+## 1. WebAssembly UDF runtime
 
-The upstream WASM UDF system (row-at-a-time MsgPack ABI) was extended in several ways.
+The upstream WASM UDF system calls the module one row at a time, with MsgPack encoding. The fork
+extends it as follows.
 
-**Aggregate functions (UDAFs).** A new `is_aggregate = 1` setting in `CREATE FUNCTION`
-registers a WASM export as an aggregate. The runtime calls `addBatchSinglePlace` to push
-batches of rows into the accumulator, then serializes/deserializes state across merge
-boundaries. MsgPack encoding is used for UDAF state transport.
+Aggregate functions (UDAFs). The setting `is_aggregate = 1` in `CREATE FUNCTION` registers a
+WASM export as an aggregate function. The runtime calls `addBatchSinglePlace` to send batches of
+rows into the accumulator. It serializes the state between merge steps with MsgPack.
 
 ~~**DETERMINISTIC constant folding.** Adding `DETERMINISTIC` to `CREATE FUNCTION` opts a
 WASM UDF into CH's constant-folding pipeline. Three cooperating changes were needed: the
@@ -27,11 +34,11 @@ stay within the instance's 4 GB address space. This prevents OOM kills for wide 
 high-cardinality input batches.~~
 ([PR #116552](https://github.com/ClickHouse/ClickHouse/pull/116552), "Split WASM UDF input blocks by estimated memory size", merged 2026-09-07)
 
-**Whole-batch input measurement.** Follow-up to the block splitting above. The batch size is
-chosen by measuring a candidate batch whole, rather than by summing per-row probes, so
-per-block serialization overhead (`LowCardinality` dictionaries, `Dynamic`/`Variant`
-structure prefixes) is accounted for once per batch instead of being multiplied by the row
-count. ([PR #118989](https://github.com/ClickHouse/ClickHouse/pull/118989), open)
+Whole-batch input measurement. This change follows the block splitting above. The runtime
+chooses the batch size from the measured size of a complete candidate batch. It does not add
+the sizes of single rows. Thus the fixed cost of each block (`LowCardinality` dictionaries and
+the structure prefixes of `Dynamic` and `Variant` columns) counts one time per batch, and not
+one time per row. ([PR #118989](https://github.com/ClickHouse/ClickHouse/pull/118989), open)
 
 ~~**system.functions visibility.** WASM UDFs now appear in `system.functions` with their
 full argument list and return type, matching the behaviour of built-in functions.~~
@@ -48,86 +55,107 @@ instead of reading whatever sits there.~~ Shipped in [PR #116548](https://github
 
 ---
 
-## 2. COLUMNAR_V1 Wire Format
+## 2. COLUMNAR_V1 wire format
 
-A call ABI that replaces row-at-a-time MsgPack for bulk predicate and scalar
-evaluation. The wire frame is defined in `ColumnBinaryWire.h` and is reachable two
-ways: as the **`ColumnBinary` serialization format** under the regular
-`ABI BUFFERED_V1` path (FormatFactory, `ColumnBinaryInputFormat` /
-`ColumnBinaryOutputFormat`), and through the dedicated `ABI COLUMNAR_V1`
-registration branch in `UserDefinedWebAssembly.cpp`. chgeos registers both, so the
-two can be benchmarked against each other.
-Upstream: [PR #104424](https://github.com/ClickHouse/ClickHouse/pull/104424) ("Add the `ColumnBinary` format"), open.
+COLUMNAR_V1 is a call interface (ABI) for predicates and scalar functions on many rows. It
+replaces the MsgPack interface that sends one row at a time. `ColumnBinaryWire.h` defines the
+wire frame. ClickHouse can use the frame in two ways:
 
-**Motivation.** The MsgPack path makes one host↔WASM boundary crossing per row. At 6M
-rows per query this creates measurable overhead from serialization and repeated boundary
-crossings. COLUMNAR_V1 sends all N rows in a single call as a typed column buffer.
+- As the `ColumnBinary` serialization format on the normal `ABI BUFFERED_V1` path, through
+  `FormatFactory`, `ColumnBinaryInputFormat` and `ColumnBinaryOutputFormat`.
+- Through the separate `ABI COLUMNAR_V1` registration in `UserDefinedWebAssembly.cpp`.
 
-**Format.** Each argument is a length-prefixed typed buffer. Supported column types:
-fixed-width scalars (bool, int32, int64, float64), variable-length bytes (WKB geometry,
-strings), and nullable variants of each. Arrays are supported via `COL_COMPLEX` for
-aggregate return types.
+chgeos registers both, so you can compare them in benchmarks. Upstream:
+[PR #104424](https://github.com/ClickHouse/ClickHouse/pull/104424) ("Add the `ColumnBinary`
+format"), open.
 
-**Constant column optimization.** A `COL_IS_CONST` flag marks columns that have the same
-value for every row in the batch. The WASM side reads one value and broadcasts it rather
-than reading N identical copies. For spatial predicates, this triggers `PreparedGeometry`
-construction on the constant side, amortizing the GEOS index build cost over the whole
+The reason for this format is cost. The MsgPack path crosses the boundary between ClickHouse
+and WASM one time per row. At 6 million rows per query, the serialization and the boundary
+crossings take measurable time. COLUMNAR_V1 sends all N rows in one call, as typed column
+buffers.
+
+Each argument is a typed buffer with a length prefix. The supported column types are:
+
+- Fixed-width scalars (bool, int32, int64, float64).
+- Variable-length bytes (WKB geometry and strings).
+- A nullable version of each type above.
+
+Aggregate return types can use arrays through `COL_COMPLEX`.
+
+The `COL_IS_CONST` flag marks a column that has the same value in every row of the batch. The
+WASM side reads the value one time and uses it for all rows. For a spatial predicate, the
+constant side becomes a `PreparedGeometry`, so the cost of the GEOS index is paid one time per
 batch.
 
-**Extracted and tested.** The format is defined in `ColumnarV1Wire.h` with a standalone
-unit test suite, separate from the WASM execution machinery.
+`src/Formats/ColumnBinaryWire.h` holds the format code. It has its own unit tests, separate
+from the WASM execution code.
 
 ---
 
-## 3. Spatial Predicate Join
+## 3. Spatial predicate join
 
-A new `IJoin` implementation (`SpatialRTreeJoin`) that uses an R-tree index on the right
-side to accelerate spatial predicate joins, bypassing the O(N×M) cross-join that CH would
-otherwise produce.
+`SpatialRTreeJoin` is a new `IJoin` implementation. It puts an R-tree index on the right side of
+a spatial join. An R-tree is a tree of bounding boxes that finds the boxes that overlap a given
+box. Without it, ClickHouse compares every left row with every right row (O(N×M)).
 
 ### Build phase
 
-On first call, `addBlockToJoin` extracts the geometry (WKB) from the designated right-side
-column, computes its bounding box, and inserts the bbox into a Boost.Geometry R-tree. For
-distance predicates (`st_dwithin`), the bbox is expanded by the distance argument before
-insertion. The right-side blocks themselves are retained in memory for result projection.
-Build is serialized by a mutex; probe is fully parallel.
+For each right-side block, `addBlockToJoin` reads the geometry (WKB) from the right-side
+geometry column and computes its bounding box. For a distance predicate (`st_dwithin`), it
+expands the box by the distance argument. The entries of each block stay in their own chunk, so
+build threads do not copy the full right side under a lock. The right-side blocks stay in
+memory for the output.
+
+When all blocks are in, the join builds one sub-tree per CPU core, in parallel. Each sub-tree
+is a static, packed R-tree. Its entries are sorted along a Hilbert curve (a path that keeps
+nearby points close together) with one radix sort. The nodes are stored in flat arrays. If all
+right-side entries are points, a leaf stores only the coordinates and the row position, not a
+full box.
 
 ### Probe phase
 
-`joinBlock` is called once per left-side block (concurrently across CH's pipeline threads).
-For each left row, the R-tree is queried for right-side bboxes that intersect the expanded
-left bbox, producing a candidate set. Candidates are grouped by whichever side has fewer
-distinct geometries; that side is wrapped as `ColumnConst` so the WASM predicate call
-builds a GEOS `PreparedGeometry` once per group. Only candidates that pass the precise
-spatial predicate are written to the output block.
+ClickHouse calls `joinBlock` one time for each left-side block, on several pipeline threads at
+the same time. For each left row, the join searches the sub-trees for right-side boxes that
+intersect the expanded left box. The result is a set of candidates.
 
-The output block is built by inserting only matched rows directly — not by allocating the
-full candidate set and filtering it afterward. At SF10 scale (60M trips, 0.0045° distance
-predicate) the candidate set per call can reach millions of rows; building it in full
-before filtering caused GB-scale intermediate allocations and malloc heap corruption under
-concurrent probe threads.
+The join groups the candidates by the side that has fewer distinct geometries. That side goes
+to WASM as a `ColumnConst`, so the WASM predicate builds a GEOS `PreparedGeometry` one time per
+group. The output contains only the candidates that pass the exact spatial predicate.
+
+The join adds matched rows directly to the output. It does not first build the full candidate
+set and then filter it. At SF10 (60 million trips, distance 0.0045°), one call can have
+millions of candidates. The old approach allocated gigabytes of temporary data and corrupted
+the malloc heap when several probe threads ran together.
+
+Large work items run on a shared thread pool:
+
+- A left row with millions of candidates is evaluated in batches in parallel.
+- When most probe threads are finished, a remaining probe recruits idle threads for its
+  groups. Thus one slow block does not run alone at the end of the join.
+
+The join copies candidate geometries and output columns one column at a time, and prefetches
+the next right-side rows. The right-side rows are in random order, so this removes many cache
+misses.
 
 ### Query rewriting
 
-Spatial predicate joins are typically written as comma joins with a WHERE clause
-(`FROM trip, building WHERE st_dwithin(...)`). A new analyzer pass
-(`SpatialPredicateJoinPass`) detects this pattern and rewrites it into explicit
-`JOIN ... ON` form. The planner then routes the join to `SpatialRTreeJoin` instead of a
-hash or cross join, and `spatial_expand_arg` metadata tells the join which argument index
-carries the distance parameter for bbox expansion.
+Spatial joins are often written as comma joins with a `WHERE` clause
+(`FROM trip, building WHERE st_dwithin(...)`). A new analyzer pass, `SpatialPredicateJoinPass`,
+finds this pattern and rewrites it as `JOIN ... ON`. The planner then sends the join to
+`SpatialRTreeJoin`, not to a hash join or a cross join. The `spatial_expand_arg` metadata tells
+the join which argument holds the distance for the box expansion.
 
 ### LEFT JOIN
 
-Unmatched left rows are tracked during the probe pass and appended to the output with NULL
-right columns afterward, satisfying LEFT JOIN semantics.
+During the probe, the join records which left rows have no match. After the probe, it adds
+these rows to the output with NULL right-side columns, as `LEFT JOIN` requires.
 
 ---
 
-## 4. Spatial Pruning
+## 4. Spatial pruning
 
-Three storage layers gained the ability to skip data based on a spatial predicate's
-bounding box before reading any rows.
+Three storage layers can skip data before they read rows. They use the bounding box of the
+spatial predicate.
 
 ### Shared infrastructure
 
@@ -159,43 +187,43 @@ automatically. New `ProfileEvents` track the number of row groups and pages skip
 
 ### Iceberg
 
-Iceberg manifest files can record per-data-file bounds under a `covering.bbox` naming
-convention. Two changes were made:
+Iceberg manifest files can record the bounds of each data file, with the `covering.bbox` naming
+convention. The fork changes two paths:
 
-- **Write path.** When writing Iceberg data files, the writer computes and records the
-  geometry column's bounding box in the manifest entry.
-
-- **Read path.** `ManifestFilesPruning` compares the recorded bbox against the spatial
-  predicate's bounding box and excludes manifest entries (and their data files) that
-  cannot intersect, before any data files are opened.
+- Write path. When ClickHouse writes an Iceberg data file, it records the bounding box of the
+  geometry column in the manifest entry.
+- Read path. `ManifestFilesPruning` compares the recorded box with the box of the spatial
+  predicate. It removes the manifest entries, and their data files, that cannot intersect. It
+  does this before it opens any data file.
 
 ### MergeTree skip index
 
-A new index type `spatial_bbox` can be declared on a geometry column (stored as WKB) in a
-MergeTree table. At index build time, the granule's bounding box is accumulated over all
-rows. At query time, granules whose recorded bbox doesn't intersect the spatial filter's
-geometry are skipped, reducing the number of rows read by the storage engine.
-([PR #104437](https://github.com/ClickHouse/ClickHouse/pull/104437), "Add spatial_bbox skip index for MergeTree geometry columns", open)
+`spatial_bbox` is a new index type for a geometry column (stored as WKB) in a MergeTree table.
+When ClickHouse builds the index, it records the bounding box of all rows in each granule. At
+query time, it skips the granules whose box does not intersect the geometry of the spatial
+filter. Thus the storage engine reads fewer rows.
+([PR #104437](https://github.com/ClickHouse/ClickHouse/pull/104437), "Add spatial_bbox skip index
+for MergeTree geometry columns", open)
 
 ---
 
-## 5. WASM Function Chain Fusion
+## 5. WASM function chain fusion
 
-A new query plan pass (`WasmChainFusionPass`) detects consecutive WASM scalar UDF calls
-where the output of one function feeds directly into the input of the next, and fuses them
-into a single host↔WASM boundary crossing.
+`WasmChainFusionPass` is a new query plan pass. It finds WASM scalar UDF calls where the output
+of one call is the input of the next. It merges such a chain into one crossing of the boundary
+between ClickHouse and WASM.
 
-**Motivation.** Each WASM call boundary requires serializing the output of one function
-into a ClickHouse column (WKB bytes for geometry), then deserializing it as input to the
-next. For geometry-heavy pipelines (e.g. `st_length(st_makeline(a, b))`) this doubles the
-WKB encoding work and allocates an intermediate column that is immediately consumed.
+Without fusion, ClickHouse serializes the output of the first function into a column (WKB
+bytes for geometry), and the next function parses it again. For geometry pipelines such as
+`st_length(st_makeline(a, b))`, this doubles the WKB work and allocates a temporary column that
+is used only one time.
 
-**Mechanism.** Functions declare that they support chaining by implementing
-`can_chain_execute(names, n)` in WASM — returning 1 means the WASM module can execute the
-named sequence in a single invocation without exporting intermediate results. The pass
-detects linear chains in the expression DAG where all intermediate results are single-use
-WASM outputs, replaces the chain with a single `WasmChain` function node that carries the
-fused export name, and registers a corresponding WASM binding via the chain ABI.
+A WASM module declares which chains it supports. It exports `can_chain_execute(names, n)`,
+which returns 1 if the module can run the named sequence in one call, without returning the
+intermediate results. The pass finds linear chains in the expression graph where each
+intermediate result is a WASM output that is used only one time. It replaces each chain with
+one `WasmChain` function node that has the name of the fused export. It then registers that
+export through the chain ABI.
 
-**Results.** Q7 (`st_length(st_makeline(...))` over 6M rows): 2.5 s → fused from 4.5 s
-(−44 %). Q5 (`st_area(st_convexhull(...))` per group): 1.54 s → fused from 1.84 s (−16 %).
+Benchmark queries Q5 (`st_area(st_convexhull(...))`) and Q7 (`st_length(st_makeline(...))`) use
+fused chains.
