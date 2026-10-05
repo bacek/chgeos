@@ -14,8 +14,9 @@ The struck-through items below are merged upstream.
 
 ## 1. WebAssembly UDF runtime
 
-The upstream WASM UDF system calls the module one row at a time, with MsgPack encoding. The fork
-extends it as follows.
+Upstream ClickHouse has two WASM call interfaces. `ROW_DIRECT` calls the module one time per
+row. `BUFFERED_V1` sends a full block in one call, serialized in a row format such as MsgPack.
+The fork extends the runtime as follows.
 
 Aggregate functions (UDAFs). The setting `is_aggregate = 1` in `CREATE FUNCTION` registers a
 WASM export as an aggregate function. The runtime calls `addBatchSinglePlace` to send batches of
@@ -57,9 +58,12 @@ instead of reading whatever sits there.~~ Shipped in [PR #116548](https://github
 
 ## 2. COLUMNAR_V1 wire format
 
-COLUMNAR_V1 is a call interface (ABI) for predicates and scalar functions on many rows. It
-replaces the MsgPack interface that sends one row at a time. `ColumnBinaryWire.h` defines the
-wire frame. ClickHouse can use the frame in two ways:
+COLUMNAR_V1 is a call interface (ABI) for scalar functions and predicates. Like `BUFFERED_V1`,
+it sends a full block of rows in one call. The difference is the encoding. `BUFFERED_V1` with
+MsgPack encodes the block row by row, and the WASM side decodes every value. COLUMNAR_V1 sends
+each column as one typed buffer, in the same layout as the ClickHouse column in memory.
+
+`src/Formats/ColumnBinaryWire.h` defines the frame. ClickHouse can use the frame in two ways:
 
 - As the `ColumnBinary` serialization format on the normal `ABI BUFFERED_V1` path, through
   `FormatFactory`, `ColumnBinaryInputFormat` and `ColumnBinaryOutputFormat`.
@@ -69,26 +73,25 @@ chgeos registers both, so you can compare them in benchmarks. Upstream:
 [PR #104424](https://github.com/ClickHouse/ClickHouse/pull/104424) ("Add the `ColumnBinary`
 format"), open.
 
-The reason for this format is cost. The MsgPack path crosses the boundary between ClickHouse
-and WASM one time per row. At 6 million rows per query, the serialization and the boundary
-crossings take measurable time. COLUMNAR_V1 sends all N rows in one call, as typed column
-buffers.
+A frame starts with a 16-byte header: magic `CBIN`, version, row count and column count. The
+reader rejects an unknown magic or version. Then there is one 40-byte descriptor for each
+column, with the type and the offsets of the null map, the offsets array and the data. The
+column types are:
 
-Each argument is a typed buffer with a length prefix. The supported column types are:
+- `COL_BYTES`: variable-length bytes (strings and WKB geometry).
+- `COL_FIXED8` to `COL_FIXED64`: fixed-width scalars. They are copied with one `memcpy`.
+- `COL_COMPLEX`: `Array`, `Tuple` and `Map`, with a recursive layout.
+- `COL_VARIANT`: `Variant`, with a discriminator for each row.
+- `COL_FIXEDN`: other fixed widths, such as `UUID`, `Int128` and `FixedString(N)`.
+- `COL_LOWCARD`: `LowCardinality`, as a dictionary and an index array.
 
-- Fixed-width scalars (bool, int32, int64, float64).
-- Variable-length bytes (WKB geometry and strings).
-- A nullable version of each type above.
+Two flags change a type. `COL_IS_NULLABLE` adds a null map with one byte for each row.
+`COL_IS_CONST` marks a constant column, and the frame stores only one row of it. The WASM side
+reads the value one time and uses it for all rows. For a spatial predicate, the constant side
+becomes a `PreparedGeometry`, so the cost of the GEOS index is paid one time per call.
 
-Aggregate return types can use arrays through `COL_COMPLEX`.
-
-The `COL_IS_CONST` flag marks a column that has the same value in every row of the batch. The
-WASM side reads the value one time and uses it for all rows. For a spatial predicate, the
-constant side becomes a `PreparedGeometry`, so the cost of the GEOS index is paid one time per
-batch.
-
-`src/Formats/ColumnBinaryWire.h` holds the format code. It has its own unit tests, separate
-from the WASM execution code.
+The format has its own unit tests (`gtest_column_binary_wire.cpp`), separate from the WASM
+execution code.
 
 ---
 
