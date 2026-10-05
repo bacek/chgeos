@@ -1,63 +1,93 @@
 # chgeos
 
-PostGIS-compatible spatial functions for ClickHouse, delivered as a WebAssembly UDF module powered by [GEOS](https://libgeos.org/) 3.12+.
+chgeos adds PostGIS-compatible spatial functions to ClickHouse. It is a WebAssembly (WASM)
+user-defined function module that uses [GEOS](https://libgeos.org/) 3.12 or later.
 
 ## Disclaimer
 
-This is my pet-project with `-Ofun` mentality.
-* Just a hobby, won't be big and professional.
-* I'm testing how far I can push Claude.
-* I'm (re-)learning low-level optimization I haven't done in 15+ years.
-* I'm extracting useful pieces out of this project into upstream projects. For example non-copy `std::span` handling in `msgpack23` and exceptions support in `wasmtime`. Also, general improvements of WASM UDF support in ClickHouse. Watch this space ;)
-* ~~This is nowhere near any useful application. For many reasons. Especially because CH<->UDF interaction is very limited. Basically it's a one-way street at the moment and any "spatial aware" query engine that can use Parquet file metadata will be faster. Much faster. Order of magnitude faster.~~ See [CH_CHANGES.md](CH_CHANGES.md) and [BENCHMARK.md](BENCHMARK.md) 
+This is a hobby project, written for fun.
 
-Having said that, I'm not saying it will never be useful.
+* It is a hobby. It will not become big or professional.
+* I use it to test how far I can push Claude.
+* I use it to relearn low-level optimization that I have not done for more than 15 years.
+* I move useful parts of it into upstream projects. Examples are non-copy `std::span` support
+  in `msgpack23`, exception support in `wasmtime`, and general improvements to WASM UDF support
+  in ClickHouse.
+* ~~This is nowhere near any useful application. For many reasons. Especially because CH<->UDF interaction is very limited. Basically it's a one-way street at the moment and any "spatial aware" query engine that can use Parquet file metadata will be faster. Much faster. Order of magnitude faster.~~ See [CH_CHANGES.md](CH_CHANGES.md) and [BENCHMARK.md](BENCHMARK.md).
+
+I do not say that it will never be useful.
 
 ## Status (2026-10-05)
 
-**Mostly done in its current scope.** On the
-[SpatialBench](https://github.com/apache/sedona-spatialbench) suite chgeos is the fastest engine
-on 10 of 12 queries at SF1 (one tie) and 9 of 12 at SF10 (two ties), against DuckDB 1.5.6,
-SedonaDB 0.4.1 and PyCanopy 0.4.1. It loses two: PyCanopy is faster on SF1 Q11 (cross-zone
-trips), and DuckDB is faster on SF10 Q7 (detour ratio), because it reads points straight from
-the Parquet bytes while chgeos still parses each value. All 12 queries return the correct
-answers at both scales. See [BENCHMARK.md](BENCHMARK.md).
+The project is mostly complete for its current scope.
 
-What is left is mostly outside this repository:
-- **Parquet read speed.** ClickHouse reads Parquet 1.6–2.7× slower than DuckDB on a plain scan.
-  chgeos still wins the scan-heavy queries, but this sets how fast they can get.
-- **The WASM boundary.** Code inside WASM runs several times slower per row than the same code
-  built natively. Closing that gap is work in wasmtime and in ClickHouse's UDF support.
-- **Upstreaming.** The spatial join and the WASM UDF changes live in a ClickHouse fork (see
-  [CH_CHANGES.md](CH_CHANGES.md)) and need to land upstream before anyone else can use them.
+On the [SpatialBench](https://github.com/apache/sedona-spatialbench) suite, chgeos is the
+fastest engine on 10 of 12 queries at SF1, with one tie. At SF10 it is the fastest on 9 of 12
+queries, with two ties. The other engines are DuckDB 1.5.6, SedonaDB 0.4.1 and PyCanopy 0.4.1.
+
+chgeos loses two queries. PyCanopy is faster on SF1 Q11 (cross-zone trips). DuckDB is faster on
+SF10 Q7 (detour ratio), because DuckDB reads points directly from the Parquet bytes, but chgeos
+parses each value. All 12 queries return the correct answers at both scales. See
+[BENCHMARK.md](BENCHMARK.md).
+
+The remaining work is mostly outside this repository:
+
+- Parquet read speed. ClickHouse reads Parquet 1.6 to 2.7 times slower than DuckDB on a plain
+  scan. chgeos still wins the queries that scan the most data, but the read speed limits how
+  fast they can be.
+- The WASM boundary. Code in WASM runs several times slower per row than the same code compiled
+  for the CPU. To close this gap, wasmtime and the ClickHouse UDF support must change.
+- Upstreaming. The spatial join and the WASM UDF changes are in a ClickHouse fork (see
+  [CH_CHANGES.md](CH_CHANGES.md)). Other users can use them only after they are merged into
+  ClickHouse.
 
 ## Motivation
 
-ClickHouse is fast. If you need to crunch billions of rows, it's the right tool. But the moment you ask "can it do spatial analytics?" the answer is: technically yes, practically no.
+ClickHouse is fast. If you must process billions of rows, it is the correct tool. But spatial
+analysis in ClickHouse is possible in theory and difficult in practice.
 
-ClickHouse has native geometry types (`Point`, `Polygon`, `MultiPolygon`, ...) and some spatial functions under names like `polygonsIntersectCartesian`, `areaCartesian`, `polygonsWithinCartesian`. It also has H3 and S2 index support. What it doesn't have is:
+ClickHouse has native geometry types (`Point`, `Polygon`, `MultiPolygon`, and others). It has
+some spatial functions, with names such as `polygonsIntersectCartesian`, `areaCartesian` and
+`polygonsWithinCartesian`. It also supports the H3 and S2 indexes. It does not have these
+features:
 
-- **WKB / GeoParquet compatibility.** Native CH geometry types have their own internal representation. Real-world geometry data — GeoParquet, PostGIS, GDAL, anything — is encoded as WKB. You can't pass a WKB blob to `polygonsIntersectCartesian`.
-- **PostGIS-compatible names.** Every GIS engineer knows `ST_Intersects`, `ST_Buffer`, `ST_Within`. ClickHouse's equivalents are named differently, require type conversion, and are documented separately.
-- **The full GEOS function set.** `ST_Buffer`, `ST_Simplify`, `ST_Centroid`, `ST_MakeValid`, etc. — none of these exist in ClickHouse.
+- WKB and GeoParquet compatibility. WKB (Well-Known Binary) is the standard binary format for
+  geometry. The native ClickHouse geometry types use their own internal format. Real geometry
+  data from GeoParquet, PostGIS, GDAL and other tools is in WKB. You cannot give a WKB value to
+  `polygonsIntersectCartesian`.
+- PostGIS-compatible names. GIS engineers know `ST_Intersects`, `ST_Buffer` and `ST_Within`.
+  The ClickHouse functions have different names, need type conversion, and have separate
+  documentation.
+- The full GEOS function set. ClickHouse has no `ST_Buffer`, `ST_Simplify`, `ST_Centroid` or
+  `ST_MakeValid`.
 
-The concrete use case that started this: querying geospatial data stored in Parquet files via Apache Iceberg. Large geometry datasets in a lakehouse, ClickHouse as the query engine, geometry encoded as WKB blobs in Parquet `BYTE_ARRAY` columns — industry standard, works everywhere.
+The use case that started this project is a query on geometry data in Parquet files in Apache
+Iceberg. The data is a large set of geometries in a lakehouse. ClickHouse is the query engine.
+The geometry is WKB in Parquet `BYTE_ARRAY` columns, which is the industry standard.
 
-ClickHouse reads the WKB fine. But a bunch of functions are missing. And I really wanted to use them to make some particular DB quack in awe. I failed, btw.
+ClickHouse reads the WKB correctly, but many functions are missing. I wanted to use them to
+make a particular database quack in awe. I did not succeed.
 
-### Why not a core PR?
+### Why not a pull request to ClickHouse?
 
-The obvious move is a PR to ClickHouse adding GEOS as a dependency. This is also the move that will consume six months and probably fail:
+The obvious approach is a pull request that adds GEOS to ClickHouse as a dependency. This
+approach would take about six months and would probably fail:
 
-- GEOS is LGPL; ClickHouse's licensing situation makes bundling it uncomfortable ([tracked issue](https://github.com/ClickHouse/ClickHouse/issues/80186))
-- Adding sixty spatial functions wrapped around a new external dependency is not a quick review
-- You need it working now, not when the stars align over the issue tracker
+- GEOS uses the LGPL license. The ClickHouse license situation makes it difficult to include
+  GEOS ([tracked issue](https://github.com/ClickHouse/ClickHouse/issues/80186)).
+- A review of sixty spatial functions that wrap a new external dependency is slow.
+- You need the functions now.
 
 ### Why WASM?
 
-ClickHouse's experimental WASM UDF engine (wasmtime) lets you compile a `.wasm` module, drop it in, and call your functions as if they were built-in. GEOS compiles to WASM via Emscripten. The result is a self-contained binary with no system dependencies, no ClickHouse internals touched, no LGPL contamination of the host binary. You ship a file and write `CREATE FUNCTION` statements.
+The experimental WASM UDF engine in ClickHouse (wasmtime) loads a compiled `.wasm` module. You
+can then call its functions as if they were built in. Emscripten compiles GEOS to WASM. The
+result is one binary file with no system dependencies. It does not change the ClickHouse
+internals, and the LGPL code does not go into the ClickHouse binary. You copy one file and run
+`CREATE FUNCTION` statements.
 
-With chgeos, querying geometry from an Iceberg table looks exactly like PostGIS — same function names, same semantics, no translation guide:
+With chgeos, a query on geometry in an Iceberg table looks the same as a PostGIS query. The
+function names and semantics are the same:
 
 ```sql
 SELECT region_name, st_area(geometry) AS area
@@ -66,41 +96,77 @@ WHERE st_intersects(geometry, st_geomfromtext('POLYGON((...))'))
 ORDER BY area DESC;
 ```
 
-## In-flight ClickHouse changes
+## ClickHouse changes in progress
 
-chgeos depends on ClickHouse patches that are not yet merged upstream, all on the [`bacek/wasm`](https://github.com/bacek/ClickHouse/tree/bacek/wasm) branch. The changes span four areas: WASM runtime extensions (UDAFs, `DETERMINISTIC` constant folding, dynamic block splitting), a columnar call ABI (COLUMNAR_V1), a spatial predicate join engine (SpatialRTreeJoin with R-tree indexing and query rewriting), and spatial pruning at the storage layer (GeoParquet row-group/page pruning, Iceberg manifest pruning, MergeTree skip index). See [CH_CHANGES.md](CH_CHANGES.md) for a detailed write-up.
+chgeos needs ClickHouse patches that are not yet merged upstream. All of them are on the
+[`bacek/wasm`](https://github.com/bacek/ClickHouse/tree/bacek/wasm) branch. The patches cover
+four areas:
+
+- WASM runtime extensions: aggregate UDFs (UDAFs), constant folding for `DETERMINISTIC`
+  functions, and dynamic block splitting.
+- A columnar call interface (COLUMNAR_V1).
+- A join engine for spatial predicates (SpatialRTreeJoin), with an R-tree index and query
+  rewriting.
+- Spatial pruning at the storage layer: GeoParquet row-group and page pruning, Iceberg manifest
+  pruning, and a MergeTree skip index.
+
+[CH_CHANGES.md](CH_CHANGES.md) describes the patches in detail.
 
 ## How it works
 
-**Wire format:** Geometries are `String` columns containing raw EWKB bytes — the same format PostGIS, GeoParquet, and most spatial tools use. No conversion needed at the database boundary.
+Geometries are `String` columns that contain raw EWKB bytes. EWKB is WKB with an optional SRID.
+PostGIS, GeoParquet and most spatial tools use this format, so no conversion is necessary at
+the database boundary.
 
-**Three ABIs:** Functions are registered under three wire formats. The fastest path (COLUMNAR_V1) is the default for all functions that support it:
-- **COLUMNAR_V1** (`ABI COLUMNAR_V1`) — one call for all N rows; ClickHouse sends columns, not rows. Constant columns (e.g. a filter polygon) are sent once, not N times. Exported as `name_col`.
-- **RowBinary** (`ABI BUFFERED_V1`, `serialization_format = 'RowBinary'`) — one call per batch with typed binary encoding. Exported as `name_mp`.
-- **MsgPack** (`ABI BUFFERED_V1`) — original path, used for aggregates and CH native type converters. Also exported as `name_mp`.
+chgeos registers each function for up to three call interfaces (ABIs). COLUMNAR_V1 is the
+fastest, and chgeos uses it by default for every function that supports it:
 
-Canonical PostGIS-compatible function names (`st_contains`, `st_distance`, etc.) are SQL aliases that route to `_col` when a columnar variant exists, or `_mp` otherwise.
+- COLUMNAR_V1 (`ABI COLUMNAR_V1`) makes one call for all N rows. ClickHouse sends columns, not
+  rows. It sends a constant column, for example a filter polygon, one time and not N times. The
+  exported name is `name_col`.
+- RowBinary (`ABI BUFFERED_V1`, `serialization_format = 'RowBinary'`) makes one call per batch,
+  with a typed binary encoding. The exported name is `name_mp`.
+- MsgPack (`ABI BUFFERED_V1`) is the original interface. Aggregates and the converters for
+  native ClickHouse types use it. The exported name is also `name_mp`.
 
-**Template machinery:** A single `columnar_impl_wrapper<Ret, Args...>` template deduces all argument and return types from the `_impl` function pointer. Adding a new columnar function is two lines: the C++ impl and a `CH_UDF_COL(name)` macro invocation.
+The standard PostGIS names (`st_contains`, `st_distance` and the others) are SQL aliases. An
+alias calls the `_col` function if it exists, and the `_mp` function if not.
 
-**Bbox short-circuit:** Binary predicates (`ST_Intersects`, `ST_Contains`, `ST_Within`, etc.) extract bounding boxes directly from raw WKB bytes — no GEOS parse, no heap allocation — and return early when boxes don't overlap. GEOS is only invoked when the bbox check passes.
+One template, `columnar_impl_wrapper<Ret, Args...>`, gets the argument and return types from
+the `_impl` function pointer. To add a columnar function, you write two lines: the C++
+implementation and a `CH_UDF_COL(name)` macro call.
 
-**PreparedGeometry:** When a geometry column is constant across all rows (e.g. a filter polygon in a WHERE clause), the columnar wrapper parses the WKB once, builds a GEOS `PreparedGeometry` (STR-tree spatial index), and reuses it for all N rows. This accelerates all 11 binary predicates and `ST_DWithin`.
+The binary predicates (`ST_Intersects`, `ST_Contains`, `ST_Within` and the others) first read
+the bounding boxes directly from the WKB bytes. This step does not parse the geometry and does
+not allocate memory. If the boxes do not overlap, the predicate returns at once. GEOS runs only
+when the boxes overlap.
 
-> **Note:** ClickHouse WASM UDFs are experimental and not available on ClickHouse Cloud. The patches chgeos requires are tracked in the [In-flight ClickHouse changes](#in-flight-clickhouse-changes) section above.
+A geometry column can be constant for all rows, for example a filter polygon in a `WHERE`
+clause. In that case the columnar wrapper parses the WKB one time and builds a GEOS
+`PreparedGeometry`, which is a geometry with a spatial index (an STR tree). It then uses this
+prepared geometry for all N rows. This makes all 11 binary predicates and `ST_DWithin` faster.
+
+> Note: ClickHouse WASM UDFs are experimental, and ClickHouse Cloud does not support them. The
+> section [ClickHouse changes in progress](#clickhouse-changes-in-progress) lists the patches
+> that chgeos needs.
 
 ## Functions
 
-PostGIS-compatible names and semantics throughout. The complete DDL is in [`clickhouse/create.sql`](clickhouse/create.sql).
+The function names and semantics are the same as in PostGIS. The full DDL is in
+[`clickhouse/create.sql`](clickhouse/create.sql).
 
-Two additions beyond the standard PostGIS set:
+chgeos adds two functions that PostGIS does not have:
 
-- **`st_intersects_extent`** — bounding-box-only intersection check with no GEOS parse. Use as a fast pre-filter in joins before applying a precise predicate.
-- **`st_knn`** — k-nearest-neighbour query: given a probe geometry and an array of candidate geometries, returns the `k` closest (index, distance) pairs. When the candidate array is constant, the GEOS STRtree index is built once per batch.
+- `st_intersects_extent` checks only whether two bounding boxes intersect, and does not parse
+  the geometry. Use it as a fast filter in a join before a precise predicate.
+- `st_knn` finds the k nearest neighbours. It takes a probe geometry and an array of candidate
+  geometries, and returns the `k` closest (index, distance) pairs. If the candidate array is
+  constant, chgeos builds the index one time and uses it for all batches.
 
 ## Benchmarks
 
-The benchmark suite (`scripts/bench_sf.py`) runs the 12 SpatialBench queries against ClickHouse with chgeos, using either Parquet files or native MergeTree tables.
+The benchmark script (`scripts/bench_sf.py`) runs the 12 SpatialBench queries on ClickHouse
+with chgeos. It reads Parquet files or native MergeTree tables.
 
 ### Usage
 
@@ -135,7 +201,8 @@ python3 scripts/bench_sf.py --ch ../ClickHouse/build/programs/clickhouse --sf sf
 
 ### JSON output format
 
-When `--json` is set, each run produces one JSON line per query set, matching the [SedonaDB `BenchmarkSuite`](https://github.com/Location3/spatialbench) format:
+If you set `--json`, the script writes one JSON line per run of the query set. The format is
+the same as the [SedonaDB `BenchmarkSuite`](https://github.com/Location3/spatialbench) format:
 
 ```json
 {"engine": "chgeos", "version": "14b0f95", "scale_factor": 1.0,
@@ -148,19 +215,21 @@ When `--json` is set, each run produces one JSON line per query set, matching th
 ```
 
 Fields:
-- `engine` — always `"chgeos"`
-- `version` — short git SHA of the chgeos commit used
-- `scale_factor` — `1.0` or `10.0`
-- `total_time` — sum of all successful `time_seconds` (seconds)
-- `results[].time_seconds` — average time across runs, in seconds (rounded to 2dp)
-- `results[].status` — `"success"`, `"error"`, or `"timeout"`
+
+- `engine` is always `"chgeos"`.
+- `version` is the short git SHA of the chgeos commit.
+- `scale_factor` is `1.0` or `10.0`.
+- `total_time` is the sum of all successful `time_seconds` values, in seconds.
+- `results[].time_seconds` is the average time across runs, in seconds, rounded to two decimal
+  places.
+- `results[].status` is `"success"`, `"error"` or `"timeout"`.
 
 ## Building
 
 ### Requirements
 
-- [Emscripten](https://emscripten.org/) (emsdk), `emcmake` in `PATH`
-- CMake ≥ 3.10
+- [Emscripten](https://emscripten.org/) (emsdk), with `emcmake` in `PATH`
+- CMake 3.10 or later
 
 ### Build the WASM module
 
@@ -170,9 +239,9 @@ cmake --build build_wasm --target chgeos
 # Output: build_wasm/chgeos.wasm
 ```
 
-### Build and run unit tests (native)
+### Build and run the unit tests (native)
 
-No Emscripten needed — tests compile and run natively with a standard C++ toolchain.
+The unit tests do not need Emscripten. They compile and run with a standard C++ toolchain.
 
 ```bash
 cmake -S . -B build_native -DCMAKE_BUILD_TYPE=Debug
@@ -180,15 +249,16 @@ cmake --build build_native
 cd build_native && ctest --output-on-failure
 ```
 
-### Run end-to-end tests (ClickHouse)
+### Run the end-to-end tests (ClickHouse)
 
-Requires a ClickHouse binary with WASM UDF support and a built `chgeos.wasm`.
+The end-to-end tests need a ClickHouse binary with WASM UDF support and a built `chgeos.wasm`.
 
 ```bash
 ./clickhouse/test_e2e.sh [/path/to/clickhouse] [/path/to/chgeos.wasm]
 ```
 
-Defaults: looks for ClickHouse at `../ClickHouse/build/programs/clickhouse` relative to the repo root, and the WASM module at `build_wasm/chgeos.wasm`.
+By default, the script looks for ClickHouse at `../ClickHouse/build/programs/clickhouse`,
+relative to the repository root. It looks for the WASM module at `build_wasm/chgeos.wasm`.
 
 ## ClickHouse setup
 
@@ -209,21 +279,21 @@ INSERT INTO system.webassembly_modules (name, code)
 SELECT 'chgeos', base64Decode('{base64 of chgeos.wasm}');
 ```
 
-Or from a file via `clickhouse-client`:
+You can also load it from a file with `clickhouse-client`:
 
 ```bash
 clickhouse client -q "INSERT INTO system.webassembly_modules (name, code) VALUES ('chgeos', file('/path/to/chgeos.wasm'))"
 ```
 
-### Register functions
+### Register the functions
 
-All function DDL is in `clickhouse/create.sql`. Load them all at once:
+The DDL for all functions is in `clickhouse/create.sql`. To load all of them, run:
 
 ```bash
 clickhouse client --multiquery < clickhouse/create.sql
 ```
 
-Each function is registered under up to three names:
+chgeos registers each function under up to three names:
 
 ```sql
 -- COLUMNAR_V1 (fastest path, preferred for analytical queries)
@@ -248,7 +318,7 @@ CREATE OR REPLACE FUNCTION st_intersects AS (a, b) -> st_intersects_col(a, b);
 
 ### Usage examples
 
-**Basic accessors and predicates:**
+Basic accessors and predicates:
 
 ```sql
 WITH
@@ -261,7 +331,7 @@ SELECT
     st_distance(poly, pt)         AS distance;    -- 0
 ```
 
-**Filter rows from a Parquet file by spatial intersection:**
+Filter the rows of a Parquet file with a spatial intersection:
 
 ```sql
 SELECT count()
@@ -272,7 +342,7 @@ WHERE st_intersects(
 );
 ```
 
-**Spatial join via bounding-box pre-filter + exact predicate:**
+Spatial join with a bounding-box filter and then an exact predicate:
 
 ```sql
 SELECT a.id, b.id
@@ -281,7 +351,7 @@ JOIN regions AS b ON st_intersects_extent(a.geom, b.geom)
                   AND st_within(a.geom, b.geom);
 ```
 
-**I/O: parse GeoJSON, round-trip through WKB, export EWKT:**
+Input and output. Parse GeoJSON, convert through WKB, and write EWKT:
 
 ```sql
 SELECT
@@ -289,7 +359,7 @@ SELECT
 -- 'SRID=4326;POINT (13.4 52.5)'
 ```
 
-**Geometry processing: buffer, repair, subdivide:**
+Geometry processing. Buffer, repair and subdivide:
 
 ```sql
 SELECT
@@ -299,7 +369,7 @@ SELECT
 FROM my_table;
 ```
 
-**Aggregate functions** — true `GROUP BY` aggregates, same as PostGIS/DuckDB:
+Aggregate functions. These are true `GROUP BY` aggregates, as in PostGIS and DuckDB:
 
 ```sql
 -- Dissolving union per region
@@ -318,7 +388,7 @@ FROM my_table
 GROUP BY region_id;
 ```
 
-**DE-9IM relation:**
+DE-9IM relation:
 
 ```sql
 SELECT st_relate(
@@ -329,15 +399,26 @@ SELECT st_relate(
 
 ## Limitations
 
-- **No native ClickHouse geometry type integration.** ClickHouse's built-in `Point`, `LineString`, `Polygon`, `MultiPolygon` types have their own internal representation. You cannot pass them directly to `ST_*` functions. Conversion helpers (`ST_GeomFromCHPoint`, `ST_GeomFromCHLineString`, etc.) are provided, but every geometry column must be in WKB (`String`) for chgeos to operate on it.
-
-- **No PROJ 9 / accurate CRS reprojection.** `ST_Transform` and `ST_TransformProj` exist in the DDL but PROJ is not linked into the WASM module. Datum-shift-aware reprojection (e.g. EPSG:4326 → EPSG:3857 with grid files, NAD27 → NAD83) requires PROJ 9 with datum grids, which cannot run inside the WASM sandbox. Reproject data before loading it into ClickHouse if accurate CRS conversion is needed.
-
-- **Planar geometry only.** All calculations are Cartesian — `ST_Distance`, `ST_Area`, `ST_Length` work in the coordinate units of the geometry, not meters on the sphere. Use an appropriate projected CRS (e.g. UTM) for metric results.
-
-- **Geometry parsed per row (with exceptions).** WKB is re-parsed from bytes for each row. The exception is constant geometry columns in COLUMNAR_V1: when one argument is constant (e.g. a filter polygon), PreparedGeometry builds a spatial index once and reuses it for all rows.
-
-- **Experimental ClickHouse feature.** `allow_experimental_webassembly_udf` is not production-ready and not available on ClickHouse Cloud. The UDF API may change between ClickHouse releases.
+- No integration with the native ClickHouse geometry types. The built-in `Point`, `LineString`,
+  `Polygon` and `MultiPolygon` types use their own internal format. You cannot give them
+  directly to the `ST_*` functions. chgeos has conversion functions (`ST_GeomFromCHPoint`,
+  `ST_GeomFromCHLineString` and others), but every geometry column must be WKB in a `String`
+  column before chgeos can use it.
+- No PROJ 9 and no accurate coordinate system (CRS) conversion. `ST_Transform` and
+  `ST_TransformProj` are in the DDL, but the WASM module does not include PROJ. A conversion
+  that shifts the datum (for example EPSG:4326 to EPSG:3857 with grid files, or NAD27 to NAD83)
+  needs PROJ 9 with datum grids, and these cannot run in the WASM sandbox. If you need an
+  accurate CRS conversion, convert the data before you load it into ClickHouse.
+- Planar geometry only. All calculations are Cartesian. `ST_Distance`, `ST_Area` and
+  `ST_Length` use the coordinate units of the geometry, not meters on the sphere. For results
+  in meters, use a projected CRS, for example UTM.
+- Geometry is parsed for each row, with one exception. chgeos parses the WKB bytes again for
+  each row. If one argument is a constant geometry column in COLUMNAR_V1 (for example a filter
+  polygon), chgeos builds a `PreparedGeometry` with a spatial index one time and uses it for
+  all rows.
+- Experimental ClickHouse feature. `allow_experimental_webassembly_udf` is not ready for
+  production, and ClickHouse Cloud does not support it. The UDF API can change between
+  ClickHouse releases.
 
 ## Dependencies
 
