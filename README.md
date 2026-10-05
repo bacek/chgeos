@@ -155,6 +155,12 @@ prepared geometry for all N rows. This makes all 11 binary predicates and `ST_DW
 The function names and semantics are the same as in PostGIS. The full DDL is in
 [`clickhouse/create.sql`](clickhouse/create.sql).
 
+PostGIS uses one name for both a scalar function and an aggregate, for example `ST_Union(a, b)`
+and `ST_Union(geom) GROUP BY`. ClickHouse decides from the name alone whether a call is an
+aggregate, so chgeos uses the DuckDB names for the aggregates: `st_union_agg`, `st_collect_agg`,
+`st_makeline_agg`, `st_extent_agg` and `st_convexhull_agg`. The scalar functions `st_union`,
+`st_collect` and `st_makeline` keep the PostGIS names.
+
 chgeos adds two functions that PostGIS does not have:
 
 - `st_intersects_extent` checks only whether two bounding boxes intersect, and does not parse

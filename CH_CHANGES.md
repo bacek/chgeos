@@ -16,7 +16,13 @@ The struck-through items below are merged upstream.
 
 Aggregate functions (UDAFs). The setting `is_aggregate = 1` in `CREATE FUNCTION` registers a
 WASM export as an aggregate function. The runtime calls `addBatchSinglePlace` to send batches of
-rows into the accumulator.
+rows into the accumulator. One name holds either aggregate or scalar overloads, never both,
+because the analyzer decides from the name whether a call is an aggregate. A call to a dropped
+aggregate fails with `UNKNOWN_AGGREGATE_FUNCTION`.
+
+Overloads. One WASM function name can have several signatures, also with different numbers of
+arguments. The call picks the overload by argument types. `DROP FUNCTION f(types)` drops one
+overload.
 
 ~~**DETERMINISTIC constant folding.** Adding `DETERMINISTIC` to `CREATE FUNCTION` opts a
 WASM UDF into CH's constant-folding pipeline. Three cooperating changes were needed: the
