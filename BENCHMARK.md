@@ -38,10 +38,6 @@ Apache Sedona (SedonaDB) and PyCanopy on the spatial benchmark suite.
 Q4 is dominated by reading `zone.parquet`, which is the same file at every scale factor, so SF1
 and SF10 Q4 land close together (0.66 s / 0.97 s).
 
-After the 2026-10-05 `SpatialRTreeJoin` and `st_knn` work chgeos takes SF1 Q10 and Q12
-(1.81 / 1.61 s against PyCanopy 2.20 / 1.74 s). SF1 Q11 is the one query PyCanopy still wins,
-2.47 s against chgeos 3.40 s; see the Q10, Q11 and Q12 notes below.
-
 **The SF1 tally understates DuckDB, and the cause is our Parquet files.** `sf1/trip.parquet`
 holds 6M rows in only 4 row groups. DuckDB caps a scan pipeline's thread count at the number
 of row groups in the file — the row group is its atomic unit of scan parallelism, with no
@@ -80,30 +76,14 @@ explained by this — see the Q7 note below.
 
 **SF10 wins — chgeos: 9, DuckDB: 1, Sedona: 0, PyCanopy: 0, Ties: 2**
 
-chgeos SF1 and SF10 were re-measured on 2026-10-05 at CH `d2d24230309` (COLUMNAR_V1 wire,
-3 runs, averages; the machine was not idle, load average ~17 at start, so chgeos is if anything
-understated against the idle competitor runs). Both scales pass the spatialbench reference
-answers on all 12 queries. The previous chgeos run, 2026-10-04 at CH `d0c96a2e6aa`, was on an idle machine
-(5 runs, load average ~1 at start). An earlier run the same day at
-load ~19 was 4–10% slower on Q1–Q4, Q6, Q7 and Q11; a same-session A/B confirmed the
-difference was machine load, not code. DuckDB, SedonaDB and PyCanopy were all re-measured the same day on the same split files
-(5 runs, averages, 120 s timeout) straight after the chgeos runs, also on an idle machine. An
-earlier competitor run on 2026-10-04 on a busier machine had PyCanopy roughly 2× slower on
-Q10–Q12. With the 2026-10-05 chgeos numbers chgeos takes SF10 Q10 and Q11 and ties PyCanopy
-on Q12 (19.16 s against 19.45 s).
+chgeos SF1 and SF10 were re-measured on 2026-10-05 at CH `d2d24230309` (3 runs, averages; load
+~17 at start, so chgeos is if anything understated). All 12 queries match the spatialbench
+answers at both scales. Competitors are from the 2026-10-04/05 idle run (5 runs, 120 s timeout).
 
 Q10–Q12 since 2026-10-04 (SF10: Q10 14.1 → 8.0 s, Q11 25.7 → 14.3 s, Q12 32.5 → 19.2 s):
-- `SpatialRTreeJoin` replaces the boost STR R-tree with a static Hilbert-packed R-tree (one
-  32-bit-key radix sort per sub-tree, flat node arrays, leaves stored as row position plus point
-  coordinates when the build side is all points), built straight from the per-block entry
-  chunks; the 60M-trip build went from 2.4 s to 1.3 s per join;
-- predicate batches of one heavy probe row, and the slices of large candidate groups, run on a
-  shared pool, and a probe recruits helpers once most other probe streams have finished, which
-  removed the single-thread tail at the end of each join;
-- candidate and output columns are gathered column by column with prefetching instead of a
-  row-major `insertFrom` over random right-side rows;
-- `st_knn` keeps the index for a constant candidate array across calls and refines candidates in
-  centroid-distance order with an early exit.
+- `SpatialRTreeJoin`: Hilbert-packed static R-tree (build 2.4 → 1.3 s for 60M trips), heavy
+  probe rows evaluated on a shared pool, prefetched column-wise gathers;
+- `st_knn`: index cached across calls, candidates refined in distance order with early exit.
 
 Q10 and Q11 got 2× faster since 2026-10-03 (Q10 30.0 → 14.1 s, Q11 45.6 → 25.7 s), all from
 host-side work in `SpatialRTreeJoin`, not WASM:
@@ -215,25 +195,13 @@ predicate, cutting candidate pairs dramatically. All engines land at or below 0.
 resolution of these measurements; chgeos is 0.02 s / 0.04 s against SedonaDB 0.03 s / 0.05 s
 and PyCanopy 0.03 s / 0.06 s.
 
-**Q10:** chgeos wins at both scales, 1.81 s / 8.00 s against PyCanopy 2.20 s / 21.1 s and
-SedonaDB 2.44 s / 14.3 s; DuckDB times out at SF10. The former single-thread probe tail (a few
-zones with 4–8M candidate trips each) now runs on the shared pool.
+**Q10:** chgeos wins at both scales; DuckDB times out at SF10.
 
-**Q11 (cross-zone trips):** chgeos runs the plan PyCanopy hand-codes in Polars
-(`bench/spatial_bench/queries/q11.py` in the PyCanopy repo): resolve each trip's pickup zone and
-dropoff zone with two independent spatial joins, then match the two results on `t_tripkey`.
-The spatialbench SQL text instead chains the dropoff join onto the pickup join's output; the
-answer is identical (verified against the reference at SF1 and SF10). With the chained text
-chgeos measured ~6.0 s at SF1 (a tie with PyCanopy) and 26.9 s at SF10; with the two-join
-plan it was 4.25 s and 25.7 s on 2026-10-04 and is 3.40 s and 14.3 s now. PyCanopy (2.47 s / 15.9 s)
-still wins SF1 and loses SF10, and SedonaDB
-is 3.99 s / 30.0 s. DuckDB runs the chained SQL and times out at both scales.
+**Q11 (cross-zone trips):** chgeos uses the plan PyCanopy hand-codes
+(`bench/spatial_bench/queries/q11.py`): two independent spatial joins for pickup and dropoff zone,
+matched on `t_tripkey`. The spatialbench SQL chains the second join onto the first; the answer is
+identical. PyCanopy still wins SF1 (2.47 s vs 3.40 s); chgeos wins SF10. DuckDB times out.
 
-**Q12 (kNN):** WASM `st_knn` uses a static 2-D centroid k-d tree for candidate selection,
-then refines the surviving candidates to an exact point-to-geometry distance. The tree
-alone reports centroid distance, which is not what `ST_Distance` means — before the
-refinement landed, Q12 disagreed with the reference answers. Refinement reads coordinates
-flattened once at index build, so it needs no GEOS parse per row, and Q12 got
-*faster*: 10.9 s → 2.0 s at SF1, 103.8 s → 27.3 s at SF10. With the cached index and
-distance-ordered refinement chgeos is now 1.61 s / 19.2 s against PyCanopy 1.74 s / 19.5 s (a
-win at SF1, a tie at SF10); SedonaDB is 3.19 s / 36.4 s and DuckDB times out at both.
+**Q12 (kNN):** WASM `st_knn` selects candidates from a centroid k-d tree, then refines them to
+exact point-to-geometry distance over coordinates flattened at index build (no per-row GEOS
+parse). chgeos wins SF1 and ties PyCanopy at SF10; DuckDB times out.
